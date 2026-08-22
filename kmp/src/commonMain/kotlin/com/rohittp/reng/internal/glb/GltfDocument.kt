@@ -109,8 +109,12 @@ internal data class GltfSampler(val magFilter: Int?, val minFilter: Int?, val wr
 internal data class GltfBuffer(val byteLength: Long, val uri: String?)
 
 /** A fully parsed, internally consistent glTF 2.0 document: every index *reference* resolves to
- * an element of the array it indexes into, and every accessor's arithmetic fits its backing
- * storage, and the node hierarchy is a set of disjoint strict trees. This is a structural
+ * an element of the array it indexes into, every byte offset, length, stride and element count is
+ * non-negative (and every accessor `count` at least one), every accessor's arithmetic fits its
+ * backing storage without relying on a sum that could overflow, and the node hierarchy is a set of
+ * disjoint strict trees. Those first two clauses are what makes a byte range derived from an
+ * accessor safe to slice: a negative offset or count would otherwise shrink a computed span into
+ * passing every fit test while addressing memory before the view. This is a structural
  * guarantee, not a content one: an indices accessor's actual index *values* are checked only
  * opportunistically, against a declared `max` when one is present -- see
  * [GltfReject.INDEX_VALUE_OUT_OF_RANGE] for why a buffer-level bounds check is not available here,
@@ -183,6 +187,32 @@ internal data class GltfDocument(
  * - [ASSET_VERSION_UNSUPPORTED] covers `asset.version` missing, malformed, or not major version
  *   `2`, and `asset.minVersion` malformed or above `2.0` -- ADR 0021 assigns `asset.version`
  *   checking to `PARSE_GLB` by name.
+ * - [SIZE_FIELD_OUT_OF_RANGE] covers every size-typed integer field whose value falls outside the
+ *   range the specification's own schema declares for it: a negative `buffer.byteLength`,
+ *   `bufferView.byteOffset`, `bufferView.byteLength`, `bufferView.byteStride` or
+ *   `accessor.byteOffset`, and an `accessor.count` below one. Named for the range rather than for
+ *   the field, in the same spirit as [NON_INTEGER_FIELD], because the consumer's next action is
+ *   identical in every case. This is the memory-safety code of the set: none of the span
+ *   comparisons this gate performs is meaningful over a negative operand, since a negative offset
+ *   or count makes a computed span *smaller* and so passes every "does it fit" test, and the
+ *   accessor it admits addresses bytes before the start of its buffer view.
+ * - [ACCESSOR_BOUNDS_LENGTH] covers an accessor's `min` or `max` that is present but is not an
+ *   array of exactly one value per component of the accessor's `type`. Distinct from
+ *   [INDEX_VALUE_OUT_OF_RANGE], which is about what a well-formed `max` *says*: this one is about
+ *   `max` being unreadable in the first place, which would otherwise switch that check silently
+ *   off rather than fail.
+ * - [INDICES_ACCESSOR_FORMAT] covers a primitive's `indices` naming an accessor that is not
+ *   `SCALAR`, or whose `componentType` is not one of the three unsigned types, or that is
+ *   `normalized`. Unconditional in the specification -- no extension widens it -- so it is
+ *   malformation, not an unsupported feature.
+ * - [TRIANGLE_VERTEX_COUNT] covers a `TRIANGLES` primitive whose index count, or vertex count
+ *   when it is not indexed, is not a multiple of three. Only `TRIANGLES` is checked: every other
+ *   topology has its own arithmetic and is refused by `VALIDATE_GLB_FEATURES`, so applying a
+ *   triangle rule to a strip would name the wrong fault.
+ * - [ANIMATED_NODE_MATRIX] covers a node carrying `matrix` that some animation channel targets.
+ *   Distinct from [NODE_MATRIX_AND_TRS], which is about one node contradicting itself: this is a
+ *   contradiction between a node and an animation elsewhere in the document, and a consumer fixes
+ *   it by decomposing the matrix into TRS rather than by deleting a member.
  */
 internal enum class GltfReject {
     ACCESSOR_SPAN_EXCEEDS_BUFFER_VIEW,
@@ -198,6 +228,11 @@ internal enum class GltfReject {
     ACCESSOR_TYPE,
     BYTE_STRIDE,
     ASSET_VERSION_UNSUPPORTED,
+    SIZE_FIELD_OUT_OF_RANGE,
+    ACCESSOR_BOUNDS_LENGTH,
+    INDICES_ACCESSOR_FORMAT,
+    TRIANGLE_VERTEX_COUNT,
+    ANIMATED_NODE_MATRIX,
 }
 
 internal sealed interface GltfParseResult {

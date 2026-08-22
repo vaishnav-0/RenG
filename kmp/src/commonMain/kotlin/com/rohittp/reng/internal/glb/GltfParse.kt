@@ -22,6 +22,26 @@ private val RESERVED_MAX_INDEX_VALUE: Map<Int, Long> = mapOf(
     5121 to 0xFFL, 5123 to 0xFFFFL, 5125 to 0xFFFFFFFFL,
 )
 
+/** The three unsigned component types the specification permits on a primitive's `indices`
+ * accessor. Deliberately the same three keys [RESERVED_MAX_INDEX_VALUE] carries, spelled out
+ * separately because the two rules are independent: one bounds an index's *value*, this one
+ * constrains the accessor's declared *format*. No extension widens this set, so
+ * [GltfReject.INDICES_ACCESSOR_FORMAT] is an unconditional malformation. */
+private val INDEX_COMPONENT_TYPES: Set<Int> = setOf(5121, 5123, 5125)
+
+/** glTF's `TRIANGLES` topology, and the only `mode` whose vertex-count rule this gate can state.
+ * Strips, fans, points and lines each have their own arithmetic and are refused by
+ * `VALIDATE_GLB_FEATURES` anyway, so applying a triangle rule to them here would report the wrong
+ * fault for a document whose real problem is its topology. */
+private const val TRIANGLES_MODE = 4
+
+/** Vertices per triangle: an indexed `TRIANGLES` primitive's index count, and a non-indexed one's
+ * vertex count, MUST both be a multiple of this. */
+private const val VERTICES_PER_TRIANGLE = 3L
+
+/** The two accessor members the specification types as a per-component bound array. */
+private val ACCESSOR_BOUND_FIELDS = listOf("min", "max")
+
 /**
  * Parses [json] -- already scanned as a well-formed GLB JSON chunk by [scanGlb] -- into a fully
  * parsed, internally consistent [GltfDocument], or reports the first structural fault found.
@@ -99,6 +119,14 @@ private fun readLongOrNull(members: Map<String, JsonValue>, field: String): Long
     return (value as? JsonValue.Integer)?.value ?: reject(GltfReject.NON_INTEGER_FIELD)
 }
 
+/** Returns [value] when it is at or above zero, and rejects otherwise. Every byte offset, byte
+ * length and byte stride the specification declares carries `minimum: 0` in its own schema, and
+ * JSON integers are signed ([JsonValue.Integer] holds a `Long`), so nothing but this stops a
+ * consumer-supplied `-1000` from reaching the span arithmetic -- where it makes a span *smaller*
+ * and so passes every "does it fit" comparison. */
+private fun nonNegative(value: Long): Long =
+    if (value < 0L) reject(GltfReject.SIZE_FIELD_OUT_OF_RANGE) else value
+
 /** Reads [field] as an index into an array of size [bound]: integer-spelled (else
  * [GltfReject.NON_INTEGER_FIELD]) and in `[0, bound)` (else [GltfReject.INDEX_OUT_OF_RANGE]).
  * Returns `null` when [field] is genuinely optional and absent. */
@@ -145,6 +173,7 @@ private class GltfParser(
         val scenes = parseScenes(nodes.size)
         val defaultScene = optionalIndex(json.members, "scene", scenes.size)
         val animations = parseAnimations(nodes.size, accessors.size)
+        validateAnimatedNodeTransforms(nodes, animations)
 
         return GltfDocument(
             accessors = accessors,
@@ -186,7 +215,7 @@ private class GltfParser(
         val buffers = arrOf(json.members["buffers"]).map { element ->
             val members = membersOf(element)
             GltfBuffer(
-                byteLength = readLong(members, "byteLength", default = 0L),
+                byteLength = nonNegative(readLong(members, "byteLength", default = 0L)),
                 uri = (members["uri"] as? JsonValue.Text)?.value,
             )
         }
@@ -203,10 +232,13 @@ private class GltfParser(
         arrOf(json.members["bufferViews"]).map { element ->
             val members = membersOf(element)
             val bufferIndex = requiredIndex(members, "buffer", buffers.size)
-            val byteOffset = readLong(members, "byteOffset", default = 0L)
-            val byteLength = readLong(members, "byteLength", default = 0L)
-            val byteStride = readLongOrNull(members, "byteStride")
-            if (byteOffset + byteLength > buffers[bufferIndex].byteLength) {
+            val byteOffset = nonNegative(readLong(members, "byteOffset", default = 0L))
+            val byteLength = nonNegative(readLong(members, "byteLength", default = 0L))
+            val byteStride = readLongOrNull(members, "byteStride")?.let { nonNegative(it) }
+            // Stated as a subtraction rather than `byteOffset + byteLength > buffer.byteLength`:
+            // both operands are already non-negative, so the difference cannot overflow,
+            // whereas the sum can -- and an overflowed sum is negative, which passes.
+            if (byteOffset > buffers[bufferIndex].byteLength - byteLength) {
                 reject(GltfReject.BUFFER_VIEW_EXCEEDS_BUFFER)
             }
             GltfBufferView(bufferIndex, byteOffset, byteLength, byteStride)
@@ -221,9 +253,15 @@ private class GltfParser(
             val numComponents = COMPONENT_COUNT_BY_TYPE[typeName] ?: reject(GltfReject.ACCESSOR_TYPE)
             val elementSize = componentSize.toLong() * numComponents
 
+            validateAccessorBounds(members, numComponents)
+
             val bufferView = optionalIndex(members, "bufferView", bufferViews.size)
-            val byteOffset = readLong(members, "byteOffset", default = 0L)
+            val byteOffset = nonNegative(readLong(members, "byteOffset", default = 0L))
+            // The specification's own `count` schema carries `minimum: 1`. Zero is not a smaller
+            // accessor, it is one with no defined element -- and it also makes the `count - 1`
+            // below negative, which would silently shrink the span check into passing anything.
             val count = readLong(members, "count", default = 0L)
+            if (count < 1L) reject(GltfReject.SIZE_FIELD_OUT_OF_RANGE)
             val normalized = (members["normalized"] as? JsonValue.Bool)?.value ?: false
             val sparse = members["sparse"] != null
 
@@ -237,11 +275,49 @@ private class GltfParser(
                     reject(GltfReject.BYTE_STRIDE)
                 }
                 val effectiveStride = view.byteStride ?: elementSize
-                val span = byteOffset + (count - 1) * effectiveStride + elementSize
-                if (span > view.byteLength) reject(GltfReject.ACCESSOR_SPAN_EXCEEDS_BUFFER_VIEW)
+                validateAccessorSpan(byteOffset, count, effectiveStride, elementSize, view.byteLength)
             }
 
             GltfAccessor(bufferView, byteOffset, componentType, count, typeName, normalized, sparse)
+        }
+    }
+
+    /**
+     * The specification requires an accessor's `min` and `max`, when present, to hold exactly one
+     * value per component of its `type`. Checked here for its own sake and because
+     * [validateIndexValues] reads `max[0]` as a stand-in for the buffer bytes this gate never
+     * sees: a `max` of the wrong length -- `[]` above all -- would otherwise silently switch that
+     * content check off rather than fail, which is the worst of the three outcomes.
+     */
+    private fun validateAccessorBounds(members: Map<String, JsonValue>, numComponents: Int) {
+        for (field in ACCESSOR_BOUND_FIELDS) {
+            val bound = members[field] ?: continue
+            val elements = (bound as? JsonValue.Arr)?.elements ?: reject(GltfReject.ACCESSOR_BOUNDS_LENGTH)
+            if (elements.size != numComponents) reject(GltfReject.ACCESSOR_BOUNDS_LENGTH)
+        }
+    }
+
+    /**
+     * Proves `byteOffset + (count - 1) * stride + elementSize <= byteLength` without ever forming
+     * that sum, because every term is a caller-supplied `Long` and the sum overflows for large
+     * ones -- an overflowed sum is negative, so the direct comparison admits exactly the documents
+     * this check exists to refuse. Every operand here is already non-negative and [count] is at
+     * least one, so each subtraction below stays in range and the division is exact enough:
+     * `(count - 1) > floor(remaining / stride)` holds precisely when `(count - 1) * stride`
+     * exceeds `remaining`.
+     */
+    private fun validateAccessorSpan(
+        byteOffset: Long,
+        count: Long,
+        effectiveStride: Long,
+        elementSize: Long,
+        byteLength: Long,
+    ) {
+        val available = byteLength - byteOffset
+        if (available < elementSize) reject(GltfReject.ACCESSOR_SPAN_EXCEEDS_BUFFER_VIEW)
+        val remaining = available - elementSize
+        if (count - 1L > remaining / effectiveStride) {
+            reject(GltfReject.ACCESSOR_SPAN_EXCEEDS_BUFFER_VIEW)
         }
     }
 
@@ -322,12 +398,45 @@ private class GltfParser(
                 val material = optionalIndex(members, "material", materialsCount)
                 val targetCount = arrOf(members["targets"]).size
 
-                if (indices != null) validateIndexValues(indices, attributes, accessors)
+                if (indices != null) {
+                    validateIndicesAccessorFormat(accessors[indices])
+                    validateIndexValues(indices, attributes, accessors)
+                }
+                if (mode == TRIANGLES_MODE) validateTriangleVertexCount(indices, attributes, accessors)
 
                 GltfPrimitive(attributes, indices, mode, material, targetCount)
             }
             GltfMesh(primitives)
         }
+
+    /** The specification types a primitive's `indices` accessor as `SCALAR`, one of the three
+     * unsigned component types, and never `normalized` -- an unconditional rule no extension
+     * relaxes, so a violation is malformation rather than an unsupported feature. Without it a
+     * `VEC3`/`FLOAT` accessor could be named as an index buffer, and the element count a decoder
+     * derives from it would describe neither the bytes present nor the draw call issued. */
+    private fun validateIndicesAccessorFormat(accessor: GltfAccessor) {
+        if (accessor.type != "SCALAR") reject(GltfReject.INDICES_ACCESSOR_FORMAT)
+        if (accessor.componentType !in INDEX_COMPONENT_TYPES) reject(GltfReject.INDICES_ACCESSOR_FORMAT)
+        if (accessor.normalized) reject(GltfReject.INDICES_ACCESSOR_FORMAT)
+    }
+
+    /** A `TRIANGLES` primitive draws whole triangles: its index count when indexed, and its
+     * vertex count when not, MUST be a multiple of three. A primitive with no `POSITION` has no
+     * vertex count to check here at all -- that absence is
+     * [GltfUnsupported.PRIMITIVE_WITHOUT_POSITION], a later gate's statement, so this one stays
+     * silent about it rather than reporting the wrong fault. */
+    private fun validateTriangleVertexCount(
+        indices: Int?,
+        attributes: Map<String, Int>,
+        accessors: List<GltfAccessor>,
+    ) {
+        val count = if (indices != null) {
+            accessors[indices].count
+        } else {
+            accessors[attributes["POSITION"] ?: return].count
+        }
+        if (count % VERTICES_PER_TRIANGLE != 0L) reject(GltfReject.TRIANGLE_VERTEX_COUNT)
+    }
 
     /** The specification's own index-value rules: an index MUST NOT equal the reserved maximum
      * for its component type, and MUST NOT be at or above the vertex count. Both are read from
@@ -397,6 +506,21 @@ private class GltfParser(
             for (child in nodes[index].children) stack.addLast(child to depth + 1)
         }
         if (visited.any { !it }) reject(GltfReject.NODE_GRAPH_NOT_DISJOINT_TREES)
+    }
+
+    /** The specification forbids `matrix` on a node any animation channel targets: the channel
+     * animates one of `translation`, `rotation` or `scale`, and a node whose transform is a
+     * single baked matrix has none of the three to write into. Sampling such a node has no
+     * defined meaning at all -- there is no "repair" that preserves the author's intent, so this
+     * is malformation rather than a feature RenG happens not to draw. A channel with no
+     * `target.node` is legal and specified as a no-op, so it targets nothing to check. */
+    private fun validateAnimatedNodeTransforms(nodes: List<GltfNode>, animations: List<GltfAnimation>) {
+        for (animation in animations) {
+            for (channel in animation.channels) {
+                val target = channel.targetNode ?: continue
+                if (nodes[target].matrix != null) reject(GltfReject.ANIMATED_NODE_MATRIX)
+            }
+        }
     }
 
     private fun parseScenes(nodesCount: Int): List<GltfScene> =
