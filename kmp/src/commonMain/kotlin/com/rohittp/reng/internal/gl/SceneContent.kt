@@ -14,6 +14,7 @@ import com.rohittp.reng.internal.model.DecodedModel
 import com.rohittp.reng.internal.planning.BasemapTileInstance
 import com.rohittp.reng.internal.planning.BasemapTileQuad
 import com.rohittp.reng.internal.planning.DrawRegime
+import com.rohittp.reng.internal.planning.DrawnThingReference
 import com.rohittp.reng.internal.planning.ResolvedGeometry
 import com.rohittp.reng.internal.planning.ResolvedPlacement
 import com.rohittp.reng.internal.planning.SpatialOutcome
@@ -143,6 +144,29 @@ internal class SceneModel(
  *
  * [groundTiles] is empty whenever the frame draws no basemap, no style is configured, or the frame
  * selected no tile.
+ *
+ * **[mapOrder] and [screenOrder] are the planner's answer, carried rather than re-derived.**
+ * `MercatorSpatialPlanner` splits every drawn thing into its draw regime (from `Placement`'s
+ * `positionMode`, `CONTEXT.md`) and sorts the screen stack by `screenCompositeZ`, then
+ * sticker-before-model, then source index — once, at `FRAME_PLANNING`, where it is unit-tested.
+ * [SceneContent] used to discard both answers and re-derive them from a second resolution of each
+ * [Placement] plus a second sort inside `drawStickers`. Two copies of one documented rule is one
+ * too many, and the copy in the GL layer was the untested one, so these two lists are now the only
+ * authority: [stickers] and [models] say *what* there is to draw, and these say *where each one
+ * goes and in what order*.
+ *
+ * [mapOrder] is **not** a draw order on its own. It is the planner's `mapEntries` order, which is
+ * stickers-then-models by declaration; ADR 0030 fixes the map regime's phase order as ground,
+ * geometries, models, map-anchored stickers, and consuming this list verbatim would paint a car
+ * over the pin standing in front of it. [SceneContent] takes each type's relative order from here
+ * and applies ADR 0030's phase order over it. [screenOrder] *is* a draw order, complete — ADR 0024
+ * makes the screen regime one ordered stack across every drawn-thing type.
+ *
+ * The two lists are required to be a **bijection** onto [stickers] and [models]: every reference in
+ * range, no reference twice, and every sticker and every model named exactly once. A drawn thing is
+ * in exactly one regime, so anything else is a caller that built the two halves inconsistently —
+ * including a caller that simply forgot to pass an order at all, which would otherwise draw a
+ * frame's stickers and models silently missing rather than reporting anything.
  */
 internal class Scene(
     val outputPixelSize: OutputPixelSize,
@@ -151,7 +175,36 @@ internal class Scene(
     val geometries: List<SceneGeometry> = emptyList(),
     val groundTiles: List<SceneGroundTile> = emptyList(),
     val models: List<SceneModel> = emptyList(),
-)
+    mapOrder: List<DrawnThingReference> = emptyList(),
+    screenOrder: List<DrawnThingReference> = emptyList(),
+) {
+    val mapOrder: List<DrawnThingReference> = mapOrder.toList()
+    val screenOrder: List<DrawnThingReference> = screenOrder.toList()
+
+    init {
+        val referenced = HashSet<DrawnThingReference>()
+        for (reference in this.mapOrder) {
+            require(referenced.add(reference)) { "each drawn thing may appear in exactly one draw order" }
+        }
+        for (reference in this.screenOrder) {
+            require(referenced.add(reference)) { "each drawn thing may appear in exactly one draw order" }
+        }
+        for (reference in referenced) {
+            val available = when (reference) {
+                is DrawnThingReference.StickerAt -> stickers.size
+                is DrawnThingReference.ModelAt -> models.size
+            }
+            val index = when (reference) {
+                is DrawnThingReference.StickerAt -> reference.index
+                is DrawnThingReference.ModelAt -> reference.index
+            }
+            require(index in 0 until available) { "a draw order may only reference a drawn thing the scene carries" }
+        }
+        require(referenced.size == stickers.size + models.size) {
+            "every sticker and every model must appear in exactly one of mapOrder and screenOrder"
+        }
+    }
+}
 
 /**
  * The [GlFrameContent] Cycle D always left a seam for: its own KDoc says "Cycle D draws no frame
@@ -160,12 +213,25 @@ internal class Scene(
  * **Ordering (ADRs 0024, 0025, 0027 and 0030).** The map regime draws first, depth-tested; the screen
  * regime then composites on top with depth testing off. Within the map regime the order is fixed as:
  * the **ground** first, then every [Geometry] (map-anchored by definition — `CONTEXT.md` says "A
- * Geometry carries no Placement") in `FramePlan.geometries` order, then every **model** in
- * `FramePlan.models` order, then every map-anchored sticker in `FramePlan.stickers` order. That is
- * ADR 0025's order with ADR 0030's models inserted before the stickers, because a map-anchored
- * sticker is a marker and a marker paints over the scene it marks. [drawStickers] already runs both
- * sticker halves of that order in one call, so [draw] only has to draw the ground, the geometries and
- * the models *before* calling it.
+ * Geometry carries no Placement") in `FramePlan.geometries` order, then every **model**, then every
+ * map-anchored sticker. That is ADR 0025's order with ADR 0030's models inserted before the stickers,
+ * because a map-anchored sticker is a marker and a marker paints over the scene it marks.
+ *
+ * **Which regime each drawn thing is in, and its order within its own type, is
+ * [Scene.mapOrder]/[Scene.screenOrder] — never re-derived here.** `MercatorSpatialPlanner` computes
+ * both at `FRAME_PLANNING`; this class used to compute them a second time, from a second resolution
+ * of every [Placement] plus a second sort inside `drawStickers`, and the second copy was the untested
+ * one. [draw] now splits [Scene.mapOrder] by type — preserving each type's own relative order — and
+ * applies ADR 0030's phase order over that, because [Scene.mapOrder] is stickers-then-models by
+ * declaration and is a regime membership answer rather than a draw order. [drawScreenStack] walks
+ * [Scene.screenOrder] straight through, because that one *is* a complete draw order.
+ *
+ * Each [Placement] is still re-resolved here for its **matrices**, which is a different claim and
+ * still a sound one — see [requireResolvedAtDrawTime]. What no longer happens is reading
+ * `ResolvedPlacement.drawRegime` or `.screenCompositeZ` back out of that resolution to decide regime
+ * or order. The `require`s inside [composeMapCameraSpaceModel] and [composeScreenModelViewProjection]
+ * stay, and change meaning slightly: they are now the cross-check that the planner's regime and the
+ * placement's own resolution agree, and they fail loudly rather than letting the two silently diverge.
  *
  * That order used to be arbitrary and is now load-bearing. `drawFrame` tests `GL_GEQUAL`, not
  * `GL_GREATER` (ADR 0025), and the map regime has **three depth phases** rather than one policy:
@@ -282,7 +348,21 @@ internal class SceneContent(
             }
         }
 
-        if (scene.models.isNotEmpty()) {
+        // ADR 0030's phase order over the planner's per-type order. `Scene.mapOrder` is
+        // stickers-then-models by declaration and is deliberately NOT consumed as a draw order:
+        // drawing it verbatim would paint a car over the pin standing in front of it. What is taken
+        // from it is which stickers and models are map-anchored at all, and the relative order of
+        // each type among its own kind.
+        val mapModels = ArrayList<SceneModel>()
+        val mapStickers = ArrayList<SceneSticker>()
+        for (reference in scene.mapOrder) {
+            when (reference) {
+                is DrawnThingReference.StickerAt -> mapStickers += scene.stickers[reference.index]
+                is DrawnThingReference.ModelAt -> mapModels += scene.models[reference.index]
+            }
+        }
+
+        if (mapModels.isNotEmpty()) {
             // ADR 0030: models are the one map-regime pass that tests AND writes depth, because a
             // mesh has to occlude itself. `drawModels` owns the whole phase -- the depth enable, the
             // mask on for its opaque primitives, and the mask off again on the way out -- so nothing
@@ -291,43 +371,95 @@ internal class SceneContent(
             drawModels(
                 binding = binding,
                 pipelines = modelPipelines,
-                models = scene.models.map { resolveModel(it, camera) },
+                models = mapModels.map { resolveModel(it, camera) },
                 lightDirectionCameraSpace = sceneLightDirectionCameraSpace(camera),
             )
         }
 
-        val mapAnchored = ArrayList<ResolvedSticker>()
-        val screenAnchored = ArrayList<ResolvedSticker>()
-        for (sticker in scene.stickers) {
-            val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
-            // CONTEXT.md: a Sticker draws "as a centred local XY quad whose width and height are
-            // the image's pixel dimensions" -- so the image's own dimensions scale the unit quad
-            // BEFORE the placement's own (map-metres-per-unit or screen-pixels-per-unit) scale is
-            // applied, exactly the way `affineModelMatrix`'s per-axis scale composes below.
-            val localDimensions = DoubleVector3(
-                sticker.imageWidthPixels.toDouble(),
-                sticker.imageHeightPixels.toDouble(),
-                1.0,
+        if (mapStickers.isNotEmpty()) {
+            drawStickers(
+                binding,
+                stickerPipeline,
+                StickerWorld(mapStickers.map { mapAnchoredSticker(it) }),
             )
-            val modelViewProjection = when (resolved.drawRegime) {
-                DrawRegime.MAP_OCCLUDED -> composeMapModelViewProjection(camera, resolved, localDimensions)
-                DrawRegime.SCREEN_COMPOSITED ->
-                    composeScreenModelViewProjection(scene.outputPixelSize, resolved, localDimensions)
-            }
-            val entry = ResolvedSticker(
-                modelViewProjection = modelViewProjection,
-                texture = sticker.texture,
-                screenCompositeZ = resolved.screenCompositeZ ?: 0.0,
-            )
-            when (resolved.drawRegime) {
-                DrawRegime.MAP_OCCLUDED -> mapAnchored += entry
-                DrawRegime.SCREEN_COMPOSITED -> screenAnchored += entry
-            }
         }
 
-        drawStickers(binding, stickerPipeline, StickerWorld(mapAnchored, screenAnchored))
+        drawScreenStack(binding)
+    }
+
+    /**
+     * ADR 0024's screen regime: one ordered stack across every drawn-thing type, composited on top
+     * of the whole map regime with depth testing off. The order is [Scene.screenOrder] exactly —
+     * `MercatorSpatialPlanner` already applied `CONTEXT.md`'s rule (greater `position.z` composites
+     * on top, ties keep stable plan order with stickers before models), and re-sorting it here is
+     * the duplicate this method exists instead of.
+     *
+     * **It walks the merged order rather than a sticker list, even though the stack is stickers-only
+     * today.** ADR 0029 refuses a `SCREEN`-positioned [com.rohittp.reng.Model] at frame planning, so
+     * no model can legitimately reach here — but building the stack out of `Scene.stickers` would
+     * hard-code that refusal into the loop's *shape*, and the day ADR 0029 is revisited the merge
+     * would have to be reinvented. A model reaching here is a contract violation and is reported as
+     * one, exactly as [resolveModel] reports the same violation from the map side.
+     *
+     * The program is bound per **element** rather than once per type, so interleaving two types in
+     * one stack costs a program switch and nothing else. With one type it binds once.
+     */
+    private fun drawScreenStack(binding: GlBinding) {
+        if (scene.screenOrder.isEmpty()) return
+
+        binding.disable(GL_DEPTH_TEST)
+        var boundProgram: Int? = null
+        for (reference in scene.screenOrder) {
+            when (reference) {
+                is DrawnThingReference.StickerAt -> {
+                    if (boundProgram != stickerPipeline.program) {
+                        beginStickerPass(binding, stickerPipeline)
+                        boundProgram = stickerPipeline.program
+                    }
+                    drawOneSticker(binding, stickerPipeline, screenCompositedSticker(scene.stickers[reference.index]))
+                }
+                is DrawnThingReference.ModelAt -> throw IllegalArgumentException(
+                    "ADR 0029 refuses a SCREEN-positioned Model before drawing; one reached the screen stack",
+                )
+            }
+        }
+    }
+
+    /**
+     * One map-anchored sticker's draw instance. [composeMapCameraSpaceModel]'s own `require` is what
+     * catches a planner regime that contradicts the placement's resolution, which is the only way
+     * these two can now disagree.
+     */
+    private fun mapAnchoredSticker(sticker: SceneSticker): ResolvedSticker {
+        val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
+        return ResolvedSticker(
+            modelViewProjection = composeMapModelViewProjection(camera, resolved, sticker.localDimensions()),
+            texture = sticker.texture,
+        )
+    }
+
+    /** One screen-composited sticker's draw instance; see [mapAnchoredSticker] for the regime cross-check. */
+    private fun screenCompositedSticker(sticker: SceneSticker): ResolvedSticker {
+        val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
+        return ResolvedSticker(
+            modelViewProjection = composeScreenModelViewProjection(
+                scene.outputPixelSize,
+                resolved,
+                sticker.localDimensions(),
+            ),
+            texture = sticker.texture,
+        )
     }
 }
+
+/**
+ * `CONTEXT.md`: a Sticker draws "as a centred local XY quad whose width and height are the image's
+ * pixel dimensions" — so the image's own dimensions scale the unit quad BEFORE the placement's own
+ * (map-metres-per-unit or screen-pixels-per-unit) scale is applied, exactly the way
+ * `affineModelMatrix`'s per-axis scale composes.
+ */
+private fun SceneSticker.localDimensions(): DoubleVector3 =
+    DoubleVector3(imageWidthPixels.toDouble(), imageHeightPixels.toDouble(), 1.0)
 
 /**
  * Turns one [SceneModel] into the flat list of primitive instances [drawModels] draws, resolving

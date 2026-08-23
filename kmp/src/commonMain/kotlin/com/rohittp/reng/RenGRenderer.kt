@@ -70,6 +70,7 @@ import com.rohittp.reng.internal.lifecycle.RenderTargetFact
 import com.rohittp.reng.internal.maximumBytesFor
 import com.rohittp.reng.internal.planning.BasemapTileInstance
 import com.rohittp.reng.internal.planning.CanonicalBasemapTile
+import com.rohittp.reng.internal.planning.DrawnThingReference
 import com.rohittp.reng.internal.planning.FramePlanningCore
 import com.rohittp.reng.internal.planning.FramePlanningOutcome
 import com.rohittp.reng.internal.planning.FramePlanningRequest
@@ -184,16 +185,37 @@ internal class RenGPreparedFrame(
      * when [basemapTiles] is empty.
      */
     groundInstances: List<PreparedGroundInstance> = emptyList(),
+    /**
+     * Which draw regime each of this frame's drawn things is in, and in what order — taken straight
+     * off `MercatorSpatialPlan.mapEntries` / `.screenEntries` at `prepare()` time and carried, never
+     * re-derived at draw time.
+     *
+     * The GL layer used to throw both answers away and rebuild them from a second resolution of every
+     * `Placement` plus a second sort inside `drawStickers`, which made the planner's unit-tested split
+     * and screen-compositing sort decorative. Snapshotting them here is what makes the planner the one
+     * authority: `internal.gl.Scene` consumes these lists and derives neither.
+     *
+     * [mapOrder] is the planner's declaration order (stickers, then models) and is a statement of
+     * regime membership rather than a draw order — ADR 0030's phase order is applied over it by
+     * `SceneContent`. [screenOrder] is already sorted into `CONTEXT.md`'s compositing order and is a
+     * complete draw order.
+     */
+    mapOrder: List<DrawnThingReference> = emptyList(),
+    screenOrder: List<DrawnThingReference> = emptyList(),
 ) : PreparedFrame {
     private val stickerSnapshot: List<PreparedSticker> = ArrayList(stickers)
     private val geometrySnapshot: List<PreparedGeometry> = ArrayList(geometries)
     private val basemapTileSnapshot: List<RenderedBasemapTile> = ArrayList(basemapTiles)
     private val groundInstanceSnapshot: List<PreparedGroundInstance> = ArrayList(groundInstances)
+    private val mapOrderSnapshot: List<DrawnThingReference> = ArrayList(mapOrder)
+    private val screenOrderSnapshot: List<DrawnThingReference> = ArrayList(screenOrder)
 
     internal val stickers: List<PreparedSticker> get() = ArrayList(stickerSnapshot)
     internal val geometries: List<PreparedGeometry> get() = ArrayList(geometrySnapshot)
     internal val basemapTiles: List<RenderedBasemapTile> get() = ArrayList(basemapTileSnapshot)
     internal val groundInstances: List<PreparedGroundInstance> get() = ArrayList(groundInstanceSnapshot)
+    internal val mapOrder: List<DrawnThingReference> get() = ArrayList(mapOrderSnapshot)
+    internal val screenOrder: List<DrawnThingReference> get() = ArrayList(screenOrderSnapshot)
 
     internal var closed: Boolean = false
         private set
@@ -502,6 +524,8 @@ internal class RenGRenderer(
                     renderedTiles = acquired.basemapTiles,
                     styleDigest = acquired.basemapStyleDigest,
                 ),
+                mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
+                screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
             )
         } finally {
             preparationMutex.unlock()
@@ -1011,12 +1035,23 @@ internal class RenGRenderer(
             )
         }
 
+        // TASK 16 MUST DELETE BOTH FILTERS. This cycle's renderer puts no SceneModel in the Scene
+        // yet, so the planner's model references are dropped here rather than left to fail Scene's
+        // bijection check on the first FramePlan carrying a Model -- which would be a new hard
+        // failure on a plan that today merely renders no model. The moment `models = ...` is passed
+        // below, these filters silently un-draw every model instead, which is the worse failure of
+        // the two; they exist only for the two tasks between this one and that one.
+        val sceneStickerMapOrder = frame.mapOrder.filterIsInstance<DrawnThingReference.StickerAt>()
+        val sceneStickerScreenOrder = frame.screenOrder.filterIsInstance<DrawnThingReference.StickerAt>()
+
         val scene = Scene(
             outputPixelSize = configuration.outputPixelSize,
             frameIndex = frame.frameIndex,
             stickers = sceneStickers,
             geometries = sceneGeometries,
             groundTiles = sceneGroundTiles,
+            mapOrder = sceneStickerMapOrder,
+            screenOrder = sceneStickerScreenOrder,
         )
         val content = SceneContent(resolvedCamera, scene, sticker, ground)
 

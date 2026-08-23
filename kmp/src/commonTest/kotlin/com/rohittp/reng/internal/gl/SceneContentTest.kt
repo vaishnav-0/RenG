@@ -26,6 +26,8 @@ import com.rohittp.reng.internal.model.ModelDrawItem
 import com.rohittp.reng.internal.model.ModelIndices
 import com.rohittp.reng.internal.model.ResolvedMaterial
 import com.rohittp.reng.internal.planning.BasemapTileInstance
+import com.rohittp.reng.internal.planning.DrawnThingReference.ModelAt
+import com.rohittp.reng.internal.planning.DrawnThingReference.StickerAt
 import com.rohittp.reng.internal.planning.resolveBasemapTileQuad
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.resolveGeometry
@@ -56,6 +58,200 @@ class SceneContentTest {
         assertContentEquals(emptyList(), binding.log)
     }
 
+    // --- Task 14: the planner owns the regime split and the screen order, and this layer reads it ---
+
+    /**
+     * **The load-bearing provenance test, and the only shape of it that can fail.** With one authority
+     * the planner's answer and a second draw-time resolution of the same [Placement] are the same value,
+     * so a scene built from consistent inputs proves nothing about which of the two was consulted — it
+     * would pass equally well against the code this task deleted. The inputs here are therefore
+     * deliberately inconsistent: the planner's split contradicts what re-resolving the placement says,
+     * and each half of the test can only take the branch it asserts if the planner's answer is the one
+     * that decided the regime.
+     *
+     * The contradiction surfaces as a loud `IllegalArgumentException` rather than as a composited
+     * sticker, and that is the design rather than a limitation of the test.
+     * [composeScreenModelViewProjection] and [composeMapCameraSpaceModel] each `require` the placement
+     * they were handed to be of their own regime, because the two resolutions are expressed in
+     * different spaces (camera-relative logical pixels versus output pixels) and composing one through
+     * the other's projection is geometric nonsense, not a lesser rendering. Those two `require`s are now
+     * exactly the cross-check that the planner and the placement agree; a `SceneContent` that re-derived
+     * the regime from the resolution could never trip either, because it would always call the composer
+     * that matches. The message is asserted so that neither failure can be satisfied by some other
+     * `IllegalArgumentException` — [Scene]'s own bijection check, for one — thrown along the way.
+     */
+    @Test
+    fun theRegimeSplitComesFromThePlannerRatherThanFromASecondResolution() {
+        val binding = RecordingGlBinding()
+        val stickerPipeline = newStickerPipeline(binding)
+
+        // Control: a screen-positioned sticker the planner puts in the screen stack composites with
+        // depth testing off and never turns it on, which is what the two failures below forgo.
+        val agreeing = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(SceneSticker(screenPlacement(z = 5.0), texture = 101)),
+            screenOrder = listOf(StickerAt(0)),
+        )
+        binding.log.clear()
+        SceneContent(topDownCamera(), agreeing, stickerPipeline, newGroundPipeline()).draw(binding)
+        assertEquals(listOf(101), boundTexturesInDrawOrder(binding), "the control frame must draw")
+        assertTrue(binding.log.contains("disable(${hex(GL_DEPTH_TEST)})"), "the screen stack turns depth off")
+        assertFalse(binding.log.contains("enable(${hex(GL_DEPTH_TEST)})"), "and never turns it back on")
+
+        // A screen-positioned sticker the planner reports as map-anchored. A second resolution would
+        // put it in the screen stack and composite it happily; taking the planner's word calls the map
+        // composer, which refuses the placement it is handed.
+        val plannerSaysMap = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(SceneSticker(screenPlacement(z = 5.0), texture = 101)),
+            mapOrder = listOf(StickerAt(0)),
+        )
+        val mapFailure = assertFailsWith<IllegalArgumentException> {
+            SceneContent(topDownCamera(), plannerSaysMap, stickerPipeline, newGroundPipeline()).draw(binding)
+        }
+        assertEquals("composeMapCameraSpaceModel requires a map-occluded placement", mapFailure.message)
+
+        // The mirror image, so that neither direction of the disagreement is the one that happens to
+        // be checked: a map-positioned sticker the planner reports as screen-composited.
+        val plannerSaysScreen = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(SceneSticker(mapPlacement(), texture = 101)),
+            screenOrder = listOf(StickerAt(0)),
+        )
+        val screenFailure = assertFailsWith<IllegalArgumentException> {
+            SceneContent(topDownCamera(), plannerSaysScreen, stickerPipeline, newGroundPipeline()).draw(binding)
+        }
+        assertEquals(
+            "composeScreenModelViewProjection requires a screen-composited placement",
+            screenFailure.message,
+        )
+    }
+
+    /**
+     * `MercatorSpatialPlanner` sorts the screen stack by z, then sticker-before-model, then source
+     * index, and `SceneContent` walks the result. The two stickers below carry the **same** z on
+     * purpose: at equal z a re-derived stable sort keeps declaration order, so a planner order of
+     * `[1, 0]` is the one input on which the deleted sort and the planner disagree while both remain
+     * perfectly legal. Two different z values would not do — the deleted sort would agree with the
+     * planner and the test would pass against the code it exists to forbid.
+     */
+    @Test
+    fun theScreenStackFollowsThePlannersOrderRatherThanAnyOrderDerivedHere() {
+        val binding = RecordingGlBinding()
+        val stickerPipeline = newStickerPipeline(binding)
+        val firstDeclared = 101
+        val secondDeclared = 202
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(
+                SceneSticker(screenPlacement(z = 1.0), texture = firstDeclared),
+                SceneSticker(screenPlacement(z = 1.0), texture = secondDeclared),
+            ),
+            screenOrder = listOf(StickerAt(1), StickerAt(0)),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, stickerPipeline, newGroundPipeline()).draw(binding)
+
+        assertEquals(
+            listOf(secondDeclared, firstDeclared),
+            boundTexturesInDrawOrder(binding),
+            "the screen stack draws the planner's order, not the sticker list's: ${binding.log}",
+        )
+    }
+
+    /**
+     * The same claim for the map half. `drawStickers` preserves what it is handed (ADR 0027 makes
+     * painter's order the whole rule there), and what it is handed is the planner's `mapEntries` order
+     * for stickers rather than `Scene.stickers` walked front to back.
+     */
+    @Test
+    fun perTypeDeclarationOrderInsideTheMapRegimeIsStillThePlannersOwn() {
+        val binding = RecordingGlBinding()
+        val stickerPipeline = newStickerPipeline(binding)
+        val firstDeclared = 101
+        val secondDeclared = 202
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(
+                SceneSticker(mapPlacement(), texture = firstDeclared),
+                SceneSticker(mapPlacement(), texture = secondDeclared),
+            ),
+            mapOrder = listOf(StickerAt(1), StickerAt(0)),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, stickerPipeline, newGroundPipeline()).draw(binding)
+
+        assertEquals(
+            listOf(secondDeclared, firstDeclared),
+            boundTexturesInDrawOrder(binding),
+            "the map half draws the planner's order, not the sticker list's: ${binding.log}",
+        )
+    }
+
+    /**
+     * ADR 0029 refuses a `SCREEN`-positioned [com.rohittp.reng.Model] at frame planning, so a
+     * `ModelAt` in the screen order is a contract violation — and [SceneContent] reports it as one
+     * rather than quietly dropping it or drawing it in the map regime instead. The stack is built by
+     * walking the merged order precisely so this case has a place to be refused *in*: building it out
+     * of `Scene.stickers` would encode "no models here" in the loop's shape, and the merge would have
+     * to be reinvented the day ADR 0029 is revisited.
+     */
+    @Test
+    fun aModelInTheScreenOrderIsRefusedRatherThanSilentlyRedirectedOrDropped() {
+        val binding = modelCapableBinding()
+        val modelPipelines = newModelPipelines(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(sceneModel()),
+            screenOrder = listOf(ModelAt(0)),
+        )
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            SceneContent(
+                topDownCamera(),
+                scene,
+                newStickerPipeline(binding),
+                newGroundPipeline(binding),
+                modelPipelines,
+            ).draw(binding)
+        }
+        assertTrue(failure.message.orEmpty().contains("ADR 0029"), "the refusal must name its reason")
+    }
+
+    /**
+     * A [Scene] whose orders do not name every drawn thing it carries is a caller that built the two
+     * halves inconsistently — most plausibly by forgetting the orders altogether, which is the exact
+     * mistake that would otherwise render a frame's stickers and models silently missing. The bijection
+     * is checked at construction so the omission is reported before any GL call is issued.
+     */
+    @Test
+    fun aSceneWhoseOrdersDoNotNameEveryDrawnThingIsRefusedAtConstruction() {
+        val stickers = listOf(SceneSticker(mapPlacement(), texture = 101))
+        assertFailsWith<IllegalArgumentException> {
+            Scene(outputPixelSize = OUTPUT_SIZE, frameIndex = 0L, stickers = stickers)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Scene(
+                outputPixelSize = OUTPUT_SIZE,
+                frameIndex = 0L,
+                stickers = stickers,
+                mapOrder = listOf(StickerAt(0)),
+                screenOrder = listOf(StickerAt(0)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Scene(outputPixelSize = OUTPUT_SIZE, frameIndex = 0L, mapOrder = listOf(StickerAt(0)))
+        }
+    }
+
     // --- ADR 0024: both regimes compose in one frame, not merely in isolation ------------------
 
     @Test
@@ -75,6 +271,8 @@ class SceneContentTest {
                 SceneSticker(screenPlacement(z = 5.0), texture = screenTexture),
             ),
             geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
+            mapOrder = listOf(StickerAt(0)),
+            screenOrder = listOf(StickerAt(1)),
         )
         binding.log.clear()
 
@@ -133,6 +331,8 @@ class SceneContentTest {
             geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
             groundTiles = listOf(groundTile(canonicalX = 0, tileY = 0, texture = 303)),
             models = listOf(sceneModel(indexCounts = listOf(OPAQUE_INDEX_COUNT))),
+            mapOrder = listOf(StickerAt(0), ModelAt(0)),
+            screenOrder = listOf(StickerAt(1)),
         )
         binding.log.clear()
 
@@ -205,6 +405,12 @@ class SceneContentTest {
      * located by its own `useProgram`, not by its draw call: the ground, a `Geometry` and a sticker
      * all issue a bit-identical `drawArrays(GL_TRIANGLE_STRIP, 0, 4)`, so a draw-call index cannot
      * tell three of the four passes apart.
+     *
+     * `mapOrder` here is the planner's own `[StickerAt(0), ModelAt(0)]` — stickers-then-models by
+     * declaration, which is what `MercatorSpatialPlan.mapEntries` actually produces. That is the
+     * point: the list is a regime-membership answer, not a draw order, and a `SceneContent` that
+     * consumed it verbatim would draw the sticker first and fail here. ADR 0030's phase order has to
+     * be applied *over* the planner's answer rather than taken from it.
      */
     @Test
     fun theMapRegimeDrawsGroundThenGeometriesThenModelsThenMapAnchoredStickers() {
@@ -227,6 +433,8 @@ class SceneContentTest {
             geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
             groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = 303)),
             models = listOf(sceneModel()),
+            mapOrder = listOf(StickerAt(0), ModelAt(0)),
+            screenOrder = listOf(StickerAt(1)),
         )
         binding.log.clear()
 
@@ -271,6 +479,7 @@ class SceneContentTest {
                     alphaModes = listOf("OPAQUE", "BLEND"),
                 ),
             ),
+            mapOrder = listOf(StickerAt(0), ModelAt(0)),
         )
         binding.log.clear()
 
@@ -311,6 +520,7 @@ class SceneContentTest {
             outputPixelSize = OUTPUT_SIZE,
             frameIndex = 0L,
             models = listOf(sceneModel(placement = placement, nodeTransforms = listOf(node))),
+            mapOrder = listOf(ModelAt(0)),
         )
         binding.log.clear()
 
@@ -347,6 +557,7 @@ class SceneContentTest {
             outputPixelSize = OUTPUT_SIZE,
             frameIndex = 0L,
             models = listOf(sceneModel(placement = placement, nodeTransforms = listOf(node))),
+            mapOrder = listOf(ModelAt(0)),
         )
         binding.log.clear()
 
@@ -379,6 +590,7 @@ class SceneContentTest {
                     attributes = TEXTURED_ATTRIBUTES,
                 ),
             ),
+            mapOrder = listOf(ModelAt(0)),
         )
         binding.log.clear()
 
@@ -410,6 +622,7 @@ class SceneContentTest {
                     attributes = TEXTURED_ATTRIBUTES,
                 ),
             ),
+            mapOrder = listOf(ModelAt(0)),
         )
         binding.log.clear()
 
@@ -437,7 +650,12 @@ class SceneContentTest {
         val mirrored = modelCapableBinding()
         SceneContent(
             topDownCamera(),
-            Scene(OUTPUT_SIZE, 0L, models = listOf(sceneModel(nodeTransforms = listOf(mirroredNodeTransform())))),
+            Scene(
+                OUTPUT_SIZE,
+                0L,
+                models = listOf(sceneModel(nodeTransforms = listOf(mirroredNodeTransform()))),
+                mapOrder = listOf(ModelAt(0)),
+            ),
             newStickerPipeline(mirrored),
             newGroundPipeline(mirrored),
             newModelPipelines(mirrored),
@@ -446,7 +664,12 @@ class SceneContentTest {
         val upright = modelCapableBinding()
         SceneContent(
             topDownCamera(),
-            Scene(OUTPUT_SIZE, 0L, models = listOf(sceneModel(nodeTransforms = listOf(asymmetricNodeTransform())))),
+            Scene(
+                OUTPUT_SIZE,
+                0L,
+                models = listOf(sceneModel(nodeTransforms = listOf(asymmetricNodeTransform()))),
+                mapOrder = listOf(ModelAt(0)),
+            ),
             newStickerPipeline(upright),
             newGroundPipeline(upright),
             newModelPipelines(upright),
@@ -475,6 +698,7 @@ class SceneContentTest {
                     nodeTransforms = listOf(DoubleMatrix4.identity, null),
                 ),
             ),
+            mapOrder = listOf(ModelAt(0)),
         )
         binding.log.clear()
 
@@ -501,6 +725,7 @@ class SceneContentTest {
             outputPixelSize = OUTPUT_SIZE,
             frameIndex = 0L,
             models = listOf(sceneModel(placement = mapPlacementScaled(0.0))),
+            mapOrder = listOf(ModelAt(0)),
         )
         binding.log.clear()
 
@@ -525,6 +750,7 @@ class SceneContentTest {
             outputPixelSize = OUTPUT_SIZE,
             frameIndex = 0L,
             models = listOf(sceneModel(placement = screenPlacement(z = 1.0))),
+            mapOrder = listOf(ModelAt(0)),
         )
 
         assertFailsWith<IllegalArgumentException> {
@@ -551,6 +777,7 @@ class SceneContentTest {
             outputPixelSize = OUTPUT_SIZE,
             frameIndex = 0L,
             models = listOf(sceneModel()),
+            mapOrder = listOf(ModelAt(0)),
         )
 
         assertFailsWith<IllegalArgumentException> {
@@ -587,6 +814,8 @@ class SceneContentTest {
             ),
             geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
             groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = groundTexture)),
+            mapOrder = listOf(StickerAt(0)),
+            screenOrder = listOf(StickerAt(1)),
         )
         binding.log.clear()
 
@@ -632,6 +861,7 @@ class SceneContentTest {
                 groundTile(canonicalX = 8, tileY = 8, texture = firstGroundTexture),
                 groundTile(canonicalX = 9, tileY = 8, texture = secondGroundTexture),
             ),
+            mapOrder = listOf(StickerAt(0), StickerAt(1)),
         )
         binding.log.clear()
 
@@ -931,6 +1161,7 @@ class SceneContentTest {
             outputPixelSize = OUTPUT_SIZE,
             frameIndex = 0L,
             stickers = listOf(SceneSticker(placement, texture = 1, imageWidthPixels = 4, imageHeightPixels = 2)),
+            screenOrder = listOf(StickerAt(0)),
         )
         binding.log.clear()
 
