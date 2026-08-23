@@ -235,6 +235,30 @@ class GlFrameDrawerTest {
         assertNull(world.draw { })
     }
 
+    /**
+     * Every producer into the offscreen surface writes premultiplied colour ([uploadTexture]
+     * premultiplies [TextureContent.IMAGE], and `drawStickers`/`drawGround` pair it with
+     * `GL_ONE, GL_ONE_MINUS_SRC_ALPHA`). Blending that premultiplied source into the caller's
+     * framebuffer with `GL_SRC_ALPHA` multiplies alpha a second time -- invisible under an opaque
+     * basemap, wrong the moment a consumer composites RenG over their own background.
+     *
+     * Uses `first`, not `last`: [withCapturedGlState] restores the caller's original blend
+     * function afterward, which logs a second, later `blendFuncSeparate` call (the fake's
+     * un-seeded default, `GL_ZERO` on every factor) that is not the one under test here.
+     */
+    @Test fun theCompositeBlendsPremultipliedSourceRatherThanMultiplyingAlphaTwice() {
+        val world = drawWorld()
+        world.binding.log.clear()
+        assertNull(world.draw { })
+        val call = world.binding.log.first { it.startsWith("blendFuncSeparate(") }
+        assertEquals(
+            "blendFuncSeparate(${hex(GL_ONE)},${hex(GL_ONE_MINUS_SRC_ALPHA)}," +
+                "${hex(GL_ONE)},${hex(GL_ONE_MINUS_SRC_ALPHA)})",
+            call,
+            "the offscreen colour attachment is already premultiplied; GL_SRC_ALPHA multiplies it again",
+        )
+    }
+
     private class DrawWorld(
         val binding: RecordingGlBinding,
         val profile: RenderContextProfile,

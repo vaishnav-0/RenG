@@ -38,6 +38,13 @@ internal val FRAME_TEXTURE_UNIT_COUNT: Int = maxOf(COMPOSITE_TEXTURE_UNIT_COUNT,
  * a blit does not blend and a consumer compositing RenG's output over existing content needs it to
  * (ADR 0005).
  *
+ * **The composite blends a premultiplied source.** Every producer into the offscreen surface writes
+ * premultiplied colour -- [uploadTexture] premultiplies [TextureContent.IMAGE], and `drawStickers`,
+ * `drawGround`, and `drawModels` all pair it with `GL_ONE, GL_ONE_MINUS_SRC_ALPHA` -- so the composite
+ * pass's own blend function uses `GL_ONE` for its source factor rather than `GL_SRC_ALPHA`, which
+ * would multiply alpha a second time. That second multiplication is invisible under an opaque
+ * basemap and wrong the moment a consumer composites RenG's output over their own background.
+ *
  * The entire body runs inside [withCapturedGlState], so the caller's GL state is captured before
  * either pass and restored afterward unconditionally — including when [content] leaves state dirty
  * or a driver error is detected at the end.
@@ -104,7 +111,7 @@ internal fun drawFrame(
         binding.colorMask(true, true, true, true)
         binding.enable(GL_BLEND)
         binding.blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD)
-        binding.blendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+        binding.blendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
         binding.activeTexture(GL_TEXTURE0)
         binding.bindTexture(GL_TEXTURE_2D, surface.colourTexture)
         binding.bindSampler(0, 0)
