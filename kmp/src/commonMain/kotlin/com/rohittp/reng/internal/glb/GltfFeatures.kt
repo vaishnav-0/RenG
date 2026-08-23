@@ -191,9 +191,11 @@ internal sealed interface GltfFeatureResult {
  *   `normalized` flag is one RenG does not bind: `POSITION` and `NORMAL` are `VEC3` float,
  *   `TANGENT` is `VEC4` float, `TEXCOORD_0` is `VEC2` float or normalized unsigned byte/short,
  *   `COLOR_0` is `VEC3`/`VEC4` float or normalized unsigned byte/short, `JOINTS_0` is an
- *   unnormalized unsigned byte/short `VEC4`, `WEIGHTS_0` is a `VEC4` float or normalized unsigned
- *   byte/short, and a referenced skin's `inverseBindMatrices` is `MAT4` float. An ignored
- *   `TEXCOORD_n`/`COLOR_n` set above zero is never reported here, because RenG never reads it.
+ *   unnormalized unsigned byte/short `VEC4`, and `WEIGHTS_0` is a `VEC4` float or normalized
+ *   unsigned byte/short. A referenced skin's `inverseBindMatrices` is [SKIN_ACCESSOR_FORMAT], not
+ *   this: it is not a vertex attribute, and this code's *name* is what a consumer debugs by. An
+ *   ignored `TEXCOORD_n`/`COLOR_n` set above zero is never reported here, because RenG never
+ *   reads it.
  *   ADR 0021's accept list names the six component types as one flat set across every accessor,
  *   which is the right granularity for the *parser* and the wrong one for the renderer -- a
  *   `SCALAR`/`BYTE` `POSITION` has no draw behaviour at all. Reported here rather than as
@@ -209,6 +211,12 @@ internal sealed interface GltfFeatureResult {
  *   samplers a channel actually references are checked, since an unreferenced sampler is never
  *   sampled. Checked after [ANIMATION_TARGET_PATH] and [INTERPOLATION], both of which name a
  *   feature the consumer removes rather than a format they re-export.
+ * - [SKIN_ACCESSOR_FORMAT] covers a referenced skin's `inverseBindMatrices` accessor that is not
+ *   `MAT4` plain float. Given its own code rather than folded into [ATTRIBUTE_FORMAT] for the same
+ *   reason [COMPONENT_TYPE] and [ACCESSOR_TYPE] are not allowed to share one: an inverse bind
+ *   matrix is not a vertex attribute, and a consumer debugging by code name would be sent to their
+ *   mesh attributes for a fault in `skins[i].inverseBindMatrices`. [ANIMATION_ACCESSOR_FORMAT] is
+ *   the same split already made once, for the same reason.
  * - [TEXTURE_COORDINATE_SET] covers a material whose `pbrMetallicRoughness.baseColorTexture.texCoord`
  *   is not `0`. RenG binds `TEXCOORD_0` and only `TEXCOORD_0`, so a material asking for another set
  *   has no correct render, and sampling the set RenG does bind would be the silent fallback ADR 0021
@@ -249,6 +257,7 @@ internal enum class GltfUnsupported {
     PRIMITIVE_WITHOUT_POSITION,
     ATTRIBUTE_FORMAT,
     ANIMATION_ACCESSOR_FORMAT,
+    SKIN_ACCESSOR_FORMAT,
     TEXTURE_COORDINATE_SET,
     MULTIPLE_SKIN_INFLUENCE_SETS,
     SKIN_JOINT_COUNT,
@@ -321,7 +330,7 @@ private class GltfFeatureValidator(private val document: GltfDocument) {
             val skin = document.skins[index]
             if (skin.joints.size > MAXIMUM_SKIN_JOINTS) reject(GltfUnsupported.SKIN_JOINT_COUNT)
             val accessor = document.accessors[skin.inverseBindMatrices ?: continue]
-            if (accessor.type != "MAT4" || !isPlainFloat(accessor)) reject(GltfUnsupported.ATTRIBUTE_FORMAT)
+            if (accessor.type != "MAT4" || !isPlainFloat(accessor)) reject(GltfUnsupported.SKIN_ACCESSOR_FORMAT)
         }
     }
 

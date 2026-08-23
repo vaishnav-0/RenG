@@ -264,7 +264,7 @@ class GltfFeaturesTest {
     fun anInverseBindMatrixAccessorRenGCannotReadIsRejected() {
         // One MAT4 float per joint, or nothing at all -- an absent accessor is the specification's
         // own identity default and stays supported.
-        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(vec4InverseBindMatrices))
+        assertEquals(GltfUnsupported.SKIN_ACCESSOR_FORMAT, unsupported(vec4InverseBindMatrices))
         assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(mat4InverseBindMatrices.document))
     }
 
