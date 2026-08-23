@@ -190,8 +190,8 @@ _Avoid_: Transform, matrix, pose
 Whether one placement property is resolved against the map (`MAP`) or against the screen (`SCREEN`).
 
 A `SCREEN` **Placement** position on a **Model** is not implemented, and preparation fails on it before
-acquisition or drawing rather than degrading — the same rule **Projection Mode** follows for a mode a
-renderer does not yet support, and for the same reason: RenG never substitutes a different mode. The
+acquisition or drawing rather than degrading (ADR 0029) — the same rule **Projection Mode** follows for a
+mode a renderer does not yet support, and for the same reason: RenG never substitutes a different mode. The
 screen regime composites an ordered stack with no depth test, and its projection carries no depth at all,
 so a volumetric mesh drawn there would show its own back faces through its front ones. That is a silently
 wrong picture rather than a missing one, which is the worse failure. Every other combination is supported,

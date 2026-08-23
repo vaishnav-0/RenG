@@ -142,8 +142,9 @@ regime on top as one stack, ADR 0025 supersedes ADR 0024's depth rule — `GL_GE
 ADR 0026 invents the one directional, world-anchored light every model is shaded by, at azimuth 335° and
 elevation 45° with an ambient term, leaving stickers, geometries and the ground unlit, ADR 0027 supersedes
 ADR 0025's depth-*write* ruling so that no map-regime draw writes depth and declaration order becomes the
-whole rule inside the regime rather than only its tie-break, and ADR 0028 narrows ADR 0021's flat accessor
-subset to a per-role one). Read both before proposing anything that touches the public API — where this
+whole rule inside the regime rather than only its tie-break, ADR 0028 narrows ADR 0021's flat accessor
+subset to a per-role one, and ADR 0029 rejects a `SCREEN`-positioned **Model** at frame planning because
+the screen projection carries no z row at all). Read both before proposing anything that touches the public API — where this
 file and an ADR disagree, the newer ADR wins.
 
 ## What RenG is
