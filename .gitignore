@@ -22,3 +22,6 @@ __pycache__/
 
 # macOS Finder metadata.
 .DS_Store
+
+# Agent scaffolding, including the git worktrees created for parallel subagents.
+.claude/
