@@ -1,10 +1,19 @@
 package com.rohittp.reng.internal.glb
 
-/** The four accessor `type`/`componentType` combinations RenG draws attributes with, plus the two
- * component types the specification forbids [GltfAccessor.normalized] on -- see
- * [GltfUnsupported.NORMALIZED_NOT_PERMITTED]. */
+/** The specification's `componentType` enumeration, named rather than spelled at each use.
+ * [COMPONENT_TYPE_FLOAT] and [COMPONENT_TYPE_UNSIGNED_INT] are the two the specification forbids
+ * [GltfAccessor.normalized] on (see [GltfUnsupported.NORMALIZED_NOT_PERMITTED]); the remaining four
+ * appear in the per-role format tables below. */
 private const val COMPONENT_TYPE_FLOAT = 5126
 private const val COMPONENT_TYPE_UNSIGNED_INT = 5125
+private const val COMPONENT_TYPE_BYTE = 5120
+private const val COMPONENT_TYPE_UNSIGNED_BYTE = 5121
+private const val COMPONENT_TYPE_SHORT = 5122
+private const val COMPONENT_TYPE_UNSIGNED_SHORT = 5123
+
+/** The attribute semantic every drawable primitive must carry: without vertex positions there is
+ * nothing to place, and RenG never substitutes a default. */
+private const val POSITION_SEMANTIC = "POSITION"
 
 /** glTF's default primitive topology and the only one ADR 0021 admits. */
 private const val SUPPORTED_PRIMITIVE_MODE = 4
@@ -24,6 +33,27 @@ private val SUPPORTED_ANIMATION_TARGET_PATHS = setOf("translation", "rotation", 
 /** Animation sampler interpolations RenG plays. `CUBICSPLINE` is rejected rather than
  * approximated: substituting `LINEAR` would silently change motion (ADR 0021). */
 private val SUPPORTED_INTERPOLATIONS = setOf("LINEAR", "STEP")
+
+/** The four component types the specification permits for a normalized quaternion `rotation`
+ * animation output, alongside plain float. */
+private val NORMALIZED_ROTATION_TYPES = setOf(
+    COMPONENT_TYPE_BYTE, COMPONENT_TYPE_UNSIGNED_BYTE, COMPONENT_TYPE_SHORT, COMPONENT_TYPE_UNSIGNED_SHORT,
+)
+
+/** Plain float: the specification forbids `normalized` on a float accessor outright (that is
+ * [GltfUnsupported.NORMALIZED_NOT_PERMITTED]), so this reads as one condition wherever a slot
+ * accepts float and nothing else. */
+private fun isPlainFloat(accessor: GltfAccessor): Boolean =
+    accessor.componentType == COMPONENT_TYPE_FLOAT && !accessor.normalized
+
+/** The vertex-attribute quantization the specification allows without an extension: float, or an
+ * unsigned byte or short carrying `normalized: true`. An unnormalized integer in one of those
+ * slots would be read as a raw count rather than a fraction, which is not the same attribute. */
+private fun isFloatOrNormalizedUnsigned(accessor: GltfAccessor): Boolean = when (accessor.componentType) {
+    COMPONENT_TYPE_FLOAT -> !accessor.normalized
+    COMPONENT_TYPE_UNSIGNED_BYTE, COMPONENT_TYPE_UNSIGNED_SHORT -> accessor.normalized
+    else -> false
+}
 
 /**
  * The outcome of [validateGltfFeatures]: either [document] draws entirely within the subset ADR
@@ -81,6 +111,32 @@ internal sealed interface GltfFeatureResult {
  *   there is no single default scene to draw.
  * - [NORMALIZED_NOT_PERMITTED] covers an accessor with `normalized: true` whose `componentType` is
  *   `FLOAT` or `UNSIGNED_INT`, a combination the specification itself forbids.
+ * - [PRIMITIVE_WITHOUT_POSITION] covers a primitive whose `attributes` names no `POSITION`. The
+ *   specification permits the document -- it says a client "SHOULD skip" such a primitive, and an
+ *   extension may supply positions by other means -- so this is a capability statement, not
+ *   malformation, and `PARSE_GLB` must stay silent about it. RenG refuses rather than skipping
+ *   because silently drawing part of a model is exactly the kind of quiet fallback ADR 0021
+ *   rejects elsewhere. Checked after [EXTENSION_REQUIRED], so an extension-supplied geometry is
+ *   reported by the extension it needs.
+ * - [ATTRIBUTE_FORMAT] covers an attribute semantic RenG *does* admit whose accessor `type`,
+ *   `componentType` or `normalized` flag is one RenG does not bind: `POSITION` and `NORMAL` are
+ *   `VEC3` float, `TANGENT` is `VEC4` float, `TEXCOORD_0` is `VEC2` float or normalized unsigned
+ *   byte/short, and `COLOR_0` is `VEC3`/`VEC4` float or normalized unsigned byte/short. ADR 0021's
+ *   accept list names the six component types as one flat set across every accessor, which is the
+ *   right granularity for the *parser* and the wrong one for the renderer -- a `SCALAR`/`BYTE`
+ *   `POSITION` has no draw behaviour at all. Reported here rather than as malformation because
+ *   `KHR_mesh_quantization` makes several of these combinations specification-legal, and
+ *   [EXTENSION_REQUIRED] is checked first, so a quantized asset is still diagnosed by the
+ *   extension it declares rather than reported as a corrupt file.
+ * - [ANIMATION_ACCESSOR_FORMAT] covers an animation sampler whose `input` is not a `SCALAR` float
+ *   accessor, or whose `output` does not match the format the channel's own `target.path`
+ *   requires: `VEC3` float for `translation` and `scale`, and `VEC4` float or normalized signed or
+ *   unsigned byte/short for `rotation`. The same reasoning as [ATTRIBUTE_FORMAT] applies -- a
+ *   sampler RenG cannot read is a sampling capability RenG lacks, and reporting it here keeps a
+ *   document whose real problem is a required extension out of the malformation vocabulary. Only
+ *   samplers a channel actually references are checked, since an unreferenced sampler is never
+ *   sampled. Checked after [ANIMATION_TARGET_PATH] and [INTERPOLATION], both of which name a
+ *   feature the consumer removes rather than a format they re-export.
  */
 internal enum class GltfUnsupported {
     EXTENSION_REQUIRED,
@@ -97,6 +153,9 @@ internal enum class GltfUnsupported {
     MULTIPLE_BUFFERS,
     SCENE_AMBIGUOUS,
     NORMALIZED_NOT_PERMITTED,
+    PRIMITIVE_WITHOUT_POSITION,
+    ATTRIBUTE_FORMAT,
+    ANIMATION_ACCESSOR_FORMAT,
 }
 
 /**
@@ -164,8 +223,29 @@ private class GltfFeatureValidator(private val document: GltfDocument) {
                     if (semantic !in SUPPORTED_ATTRIBUTE_SEMANTICS) reject(GltfUnsupported.ATTRIBUTE_SEMANTIC)
                 }
                 if (primitive.targetCount > 0) reject(GltfUnsupported.MORPH_TARGET)
+                if (POSITION_SEMANTIC !in primitive.attributes) {
+                    reject(GltfUnsupported.PRIMITIVE_WITHOUT_POSITION)
+                }
+                for ((semantic, accessorIndex) in primitive.attributes) {
+                    if (!bindsAttribute(semantic, document.accessors[accessorIndex])) {
+                        reject(GltfUnsupported.ATTRIBUTE_FORMAT)
+                    }
+                }
             }
         }
+    }
+
+    /** Whether RenG binds [accessor] for [semantic], per the specification's own per-semantic
+     * accessor table. [semantic] is always one of [SUPPORTED_ATTRIBUTE_SEMANTICS] by the time this
+     * runs -- anything else is already [GltfUnsupported.ATTRIBUTE_SEMANTIC] -- so the `else` branch
+     * is unreachable and admits rather than rejects, keeping the two codes' territories disjoint. */
+    private fun bindsAttribute(semantic: String, accessor: GltfAccessor): Boolean = when (semantic) {
+        "POSITION", "NORMAL" -> accessor.type == "VEC3" && isPlainFloat(accessor)
+        "TANGENT" -> accessor.type == "VEC4" && isPlainFloat(accessor)
+        "TEXCOORD_0" -> accessor.type == "VEC2" && isFloatOrNormalizedUnsigned(accessor)
+        "COLOR_0" -> (accessor.type == "VEC3" || accessor.type == "VEC4") &&
+            isFloatOrNormalizedUnsigned(accessor)
+        else -> true
     }
 
     private fun validateNodes() {
@@ -184,7 +264,30 @@ private class GltfFeatureValidator(private val document: GltfDocument) {
             for (sampler in animation.samplers) {
                 if (sampler.interpolation !in SUPPORTED_INTERPOLATIONS) reject(GltfUnsupported.INTERPOLATION)
             }
+            for (channel in animation.channels) {
+                validateSamplerFormat(animation.samplers[channel.sampler], channel.targetPath)
+            }
         }
+    }
+
+    /** The specification's per-path animation accessor table: keyframe times are always `SCALAR`
+     * float, `translation` and `scale` outputs are `VEC3` float, and a `rotation` output is a
+     * `VEC4` quaternion either in float or normalized to a signed or unsigned byte or short. Read
+     * per *channel* rather than per sampler because the output's required shape depends on the
+     * path the channel drives, and one sampler may in principle be named by more than one. */
+    private fun validateSamplerFormat(sampler: GltfAnimationSampler, targetPath: String) {
+        val input = document.accessors[sampler.input]
+        if (input.type != "SCALAR" || !isPlainFloat(input)) {
+            reject(GltfUnsupported.ANIMATION_ACCESSOR_FORMAT)
+        }
+        val output = document.accessors[sampler.output]
+        val binds = when (targetPath) {
+            "translation", "scale" -> output.type == "VEC3" && isPlainFloat(output)
+            "rotation" -> output.type == "VEC4" &&
+                (isPlainFloat(output) || (output.normalized && output.componentType in NORMALIZED_ROTATION_TYPES))
+            else -> true
+        }
+        if (!binds) reject(GltfUnsupported.ANIMATION_ACCESSOR_FORMAT)
     }
 
     private fun validateScene() {

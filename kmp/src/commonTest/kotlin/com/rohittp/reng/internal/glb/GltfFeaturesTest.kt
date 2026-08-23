@@ -88,6 +88,58 @@ class GltfFeaturesTest {
         assertFalse(result.toString().contains("attacker"), "uri text leaked into a diagnostic")
     }
 
+    @Test
+    fun rejectsAPrimitiveThatDeclaresNoPositionAttribute() {
+        // PARSE_GLB accepts this document (the specification permits it and says a client SHOULD
+        // skip the primitive); RenG refuses instead of skipping, because drawing part of a model
+        // and reporting success is the quiet fallback ADR 0021 rejects everywhere else.
+        assertEquals(GltfUnsupported.PRIMITIVE_WITHOUT_POSITION, unsupported(primitiveWithoutPosition))
+    }
+
+    @Test
+    fun rejectsAnAdmittedAttributeSemanticInAFormatRenGDoesNotBind() {
+        // ADR 0021's accept list names the six component types as one flat set across every
+        // accessor. That is the parser's granularity, not the renderer's: a SCALAR/BYTE POSITION
+        // or a MAT4 TEXCOORD_0 passed both gates as "supported" and has no draw behaviour.
+        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(scalarBytePosition))
+        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(mat4TexCoordZero))
+        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(unnormalizedUnsignedByteTexCoordZero))
+        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(vec3Tangent))
+    }
+
+    @Test
+    fun keepsQuantizedGeometryDiagnosedByTheExtensionItRequires() {
+        // The reason ATTRIBUTE_FORMAT lives on this gate rather than in PARSE_GLB:
+        // KHR_mesh_quantization makes a short POSITION specification-legal, and
+        // EXTENSION_REQUIRED is checked first, so a quantized asset is never reported as a
+        // corrupt file for a shape its own declared extension permits.
+        assertEquals(GltfUnsupported.EXTENSION_REQUIRED, unsupported(quantizedPositionWithExtension))
+    }
+
+    @Test
+    fun rejectsAnAnimationSamplerInAFormatRenGCannotSample() {
+        // A rotation output is a VEC4 quaternion and keyframe times are SCALAR floats. Neither
+        // was constrained before, so an animation whose output is a VEC3 -- or whose input is
+        // not even a number RenG can read as a time -- was reported as fully supported.
+        assertEquals(GltfUnsupported.ANIMATION_ACCESSOR_FORMAT, unsupported(rotationOutputAsVec3))
+        assertEquals(GltfUnsupported.ANIMATION_ACCESSOR_FORMAT, unsupported(translationOutputAsVec4))
+        assertEquals(GltfUnsupported.ANIMATION_ACCESSOR_FORMAT, unsupported(samplerInputAsVec3))
+        assertEquals(GltfUnsupported.ANIMATION_ACCESSOR_FORMAT, unsupported(samplerInputAsUnsignedShort))
+    }
+
+    @Test
+    fun keepsAcceptingEveryQuantizedFormTheSpecificationAllowsWithoutAnExtension() {
+        // The tightening must not shrink the subset: normalized unsigned byte and short
+        // TEXCOORD_0/COLOR_0, a VEC3 COLOR_0, and a normalized short rotation output are all
+        // core-specification forms and stay supported.
+        for (fixture in listOf(
+            normalizedUnsignedByteTexCoordZero, normalizedUnsignedShortColourZero,
+            normalizedShortRotationOutput,
+        )) {
+            assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(fixture.document))
+        }
+    }
+
     // ---- reject fixtures ----
 
     // Same shape as GltfParseTest's dracoShapedDocument: extensionsRequired names a compression
@@ -355,21 +407,26 @@ class GltfFeaturesTest {
         }
     """.trimIndent()
 
-    // Same interleaved shape as GltfParseTest's accessorInterleavedStride.
+    // Same interleaved shape as GltfParseTest's accessorInterleavedStride, at three vertices
+    // rather than two: a non-indexed TRIANGLES primitive draws whole triangles, so its vertex
+    // count must be a multiple of three (GltfReject.TRIANGLE_VERTEX_COUNT). Three vertices at
+    // stride 24 span 12 + 2 * 24 + 12 = 72 bytes for the second accessor, so the view is 72.
     private val interleavedStride = """
         {
           "asset": {"version": "2.0"},
           "scenes": [{"nodes": []}],
           "buffers": [{"byteLength": 1024}],
-          "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 48, "byteStride": 24}],
+          "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 72, "byteStride": 24}],
           "accessors": [
-            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 2, "type": "VEC3"},
-            {"bufferView": 0, "byteOffset": 12, "componentType": 5126, "count": 2, "type": "VEC3"}
+            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 0, "byteOffset": 12, "componentType": 5126, "count": 3, "type": "VEC3"}
           ],
           "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}]
         }
     """.trimIndent()
 
+    // Accessor 2 exists because a `rotation` channel's output is a VEC4 quaternion: reusing the
+    // VEC3 translation output for it is GltfUnsupported.ANIMATION_ACCESSOR_FORMAT.
     private val linearAndStepAnimation = """
         {
           "asset": {"version": "2.0"},
@@ -377,12 +434,14 @@ class GltfFeaturesTest {
           "buffers": [{"byteLength": 1024}],
           "bufferViews": [
             {"buffer": 0, "byteOffset": 0, "byteLength": 100},
-            {"buffer": 0, "byteOffset": 100, "byteLength": 100}
+            {"buffer": 0, "byteOffset": 100, "byteLength": 100},
+            {"buffer": 0, "byteOffset": 200, "byteLength": 100}
           ],
           "nodes": [{}],
           "accessors": [
             {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "SCALAR"},
-            {"bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "VEC3"}
+            {"bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "VEC3"},
+            {"bufferView": 2, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "VEC4"}
           ],
           "animations": [
             {
@@ -392,7 +451,7 @@ class GltfFeaturesTest {
               ],
               "samplers": [
                 {"input": 0, "output": 1, "interpolation": "LINEAR"},
-                {"input": 0, "output": 1, "interpolation": "STEP"}
+                {"input": 0, "output": 2, "interpolation": "STEP"}
               ]
             }
           ]
@@ -456,6 +515,126 @@ class GltfFeaturesTest {
           "extensionsUsed": ["KHR_materials_unlit"]
         }
     """.trimIndent()
+
+    // ---- F-2 hardening fixtures ----
+    //
+    // All of these share one 4096-byte buffer split into four 1024-byte views, so every accessor
+    // below fits regardless of its component type and the only thing under test in each fixture
+    // is the format it declares.
+
+    /** A single-scene document over the shared four-view buffer, wrapped around [accessors] and
+     * a [tail] carrying whatever meshes, nodes or animations the fixture needs. */
+    private fun overSharedBuffer(accessors: String, tail: String, extensionsRequired: String = "") = """
+        {
+          "asset": {"version": "2.0"},
+          "scenes": [{"nodes": []}]$extensionsRequired,
+          "buffers": [{"byteLength": 4096}],
+          "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 1024},
+            {"buffer": 0, "byteOffset": 1024, "byteLength": 1024},
+            {"buffer": 0, "byteOffset": 2048, "byteLength": 1024},
+            {"buffer": 0, "byteOffset": 3072, "byteLength": 1024}
+          ],
+          "accessors": [$accessors]$tail
+        }
+    """.trimIndent()
+
+    /** One accessor declaration over view [view], at three elements -- a whole triangle, so
+     * PARSE_GLB's own TRIANGLES vertex-count rule never fires in a fixture aimed at this gate. */
+    private fun accessor(view: Int, componentType: Int, type: String, normalized: Boolean = false) =
+        """{"bufferView": $view, "byteOffset": 0, "componentType": $componentType, "type": "$type",
+            "count": 3, "normalized": $normalized}"""
+
+    /** A single non-indexed TRIANGLES primitive naming [attributes] (semantic to accessor index). */
+    private fun trianglesTail(attributes: String) =
+        ""","meshes": [{"primitives": [{"attributes": {$attributes}, "mode": 4}]}]"""
+
+    private val primitiveWithoutPosition = overSharedBuffer(
+        accessors = accessor(view = 0, componentType = 5126, type = "VEC3"),
+        tail = trianglesTail(""""NORMAL": 0"""),
+    )
+
+    private val scalarBytePosition = overSharedBuffer(
+        accessors = accessor(view = 0, componentType = 5120, type = "SCALAR"),
+        tail = trianglesTail(""""POSITION": 0"""),
+    )
+
+    private val mat4TexCoordZero = positionPlus(accessor(view = 1, componentType = 5126, type = "MAT4"), "TEXCOORD_0")
+
+    private val unnormalizedUnsignedByteTexCoordZero =
+        positionPlus(accessor(view = 1, componentType = 5121, type = "VEC2"), "TEXCOORD_0")
+
+    private val vec3Tangent = positionPlus(accessor(view = 1, componentType = 5126, type = "VEC3"), "TANGENT")
+
+    private val normalizedUnsignedByteTexCoordZero = positionPlus(
+        accessor(view = 1, componentType = 5121, type = "VEC2", normalized = true),
+        "TEXCOORD_0",
+    )
+
+    private val normalizedUnsignedShortColourZero = positionPlus(
+        accessor(view = 1, componentType = 5123, type = "VEC3", normalized = true),
+        "COLOR_0",
+    )
+
+    /** A well-formed VEC3-float POSITION plus one more attribute, so each fixture varies exactly
+     * the secondary attribute's format. */
+    private fun positionPlus(secondAccessor: String, semantic: String) = overSharedBuffer(
+        accessors = accessor(view = 0, componentType = 5126, type = "VEC3") + ",\n" + secondAccessor,
+        tail = trianglesTail(""""POSITION": 0, "$semantic": 1"""),
+    )
+
+    // A short POSITION is legal glTF *given* KHR_mesh_quantization -- which is exactly why this
+    // document must report the extension rather than the attribute format.
+    private val quantizedPositionWithExtension = overSharedBuffer(
+        accessors = accessor(view = 0, componentType = 5122, type = "VEC3", normalized = true),
+        tail = trianglesTail(""""POSITION": 0"""),
+        extensionsRequired = ""","extensionsRequired": ["KHR_mesh_quantization"]""",
+    )
+
+    private val rotationOutputAsVec3 = animation(
+        path = "rotation",
+        input = accessor(view = 0, componentType = 5126, type = "SCALAR"),
+        output = accessor(view = 1, componentType = 5126, type = "VEC3"),
+    )
+
+    private val translationOutputAsVec4 = animation(
+        path = "translation",
+        input = accessor(view = 0, componentType = 5126, type = "SCALAR"),
+        output = accessor(view = 1, componentType = 5126, type = "VEC4"),
+    )
+
+    private val samplerInputAsVec3 = animation(
+        path = "translation",
+        input = accessor(view = 0, componentType = 5126, type = "VEC3"),
+        output = accessor(view = 1, componentType = 5126, type = "VEC3"),
+    )
+
+    private val samplerInputAsUnsignedShort = animation(
+        path = "translation",
+        input = accessor(view = 0, componentType = 5123, type = "SCALAR"),
+        output = accessor(view = 1, componentType = 5126, type = "VEC3"),
+    )
+
+    private val normalizedShortRotationOutput = animation(
+        path = "rotation",
+        input = accessor(view = 0, componentType = 5126, type = "SCALAR"),
+        output = accessor(view = 1, componentType = 5122, type = "VEC4", normalized = true),
+    )
+
+    /** One node driven by one `LINEAR` channel on [path], varying only the sampler's [input] and
+     * [output] accessor formats. */
+    private fun animation(path: String, input: String, output: String) = overSharedBuffer(
+        accessors = "$input,\n$output",
+        tail = """
+            ,"nodes": [{"translation": [0, 0, 0]}],
+            "animations": [
+              {
+                "channels": [{"sampler": 0, "target": {"node": 0, "path": "$path"}}],
+                "samplers": [{"input": 0, "output": 1, "interpolation": "LINEAR"}]
+              }
+            ]
+        """.trimIndent(),
+    )
 
     // ---- fixture-name plumbing ----
 
