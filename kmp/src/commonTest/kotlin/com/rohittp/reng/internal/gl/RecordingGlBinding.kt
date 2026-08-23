@@ -476,3 +476,15 @@ internal class RecordingGlBinding : GlBinding {
         }
     }
 }
+
+/**
+ * Every GL texture name [binding] bound to `GL_TEXTURE_2D`, in the order it was bound.
+ *
+ * A draw-order assertion written as `indexOf(a) < indexOf(b)` states only a relative position, and
+ * stays green when a third unexpected draw slips between them — or when one of the two never happens
+ * at all, since `indexOf` answers `-1` and `-1 < anything`. Comparing the whole bound sequence against
+ * an expected list states the order, the membership and the count in one assertion.
+ */
+internal fun boundTexturesInDrawOrder(binding: RecordingGlBinding): List<Int> = binding.log
+    .filter { it.startsWith("bindTexture(0xDE1,") }
+    .map { it.removePrefix("bindTexture(0xDE1,").removeSuffix(")").toInt() }
