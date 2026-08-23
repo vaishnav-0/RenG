@@ -147,7 +147,15 @@ internal fun sampleAnimationTracks(
     tracks: List<AnimationTrack>,
     resolved: AnimationResolution.Resolved,
 ): Map<Int, NodeTrs>? {
-    if (resolved.indices.size != tracks.size) return null
+    // `require`, not a `null` return: a [resolved] that does not correspond to [tracks] is a caller
+    // bug, and this function's `null` means "this GLB's animation data is unreadable", which the
+    // caller reports as `RESOURCE_PARSE_FAILED`. Conflating the two would blame a perfectly good
+    // model for a wiring mistake one layer up -- the same distinction
+    // `internal.gl.requireResolvedAtDrawTime` draws between a content failure and a contract
+    // violation. Every other exit from this function stays a `null`.
+    require(resolved.indices.size == tracks.size) {
+        "resolved animation indices must correspond one-to-one with the tracks they were resolved from"
+    }
     val overrides = LinkedHashMap<Int, NodeTrs>()
 
     for ((position, track) in tracks.withIndex()) {

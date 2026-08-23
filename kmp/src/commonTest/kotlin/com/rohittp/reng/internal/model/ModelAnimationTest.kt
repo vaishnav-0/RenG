@@ -24,6 +24,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -456,6 +457,30 @@ class ModelAnimationTest {
         assertNull(animationDurationSeconds(document, truncated, 0))
         assertNull(sampleTracks(document, truncated, listOf(track(0, 0.5))))
         assertNull(animationDurationSeconds(document, fixture.bin(), 1), "no animation at index 1")
+    }
+
+    @Test
+    fun aResolutionThatDoesNotCorrespondToItsTracksIsACallerBugRatherThanAParseFailure() {
+        // Every other exit from sampleAnimationTracks is a `null` meaning "this GLB's animation data
+        // is unreadable", which the caller reports as RESOURCE_PARSE_FAILED. A resolution built from
+        // different tracks is a wiring mistake one layer up, and returning `null` for it would blame
+        // a perfectly good model for it. Same distinction requireResolvedAtDrawTime already draws.
+        val fixture = Fixture()
+        val times = fixture.times(0f, 1f)
+        val translation = fixture.vec3s(0f, 0f, 0f, 1f, 0f, 0f)
+        val document = fixture.document(
+            nodes = listOf(trsNode()),
+            animations = listOf(oneChannelAnimation("Walk", times, translation)),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            sampleAnimationTracks(
+                document = document,
+                bin = fixture.bin(),
+                tracks = listOf(track(0, 0.5), track(0, 0.5)),
+                resolved = AnimationResolution.Resolved(listOf(0)),
+            )
+        }
     }
 
     @Test
