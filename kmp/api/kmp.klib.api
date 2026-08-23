@@ -108,6 +108,7 @@ final enum class com.rohittp.reng/RenGErrorCode : kotlin/Enum<com.rohittp.reng/R
     enum entry STORE_READ_FAILED // com.rohittp.reng/RenGErrorCode.STORE_READ_FAILED|null[0]
     enum entry STORE_WRITE_FAILED // com.rohittp.reng/RenGErrorCode.STORE_WRITE_FAILED|null[0]
     enum entry TRANSPORT_EXECUTION_FAILED // com.rohittp.reng/RenGErrorCode.TRANSPORT_EXECUTION_FAILED|null[0]
+    enum entry UNSUPPORTED_ANCHORING_MODE // com.rohittp.reng/RenGErrorCode.UNSUPPORTED_ANCHORING_MODE|null[0]
     enum entry UNSUPPORTED_PROJECTION_MODE // com.rohittp.reng/RenGErrorCode.UNSUPPORTED_PROJECTION_MODE|null[0]
     enum entry UNSUPPORTED_RENDER_CONTEXT // com.rohittp.reng/RenGErrorCode.UNSUPPORTED_RENDER_CONTEXT|null[0]
     enum entry UNSUPPORTED_RESOURCE_FEATURE // com.rohittp.reng/RenGErrorCode.UNSUPPORTED_RESOURCE_FEATURE|null[0]
