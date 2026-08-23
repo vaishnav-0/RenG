@@ -119,13 +119,23 @@ own background. Unrelated to models, folded here because it is small and lives i
 
 ### The draw order is computed twice, and the wrong copy wins
 
-`MercatorSpatialPlanner` already computes the correct heterogeneous stack **including models** — z, then
-sticker-before-model, then source index — and `RenGRenderer` discards it and re-sorts in the GL layer.
-That reproduces the rule today only because a stickers-only scene makes stable order equal source order.
-Models break the coincidence. Use the plan the pure core already produces.
+`MercatorSpatialPlanner` already splits every drawn thing into its regime and sorts the screen stack — z,
+then sticker-before-model, then source index — and `RenGRenderer` discards both and re-derives them in the
+GL layer, by re-resolving each `Placement` at draw time and re-sorting inside `drawStickers`. Two copies of
+one documented rule, one of them unit-tested and one of them not.
 
-`StickerWorld`/`drawStickers` also owns both regimes inside one drawn-thing type; models make the screen
-stack span two programs, so it has to move up.
+**Corrected during planning, because the first draft of this section named the wrong break.** It said models
+break the coincidence in the *screen* stack. They cannot: ADR 0029 refuses a `SCREEN`-positioned model, so
+the screen stack stays stickers-only and the two orderings agree on every input that can exist. The break is
+in the **map** regime, which now has models in it — and whose phase order is the model-depth ADR's (ground,
+geometries, models, map-anchored stickers), deliberately *not* the planner's `mapEntries` order, which is
+stickers-then-models by declaration. Threading that list straight through as a draw order would paint a car
+over the pin standing in front of it. So the GL layer takes the planner's answer to which regime each thing
+is in and its order within its own type, and applies the phase order over it.
+
+`StickerWorld`/`drawStickers` still has to give up its screen half: owning both regimes inside one
+drawn-thing type is what makes the second sort possible, and the screen stack is the renderer's rather than
+any one pipeline's.
 
 ### Verification is analytical readback, not golden images
 
