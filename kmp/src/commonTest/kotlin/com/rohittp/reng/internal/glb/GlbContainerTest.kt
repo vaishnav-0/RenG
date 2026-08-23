@@ -37,6 +37,17 @@ class GlbContainerTest {
     }
 
     @Test
+    fun reportsTheBinChunkLengthWithoutWalkingIt() {
+        // Both callers of parseGltf take this figure. Derived by subtraction rather than by
+        // IntRange.count(), which walks the range one boxed Int at a time -- 7.2 ms over a real
+        // 130 KB BIN chunk on Apple M3 Max, against 0.44 ms for the whole scan and parse it feeds.
+        val withBin = assertIs<GlbScan.Admitted>(scan("01-valid-json-and-bin"))
+        assertEquals(withBin.binChunk?.count()?.toLong(), withBin.binChunkLength)
+        // No BIN chunk at all is zero, not an absent length parseGltf would have to interpret.
+        assertEquals(0L, assertIs<GlbScan.Admitted>(scan("02-valid-json-only")).binChunkLength)
+    }
+
+    @Test
     fun boundsTheBinChunkByTheDeclaredBufferLength() {
         assertIs<GlbScan.Admitted>(scan("27-buffer-3-shorter-than-bin-chunk"))
         assertIs<GlbScan.Admitted>(scan("22-bin-padded-with-zeros"))
