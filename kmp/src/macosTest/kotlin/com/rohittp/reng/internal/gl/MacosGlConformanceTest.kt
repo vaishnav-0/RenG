@@ -16,7 +16,7 @@ class MacosGlConformanceTest {
 
             val report = runGlConformanceSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
             assertEquals(ShaderDialect.DESKTOP, report.dialect)
-            assertEquals(7, report.checks.size)
+            assertEquals(8, report.checks.size)
             assertTrue(report.rendererName.isNotBlank())
             // A hosted runner reports "Apple Software Renderer"; a developer's machine reports
             // "4.1 Metal - 90.5". Cycle E must key golden baselines by this string and the dialect.

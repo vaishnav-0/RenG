@@ -91,6 +91,8 @@ internal fun runGlConformanceSuite(
     checks += "state-round-trip"
     assertShaderDialectMatrix(binding, profile, crossDialectLinkPolicy)
     checks += "shader-dialect-matrix"
+    assertModelShaderVariantsLink(binding, profile)
+    checks += "model-shader-variants"
     assertOffscreenCompositeAndRestore(binding, profile)
     checks += "offscreen-composite"
     assertLifecycleUnderARealContext(binding, probe, profile)
@@ -496,6 +498,82 @@ private fun assertShaderStageCompiles(binding: GlBinding, type: Int, source: Str
         "a driver advertising $ES3_COMPATIBILITY_EXTENSION must accept #version 300 es at the " +
             "compile stage even though this suite skips the crash-triggering link: $log",
     )
+}
+
+/**
+ * All eight model shader variants link on this driver, in this context's own dialect, and every
+ * name each variant declares resolves to a real location.
+ *
+ * **`RecordingGlBinding` cannot prove either half of this, structurally.** The fake answers
+ * `getUniformLocation` from a map a test seeds with the very same `MODEL_*_UNIFORM_NAME` constants
+ * the shader generator interpolates, so a source that spelled a name differently from its constant
+ * — or that did not compile at all — is invisible to it: the location comes back non-negative
+ * because the *constant* was declared, not because the *program* declares the name. Here the driver
+ * answers, and only a program that genuinely declares the name gives a location.
+ *
+ * The links are same-dialect only, exactly as [assertOffscreenCompositeAndRestore]'s composite link
+ * is, so this is nowhere near the cross-dialect `glLinkProgram` Mesa 25.2.8 crashes inside.
+ *
+ * Two locations are asserted conditionally rather than unconditionally, because a compiler is
+ * entitled to eliminate a uniform it can prove has no effect. `rengModelForceOpaque` is one in a
+ * masked variant — that variant already forces its own alpha to one before the `mix`, so the mix is
+ * constant — and the joint block exists only where skinning does.
+ */
+private fun assertModelShaderVariantsLink(binding: GlBinding, profile: RenderContextProfile) {
+    val cache = GlProgramCache()
+    val pipelines = allModelShaderVariants().map { variant ->
+        val pipeline = (createModelPipeline(binding, profile.dialect, cache, variant) as? ModelPipelineResult.Created)
+            ?.pipeline
+            ?: throw AssertionError("the $variant model program must link on this context")
+
+        assertTrue(pipeline.modelViewProjectionLocation >= 0, "$variant declares its model-view-projection")
+        assertTrue(pipeline.normalMatrixLocation >= 0, "$variant declares its normal matrix")
+        assertTrue(pipeline.baseColourFactorLocation >= 0, "$variant declares its base colour factor")
+        assertTrue(pipeline.lightDirectionLocation >= 0, "$variant declares the light direction")
+        assertTrue(pipeline.ambientLocation >= 0, "$variant declares the ambient term")
+        assertTrue(pipeline.vertexColourPresentLocation >= 0, "$variant declares its vertex-colour flag")
+        assertEquals(
+            variant.hasBaseColourTexture,
+            pipeline.baseColourTextureLocation >= 0,
+            "$variant binds a base colour sampler exactly when it samples one",
+        )
+        assertEquals(variant.masked, pipeline.alphaCutoffLocation >= 0, "$variant declares a cutoff only if masked")
+        if (!variant.masked) {
+            assertTrue(pipeline.forceOpaqueLocation >= 0, "$variant declares the force-opaque flag")
+        }
+        assertEquals(variant.skinned, pipeline.jointBlockIndex >= 0, "$variant declares a joint block only if skinned")
+        assertEquals(variant.skinned, pipeline.jointBuffer != 0, "$variant allocates a joint buffer only if skinned")
+
+        assertEquals(
+            ModelVertexAttribute.POSITION.location,
+            binding.getAttribLocation(pipeline.program, MODEL_POSITION_ATTRIBUTE_NAME),
+        )
+        assertEquals(
+            ModelVertexAttribute.NORMAL.location,
+            binding.getAttribLocation(pipeline.program, MODEL_NORMAL_ATTRIBUTE_NAME),
+        )
+        if (variant.hasBaseColourTexture) {
+            assertEquals(
+                ModelVertexAttribute.TEX_COORD.location,
+                binding.getAttribLocation(pipeline.program, MODEL_TEX_COORD_ATTRIBUTE_NAME),
+            )
+        }
+        if (variant.skinned) {
+            assertEquals(
+                ModelVertexAttribute.JOINTS.location,
+                binding.getAttribLocation(pipeline.program, MODEL_JOINTS_ATTRIBUTE_NAME),
+            )
+            assertEquals(
+                ModelVertexAttribute.WEIGHTS.location,
+                binding.getAttribLocation(pipeline.program, MODEL_WEIGHTS_ATTRIBUTE_NAME),
+            )
+        }
+        pipeline
+    }
+
+    assertEquals(8, pipelines.map { it.program }.toSet().size, "each variant is its own program")
+    pipelines.forEach { deleteModelPipeline(binding, cache, it) }
+    assertEquals(GL_NO_ERROR, GlErrorQueue.firstOwnError(binding), "compiling the model variants raises no error")
 }
 
 private fun assertOffscreenCompositeAndRestore(binding: GlBinding, profile: RenderContextProfile) {

@@ -77,7 +77,7 @@ class LinuxGlConformanceTest {
                 dialect,
                 crossDialectLinkPolicy = CrossDialectLinkPolicy.SKIP_ON_LINUX_MESA_LINK_SEGFAULT,
             )
-            assertEquals(7, report.checks.size)
+            assertEquals(8, report.checks.size)
             return assertions(report)
         } finally {
             fixture.destroy()
