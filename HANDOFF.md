@@ -309,9 +309,9 @@ decision ADR 0021 already makes deliberately. No row moved from reject to accept
 **119** files, not 118, and a re-run over all 119 reports **53** supported — one more accepted file,
 no row moved. The re-run was performed twice, before and after the accessor-constraint tightening on
 `feat/f2-glb-validation` (`24f36f0`, fifteen new guards across both gates), and **zero files changed
-verdict**, so 53 holds for both the released pipeline and the tightened one. That branch is unmerged, and
-it numbers its own ADR `0025-constrain-glb-accessors-per-role.md`, which **collides** with the `0025` the
-basemap cycle already merged — one of the two must be renumbered at merge.
+verdict**, so 53 holds for both the released pipeline and the tightened one. That branch is merged, and
+its ADR was renumbered to `0028-constrain-glb-accessors-per-role.md` on the way in: it had claimed `0025`,
+which the basemap cycle had already taken for the coplanar-content ruling.
 
 ### Erratum on Rentile's resource-class count — owed then, written now
 
@@ -585,9 +585,10 @@ models with textures and animation, the globe projection, and golden images.
   `check_repository_policy.py` fails closed: `gradle/libs.versions.toml`, the two
   `_EXPECTED_PRODUCTION_BUILD_FINGERPRINTS` whole-file SHA-256 hashes, and a `base_versions` literal inside
   `tools/check_repository_policy.py`'s `_dependency_name_policy_token`.
-- **An ADR number collides.** `feat/f2-glb-validation` (`24f36f0`, unmerged) numbers its own
-  `docs/adr/0025-constrain-glb-accessors-per-role.md`, while this branch has already merged
-  `0025-pass-coplanar-map-content-and-fix-the-map-regime-draw-order.md` and `0026`. One must be renumbered.
+- **An ADR number collided, and is resolved.** `feat/f2-glb-validation` claimed
+  `docs/adr/0025-constrain-glb-accessors-per-role.md`, which the basemap cycle had already taken. It merged
+  as `0028`. Worth knowing for next time: two branches numbering an ADR in parallel is the normal outcome
+  of parallel work, and the number is cheap to move only until something cites it.
 - **The served documentation site is actively wrong.** `docs/index.html:59` says RenG "still exposes no
   runtime API or" rendering, `docs/index.html:118` says "Cycle A renders nothing", and `docs/kmp.html:59`
   says the same. `0.2.0` is public, `createRenderer` is public API, and RenG draws. Those are HTML, not
