@@ -21,9 +21,8 @@ class GltfFeaturesTest {
         assertEquals(GltfUnsupported.SPARSE_ACCESSOR, unsupported(sparseAccessor))
         assertEquals(GltfUnsupported.PRIMITIVE_MODE, unsupported(triangleStrip))
         assertEquals(GltfUnsupported.PRIMITIVE_MODE, unsupported(pointsMode))
-        assertEquals(GltfUnsupported.ATTRIBUTE_SEMANTIC, unsupported(texcoordOne))
-        assertEquals(GltfUnsupported.ATTRIBUTE_SEMANTIC, unsupported(colourOne))
         assertEquals(GltfUnsupported.ATTRIBUTE_SEMANTIC, unsupported(customAttribute))
+        assertEquals(GltfUnsupported.ATTRIBUTE_SEMANTIC, unsupported(nonCanonicalTexcoordIndex))
         assertEquals(GltfUnsupported.SKIN, unsupported(documentWithSkin))
         assertEquals(GltfUnsupported.MORPH_TARGET, unsupported(documentWithMorphTargets))
         assertEquals(GltfUnsupported.ANIMATION_TARGET_PATH, unsupported(weightsChannel))
@@ -140,6 +139,65 @@ class GltfFeaturesTest {
         }
     }
 
+    // ---- F-2: the UV and colour sets RenG never reads ----
+
+    @Test
+    fun anExtraTextureCoordinateSetIsIgnoredRatherThanRejected() {
+        // TEXCOORD_1 alone rejected 14 of the consumer's 41 models and was the sole reason for 10
+        // of them, for carrying data RenG never reads: it samples one texture.
+        val document = documentWithPrimitiveAttributes(
+            "POSITION" to vec3Float(), "TEXCOORD_0" to vec2Float(), "TEXCOORD_1" to vec2Float(),
+        )
+        assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(document))
+    }
+
+    @Test
+    fun anExtraColourSetIsIgnoredRatherThanRejected() {
+        val document = documentWithPrimitiveAttributes(
+            "POSITION" to vec3Float(), "COLOR_0" to vec4Float(), "COLOR_1" to vec4Float(),
+        )
+        assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(document))
+    }
+
+    @Test
+    fun anIgnoredSetIsNotFormatCheckedBecauseRenGNeverBindsIt() {
+        // TEXCOORD_1 as an unnormalized MAT4 of bytes is nonsense RenG will never read. "Ignored"
+        // means *not format-checked*, not "format-checked and then discarded": a set RenG never
+        // reads cannot have a format RenG cannot bind.
+        val document = documentWithPrimitiveAttributes(
+            "POSITION" to vec3Float(), "TEXCOORD_1" to accessor(type = "MAT4", componentType = 5120),
+        )
+        assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(document))
+    }
+
+    @Test
+    fun anApplicationSpecificSemanticIsStillRejected() {
+        // The widening admits TEXCOORD_n and COLOR_n and nothing else. A widening that widens to
+        // everything is not the widening this cycle asked for.
+        val document = documentWithPrimitiveAttributes("POSITION" to vec3Float(), "_BATCHID" to vec3Float())
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.ATTRIBUTE_SEMANTIC),
+            validateGltfFeatures(document),
+        )
+    }
+
+    @Test
+    fun aBaseColourTextureNamingASecondCoordinateSetIsRejected() {
+        // RenG binds TEXCOORD_0 and only TEXCOORD_0, so a material asking for another set has no
+        // correct render. Ignoring an extra *set* is not the same as honouring a material that
+        // names one -- baseColorTexture.texCoord is 0 in every material in the consumer's corpus.
+        val document = documentWithBaseColourTexture(texCoord = 1)
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.TEXTURE_COORDINATE_SET),
+            validateGltfFeatures(document),
+        )
+        // ... and the coordinate set RenG does bind stays supported.
+        assertEquals(
+            GltfFeatureResult.Supported,
+            validateGltfFeatures(documentWithBaseColourTexture(texCoord = 0)),
+        )
+    }
+
     // ---- reject fixtures ----
 
     // Same shape as GltfParseTest's dracoShapedDocument: extensionsRequired names a compression
@@ -194,9 +252,12 @@ class GltfFeaturesTest {
         }
     """.trimIndent()
 
-    private val texcoordOne = primitiveWithAttribute("TEXCOORD_1")
-    private val colourOne = primitiveWithAttribute("COLOR_1")
     private val customAttribute = primitiveWithAttribute("_CUSTOM")
+
+    // TEXCOORD_01 is not a glTF semantic at all: the specification spells a set index as a
+    // canonical non-negative integer, so a leading zero names nothing. It stays rejected even
+    // though TEXCOORD_1 is now admitted and ignored.
+    private val nonCanonicalTexcoordIndex = primitiveWithAttribute("TEXCOORD_01")
 
     private fun primitiveWithAttribute(semantic: String) = """
         {
@@ -548,6 +609,52 @@ class GltfFeaturesTest {
     /** A single non-indexed TRIANGLES primitive naming [attributes] (semantic to accessor index). */
     private fun trianglesTail(attributes: String) =
         ""","meshes": [{"primitives": [{"attributes": {$attributes}, "mode": 4}]}]"""
+
+    /** One accessor declaration minus its `bufferView` member, which
+     * [documentWithPrimitiveAttributes] supplies per attribute so no two attributes share a view.
+     * Three elements -- a whole triangle, so PARSE_GLB's own TRIANGLES vertex-count rule never
+     * fires in a fixture aimed at this gate. */
+    private fun accessor(type: String, componentType: Int, normalized: Boolean = false) =
+        """"byteOffset": 0, "componentType": $componentType, "type": "$type",
+            "count": 3, "normalized": $normalized"""
+
+    private fun vec2Float() = accessor(type = "VEC2", componentType = 5126)
+
+    private fun vec3Float() = accessor(type = "VEC3", componentType = 5126)
+
+    private fun vec4Float() = accessor(type = "VEC4", componentType = 5126)
+
+    /** A single non-indexed TRIANGLES primitive whose attributes are exactly [attributes], each
+     * over its own view of the shared four. Returns the parsed document rather than its JSON,
+     * because every caller passes it straight to [validateGltfFeatures]. */
+    private fun documentWithPrimitiveAttributes(vararg attributes: Pair<String, String>): GltfDocument {
+        require(attributes.size <= 4) { "overSharedBuffer declares exactly four buffer views" }
+        val accessors = attributes.mapIndexed { view, (_, declaration) ->
+            """{"bufferView": $view, $declaration}"""
+        }
+        val names = attributes.mapIndexed { view, (semantic, _) -> """"$semantic": $view""" }
+        return overSharedBuffer(
+            accessors = accessors.joinToString(",\n"),
+            tail = trianglesTail(names.joinToString(", ")),
+        ).document
+    }
+
+    /** One embedded PNG bound as a material's base colour, varying only the coordinate set that
+     * material names. */
+    private fun documentWithBaseColourTexture(texCoord: Int): GltfDocument = """
+        {
+          "asset": {"version": "2.0"},
+          "scenes": [{"nodes": []}],
+          "buffers": [{"byteLength": 1024}],
+          "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 100}],
+          "images": [{"bufferView": 0, "mimeType": "image/png"}],
+          "samplers": [{}],
+          "textures": [{"source": 0, "sampler": 0}],
+          "materials": [
+            {"pbrMetallicRoughness": {"baseColorTexture": {"index": 0, "texCoord": $texCoord}}}
+          ]
+        }
+    """.trimIndent().document
 
     private val primitiveWithoutPosition = overSharedBuffer(
         accessors = accessor(view = 0, componentType = 5126, type = "VEC3"),

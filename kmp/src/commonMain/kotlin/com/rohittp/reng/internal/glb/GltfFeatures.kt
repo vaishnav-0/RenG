@@ -21,10 +21,33 @@ private const val SUPPORTED_PRIMITIVE_MODE = 4
 /** The only embedded image media type RenG decodes. */
 private const val SUPPORTED_IMAGE_MEDIA_TYPE = "image/png"
 
-/** Attribute semantics ADR 0021 admits. Anything else -- `TEXCOORD_n`/`COLOR_n` above zero,
- * `JOINTS_n`, `WEIGHTS_n`, or an application-specific `_CUSTOM` name -- is
+/** The one texture coordinate set RenG binds. A material naming any other set is
+ * [GltfUnsupported.TEXTURE_COORDINATE_SET]. */
+private const val BOUND_TEXTURE_COORDINATE_SET = 0
+
+/** Whether [name] is an attribute semantic this subset admits: `POSITION`, `NORMAL`, `TANGENT`, and
+ * every `TEXCOORD_n` and `COLOR_n` set rather than set zero alone. RenG reads set zero and nothing
+ * else, so a second set carries data it never binds -- and refusing it rejected 14 of the 41 models
+ * the consumer ships, 10 of them for nothing else
+ * (`docs/research/2026-08-22-consumer-model-corpus-check.md`). Widening a subset is a compatible
+ * change under ADR 0021's own reasoning. Anything else -- `JOINTS_n`, `WEIGHTS_n`, an
+ * application-specific `_CUSTOM` name, or a non-canonical index such as `TEXCOORD_01` -- is
  * [GltfUnsupported.ATTRIBUTE_SEMANTIC]. */
-private val SUPPORTED_ATTRIBUTE_SEMANTICS = setOf("POSITION", "NORMAL", "TEXCOORD_0", "TANGENT", "COLOR_0")
+private fun isSupportedSemantic(name: String): Boolean = when {
+    name == POSITION_SEMANTIC || name == "NORMAL" || name == "TANGENT" -> true
+    name.startsWith("TEXCOORD_") -> isCanonicalSetIndex(name.removePrefix("TEXCOORD_"))
+    name.startsWith("COLOR_") -> isCanonicalSetIndex(name.removePrefix("COLOR_"))
+    else -> false
+}
+
+/** A glTF set index is a canonical non-negative decimal integer: `0`, or digits with no leading
+ * zero. `TEXCOORD_01` is not a semantic the specification defines, so admitting it would widen the
+ * subset past anything an exporter writes, for a name no consumer can act on. */
+private fun isCanonicalSetIndex(text: String): Boolean = when {
+    text.isEmpty() -> false
+    text.any { it !in '0'..'9' } -> false
+    else -> text == "0" || text[0] != '0'
+}
 
 /** Animation channel target paths RenG plays. `weights` -- morph-target weight animation -- is
  * outside the subset because morph targets themselves are ([GltfUnsupported.MORPH_TARGET]). */
@@ -84,12 +107,15 @@ internal sealed interface GltfFeatureResult {
  *   accessors, not the Draco signature that code names.
  * - [PRIMITIVE_MODE] covers any primitive `mode` other than `4` (`TRIANGLES`) -- strips, fans,
  *   points and lines.
- * - [ATTRIBUTE_SEMANTIC] covers any primitive attribute semantic outside
- *   [SUPPORTED_ATTRIBUTE_SEMANTICS]: `TEXCOORD_n`/`COLOR_n` above zero, `JOINTS_n`, `WEIGHTS_n`,
- *   and any application-specific `_`-prefixed name. Checked after [SKIN]: a skinned mesh carries
- *   both the flagged `JOINTS_0`/`WEIGHTS_0` attributes and a `node.skin` reference, and stripping
- *   just the attributes would not fix the file, since the skin reference remains and export fails
- *   again next round. [SKIN] names the feature the consumer must actually remove.
+ * - [ATTRIBUTE_SEMANTIC] covers any primitive attribute semantic [isSupportedSemantic] does not
+ *   admit: `JOINTS_n`, `WEIGHTS_n`, any application-specific `_`-prefixed name, and a
+ *   `TEXCOORD_`/`COLOR_` name whose index is not a canonical non-negative integer. A second or
+ *   later `TEXCOORD_n`/`COLOR_n` set is *not* covered any longer -- RenG reads set zero only, so
+ *   the rest is data it never binds, and refusing it rejected 14 of the consumer's 41 models.
+ *   Checked after [SKIN]: a skinned mesh carries both the flagged `JOINTS_0`/`WEIGHTS_0`
+ *   attributes and a `node.skin` reference, and stripping just the attributes would not fix the
+ *   file, since the skin reference remains and export fails again next round. [SKIN] names the
+ *   feature the consumer must actually remove.
  * - [SKIN] covers any node carrying a `skin` index. Checked before [ATTRIBUTE_SEMANTIC] for exactly
  *   the reason given there.
  * - [MORPH_TARGET] covers any primitive whose `targets` array is non-empty.
@@ -137,6 +163,11 @@ internal sealed interface GltfFeatureResult {
  *   samplers a channel actually references are checked, since an unreferenced sampler is never
  *   sampled. Checked after [ANIMATION_TARGET_PATH] and [INTERPOLATION], both of which name a
  *   feature the consumer removes rather than a format they re-export.
+ * - [TEXTURE_COORDINATE_SET] covers a material whose `pbrMetallicRoughness.baseColorTexture.texCoord`
+ *   is not `0`. RenG binds `TEXCOORD_0` and only `TEXCOORD_0`, so a material asking for another set
+ *   has no correct render, and sampling the set RenG does bind would be the silent fallback ADR 0021
+ *   refuses everywhere else. Only the base-colour slot is checked: the four secondary slots are
+ *   retained and never sampled, so the coordinate set they name is not one RenG binds either way.
  */
 internal enum class GltfUnsupported {
     EXTENSION_REQUIRED,
@@ -156,6 +187,7 @@ internal enum class GltfUnsupported {
     PRIMITIVE_WITHOUT_POSITION,
     ATTRIBUTE_FORMAT,
     ANIMATION_ACCESSOR_FORMAT,
+    TEXTURE_COORDINATE_SET,
 }
 
 /**
@@ -185,6 +217,7 @@ private class GltfFeatureValidator(private val document: GltfDocument) {
         validateBuffers()
         validateAccessors()
         validateImages()
+        validateMaterials()
         validateNodes()
         validateMeshes()
         validateAnimations()
@@ -215,12 +248,27 @@ private class GltfFeatureValidator(private val document: GltfDocument) {
         }
     }
 
+    /** RenG samples exactly one texture -- the base colour -- and binds
+     * `TEXCOORD_`[BOUND_TEXTURE_COORDINATE_SET] to sample it with. A material asking for another
+     * coordinate set therefore has no correct render, and sampling the set RenG does bind instead
+     * would be a silent substitution. The four secondary slots are not checked: they are retained
+     * and never sampled, so the set they name is one RenG never binds either way -- the same
+     * reason an extra `TEXCOORD_n` attribute is admitted without a format check. */
+    private fun validateMaterials() {
+        for (material in document.materials) {
+            val baseColorTexture = material.pbrMetallicRoughness?.baseColorTexture ?: continue
+            if (baseColorTexture.texCoord != BOUND_TEXTURE_COORDINATE_SET) {
+                reject(GltfUnsupported.TEXTURE_COORDINATE_SET)
+            }
+        }
+    }
+
     private fun validateMeshes() {
         for (mesh in document.meshes) {
             for (primitive in mesh.primitives) {
                 if (primitive.mode != SUPPORTED_PRIMITIVE_MODE) reject(GltfUnsupported.PRIMITIVE_MODE)
                 for (semantic in primitive.attributes.keys) {
-                    if (semantic !in SUPPORTED_ATTRIBUTE_SEMANTICS) reject(GltfUnsupported.ATTRIBUTE_SEMANTIC)
+                    if (!isSupportedSemantic(semantic)) reject(GltfUnsupported.ATTRIBUTE_SEMANTIC)
                 }
                 if (primitive.targetCount > 0) reject(GltfUnsupported.MORPH_TARGET)
                 if (POSITION_SEMANTIC !in primitive.attributes) {
@@ -236,9 +284,12 @@ private class GltfFeatureValidator(private val document: GltfDocument) {
     }
 
     /** Whether RenG binds [accessor] for [semantic], per the specification's own per-semantic
-     * accessor table. [semantic] is always one of [SUPPORTED_ATTRIBUTE_SEMANTICS] by the time this
-     * runs -- anything else is already [GltfUnsupported.ATTRIBUTE_SEMANTIC] -- so the `else` branch
-     * is unreachable and admits rather than rejects, keeping the two codes' territories disjoint. */
+     * accessor table. [semantic] has already passed [isSupportedSemantic] by the time this runs --
+     * anything else is [GltfUnsupported.ATTRIBUTE_SEMANTIC] -- so the `else` branch covers exactly
+     * the admitted sets RenG ignores: `TEXCOORD_n` and `COLOR_n` above zero. Those are admitted
+     * *without checking*, deliberately. An attribute RenG never reads cannot have a format RenG
+     * cannot bind, and format-checking one would reject a model over bytes no draw call touches --
+     * which is the rejection this cycle just removed. */
     private fun bindsAttribute(semantic: String, accessor: GltfAccessor): Boolean = when (semantic) {
         "POSITION", "NORMAL" -> accessor.type == "VEC3" && isPlainFloat(accessor)
         "TANGENT" -> accessor.type == "VEC4" && isPlainFloat(accessor)
