@@ -1,21 +1,33 @@
 package com.rohittp.reng
 
+import com.rohittp.reng.internal.gl.GL_ARRAY_BUFFER
+import com.rohittp.reng.internal.gl.GL_BLEND
 import com.rohittp.reng.internal.gl.GL_COLOR_ATTACHMENT0
 import com.rohittp.reng.internal.gl.GL_COLOR_BUFFER_BIT
+import com.rohittp.reng.internal.gl.GL_CULL_FACE
+import com.rohittp.reng.internal.gl.GL_DEPTH_TEST
 import com.rohittp.reng.internal.gl.GL_DRAW_FRAMEBUFFER
+import com.rohittp.reng.internal.gl.GL_FLOAT
 import com.rohittp.reng.internal.gl.GL_FRAMEBUFFER_COMPLETE
 import com.rohittp.reng.internal.gl.GL_PACK_ALIGNMENT
 import com.rohittp.reng.internal.gl.GL_READ_FRAMEBUFFER
+import com.rohittp.reng.internal.gl.GL_RENDERER
 import com.rohittp.reng.internal.gl.GL_RGBA
 import com.rohittp.reng.internal.gl.GL_RGBA8
 import com.rohittp.reng.internal.gl.GL_SCISSOR_TEST
+import com.rohittp.reng.internal.gl.GL_STATIC_DRAW
 import com.rohittp.reng.internal.gl.GL_TEXTURE_2D
+import com.rohittp.reng.internal.gl.GL_TRIANGLE_STRIP
 import com.rohittp.reng.internal.gl.GL_UNSIGNED_BYTE
 import com.rohittp.reng.internal.gl.GlBinding
+import com.rohittp.reng.internal.gl.GlProgramResult
 import com.rohittp.reng.internal.gl.RenderContextProbe
 import com.rohittp.reng.internal.gl.ShaderDialect
+import com.rohittp.reng.internal.gl.compileShaderProgram
+import com.rohittp.reng.internal.gl.littleEndianBytes
 import com.rohittp.reng.internal.identity.CanonicalBytes
 import com.rohittp.reng.internal.identity.PureKotlinSha256
+import com.rohittp.reng.internal.shader.scanShaderProfile
 import kotlin.io.encoding.Base64
 import kotlin.math.abs
 import kotlin.test.assertEquals
@@ -68,6 +80,16 @@ import kotlinx.coroutines.runBlocking
  * **No baselines, and no shared decoder between the two sides.** The expected colours are constants
  * written by hand from the fixture PNGs; the actual side is a raw `glReadPixels`. Nothing on the
  * expected side runs `decodePng`, so a decoder regression can only make this fail, never pass.
+ *
+ * **Every count here carries a stated budget, and every budget is derived rather than tuned.** An
+ * exact pixel count is a claim about a driver's fill rule, not about RenG: rasterisers legitimately
+ * round a boundary differently, and three of them already run this suite (Apple's Metal path, Apple's
+ * CPU rasteriser, and Linux `llvmpipe`). The budgets are sized from the geometry that produces them
+ * -- a one-pixel crack along each tile seam, a one-pixel boundary around a quad -- and each is one to
+ * two orders of magnitude smaller than the defect its case exists to catch. Where a driver is not
+ * merely rounding but is dropping whole primitives, [measureLargeQuadRasterisation] says so in
+ * pixels and the one case that cannot survive it is skipped out loud rather than tolerated into
+ * meaninglessness.
  */
 internal fun runBasemapReadbackSuite(
     binding: GlBinding,
@@ -75,6 +97,11 @@ internal fun runBasemapReadbackSuite(
     dialect: ShaderDialect,
 ) {
     val target = createReadbackTarget(binding)
+    val rasterisation = measureLargeQuadRasterisation(binding, dialect, target)
+    println(
+        "RenG basemap readback rasterisation probe: driver=${binding.getString(GL_RENDERER)} " +
+            rasterisation.describe(),
+    )
     val transport = ReadbackTransport()
     val renderer = createRenderer(
         RendererConfiguration(
@@ -86,25 +113,84 @@ internal fun runBasemapReadbackSuite(
         binding,
         probe,
     )
+    val failures = CollectedFailures()
     try {
         val renderTarget = renderer.mintRenderTarget(FramebufferName(target.toUInt()))
 
-        assertGroundCoversTheFrameInTheFixturesOwnArrangement(binding, renderer, renderTarget, target, dialect)
-        assertDrawBasemapFalseLeavesTheFrameUntouched(binding, renderer, renderTarget, target)
-        assertTheLaterOfTwoCoplanarMapAnchoredThingsWins(binding, renderer, renderTarget, target)
-        assertACoplanarGeometryKeepsEveryGroundCoveredPixelAcrossACameraSweep(
-            binding, renderer, renderTarget, target,
-        )
-        assertAMapAnchoredBillboardIsTheSameSizeAtEveryPitch(binding, renderer, renderTarget, target)
+        if (rasterisation.isTrustworthy) {
+            failures.run("the ground covers the frame") {
+                assertGroundCoversTheFrameInTheFixturesOwnArrangement(
+                    binding, renderer, renderTarget, target, dialect,
+                )
+            }
+        } else {
+            println(
+                "RenG basemap readback SKIPPED [the ground covers the frame] " +
+                    rasterisation.describe() +
+                    ": this driver does not rasterise the ground's own quads, so a missing ground " +
+                    "pixel here would measure the driver rather than RenG. Every other case still ran.",
+            )
+        }
+        failures.run("drawBasemap = false draws nothing") {
+            assertDrawBasemapFalseLeavesTheFrameUntouched(binding, renderer, renderTarget, target)
+        }
+        failures.run("the later of two coplanar map-anchored things wins") {
+            assertTheLaterOfTwoCoplanarMapAnchoredThingsWins(binding, renderer, renderTarget, target)
+        }
+        failures.run("a coplanar geometry survives the camera sweep") {
+            assertACoplanarGeometryKeepsEveryGroundCoveredPixelAcrossACameraSweep(
+                binding, renderer, renderTarget, target, rasterisation.isTrustworthy,
+            )
+        }
+        failures.run("a map-anchored billboard is the same size at every pitch") {
+            assertAMapAnchoredBillboardIsTheSameSizeAtEveryPitch(binding, renderer, renderTarget, target)
+        }
     } finally {
         renderer.close()
         binding.deleteFramebuffers(1, intArrayOf(target))
     }
+    failures.throwIfAny()
 }
 
 /**
+ * Runs every case even after one has failed, and reports all of them together.
+ *
+ * A suite that stops at its first assertion costs one CI round trip per defect, and this suite's
+ * whole point is that it runs on drivers a developer cannot reach — the `0.3.0` publication failed
+ * on a hosted macOS runner whose entire diagnostic was `kotlin.AssertionError at null:-1`. Each case
+ * draws its own frames into a freshly cleared target and shares nothing but the renderer, so a later
+ * case is still worth believing after an earlier one failed. Every message is also printed as it
+ * happens, because Gradle's console renders only the exception's class and location, never its
+ * message: the text below reaches a human through the test report, not the build log.
+ */
+private class CollectedFailures {
+    private val messages: MutableList<String> = mutableListOf()
+
+    fun run(name: String, case: () -> Unit) {
+        try {
+            case()
+        } catch (error: AssertionError) {
+            val message = error.message ?: error.toString()
+            messages += "[$name] $message"
+            println("RenG basemap readback FAILED [$name] $message")
+        }
+    }
+
+    fun throwIfAny() {
+        if (messages.isEmpty()) return
+        throw AssertionError(
+            "${messages.size} of $BASEMAP_READBACK_CASE_COUNT basemap readback cases failed:\n" +
+                messages.joinToString("\n"),
+        )
+    }
+}
+
+private const val BASEMAP_READBACK_CASE_COUNT: Int = 5
+
+/**
  * The positive case. Four named samples, one per on-screen quadrant, plus the quadrant-mean ordering
- * and the "something drew at all" invariant.
+ * and the "something drew at all" invariant, the last of these within
+ * [MAXIMUM_ABSENT_INTERIOR_PIXELS].
  *
  * The camera is the asymmetric `(-55, -135)` zoom-4 one this cycle already proved is **disjoint from
  * its own transpose** (`RendererBasemapStyleTest.styleCamera`'s own KDoc records why). A symmetric
@@ -120,10 +206,12 @@ private fun assertGroundCoversTheFrameInTheFixturesOwnArrangement(
 ) {
     val frame = clearAndDraw(binding, renderer, renderTarget, targetFramebuffer, basemapPlan(frameIndex = 0L))
     val absent = frame.count { pixel -> pixel.isCloseTo(ABSENT) }
-    assertEquals(
-        0,
-        absent,
-        "the ground must cover the whole frame: $absent interior pixels are still the target's own colour",
+    assertTrue(
+        absent <= MAXIMUM_ABSENT_INTERIOR_PIXELS,
+        "the ground must cover the whole frame: $absent of $INTERIOR_PIXELS interior pixels are " +
+            "still the target's own colour, over a budget of $MAXIMUM_ABSENT_INTERIOR_PIXELS " +
+            "(one pixel of crack along each of the fixture's two tile seams). Frame:\n" +
+            frame.asciiMap(),
     )
 
     NAMED_SAMPLES.forEach { sample ->
@@ -241,7 +329,10 @@ private fun assertTheLaterOfTwoCoplanarMapAnchoredThingsWins(
  * that the ground covers on its own must still be the geometry's colour in the combined frame. That
  * phrasing is deliberate:
  * - comparing pixel *sets* rather than totals means a quad that loses one region and gains another
- *   cannot cancel out to a passing count;
+ *   cannot cancel out to a passing count -- the budget below is one percent of the compared set, so
+ *   with the fixture's measured 1,200 to 3,000 ground-covered pixels per camera the smallest defect
+ *   this still detects is 12 to 30 deleted pixels, against the 100% and 99% erasures ADR 0027
+ *   removed;
  * - intersecting with the ground-only frame is what makes the case non-vacuous — a pixel above the
  *   horizon has no ground beneath it and proves nothing, so it is excluded rather than allowed to
  *   dilute the result;
@@ -256,6 +347,7 @@ private fun assertACoplanarGeometryKeepsEveryGroundCoveredPixelAcrossACameraSwee
     renderer: Renderer,
     renderTarget: RenderTarget,
     targetFramebuffer: Int,
+    groundCoverageIsTrustworthy: Boolean,
 ) {
     var frameIndex = 100L
     DEPTH_SWEEP_CAMERAS.forEach { camera ->
@@ -302,17 +394,26 @@ private fun assertACoplanarGeometryKeepsEveryGroundCoveredPixelAcrossACameraSwee
                 "so this camera proves nothing; the fixture must keep the quad on screen",
         )
         assertTrue(
-            covered * 2 >= painted,
+            covered >= MINIMUM_SWEEP_COVERED_PIXELS,
             "at $where only $covered of the geometry's $painted pixels have ground beneath them, " +
                 "so the ground is not actually under the quad and the case is vacuous",
         )
-        assertEquals(
-            covered,
-            kept,
-            "at $where the ground deleted ${covered - kept} of the $covered ground-covered pixels " +
-                "of a coplanar altitude-0 geometry (ADR 0027: no map-regime draw writes depth, so " +
-                "nothing on the map plane can win or lose a near-tie against anything else on it)",
+        assertTrue(
+            !groundCoverageIsTrustworthy || covered * 2 >= painted,
+            "at $where only $covered of the geometry's $painted pixels have ground beneath them on " +
+                "a driver that rasterises the ground correctly, so the fixture -- not the driver -- " +
+                "has moved the ground out from under the quad",
         )
+        val deleted = covered - kept
+        val budget = maxOf(2, covered / 100)
+        assertTrue(
+            deleted <= budget,
+            "at $where the ground deleted $deleted of the $covered ground-covered pixels of a " +
+                "coplanar altitude-0 geometry, over a budget of $budget (ADR 0027: no map-regime " +
+                "draw writes depth, so nothing on the map plane can win or lose a near-tie against " +
+                "anything else on it)",
+        )
+        println("RenG coplanar-sweep readback: $where painted=$painted covered=$covered kept=$kept")
     }
 }
 
@@ -338,7 +439,10 @@ private fun assertACoplanarGeometryKeepsEveryGroundCoveredPixelAcrossACameraSwee
  * cannot be projection drift.
  *
  * A small tolerance is allowed anyway, because a driver is free to rasterise the same quad over an
- * opaque ground of a different colour with a boundary pixel resolved differently.
+ * opaque ground of a different colour with a boundary pixel resolved differently. It is two percent
+ * of the pitch-0 count, so with the fixture's measured 1,024-pixel billboard the smallest defect
+ * this still detects is a gain or loss of 21 pixels -- two percent of the quad, or about two thirds
+ * of one of its 32 rows. The defect ADR 0027 removed took away half the quad, 512 pixels.
  */
 private fun assertAMapAnchoredBillboardIsTheSameSizeAtEveryPitch(
     binding: GlBinding,
@@ -433,6 +537,48 @@ private class ReadbackFrame(val bytes: ByteArray) {
 
 private val INTERIOR: IntRange = 1 until READBACK_PIXELS - 1
 
+private val INTERIOR_PIXELS: Int = INTERIOR.count() * INTERIOR.count()
+
+/**
+ * How many interior pixels the ground is allowed to miss.
+ *
+ * Not a percentage picked to make a run pass. The fixture's four tiles are four separate quads whose
+ * shared edges are computed through four separate matrix products, so the two coordinates of a seam
+ * can differ by a float ulp and a driver's fill rule is then free to leave a one-pixel crack along
+ * it. The fixture has exactly two seams -- one vertical, one horizontal -- and a full-length crack
+ * along both is [READBACK_PIXELS] * 2 pixels, which is what this budget is.
+ *
+ * The defect class the case exists for is nowhere near that size: a ground that draws nothing leaves
+ * every one of [INTERIOR_PIXELS] absent, and the smallest of the fixture's four on-screen tile
+ * regions is about 2,000 pixels. So the smallest defect this still detects is a loss of 257 interior
+ * pixels, 1.6% of the frame -- roughly an eighth of the smallest thing that can go missing.
+ */
+private val MAXIMUM_ABSENT_INTERIOR_PIXELS: Int = READBACK_PIXELS * 2
+
+/**
+ * A coarse picture of the frame, one character per 4x4 block, keyed by nearest fixture colour.
+ *
+ * This is the failure message a human actually reads. "3005 interior pixels are still the target's
+ * own colour" does not distinguish a ground that drew nothing from a ground missing one tile from a
+ * ground cut along a diagonal; the picture does, at a glance, from a CI log.
+ */
+private fun ReadbackFrame.asciiMap(): String {
+    val builder = StringBuilder()
+    for (row in 0 until READBACK_PIXELS / MAP_GLYPH_PIXELS) {
+        for (column in 0 until READBACK_PIXELS / MAP_GLYPH_PIXELS) {
+            val pixel = at(
+                column * MAP_GLYPH_PIXELS + MAP_GLYPH_PIXELS / 2,
+                row * MAP_GLYPH_PIXELS + MAP_GLYPH_PIXELS / 2,
+            )
+            builder.append(FIXTURE_GLYPHS.firstOrNull { pixel.isCloseTo(it.second) }?.first ?: '?')
+        }
+        builder.append('\n')
+    }
+    return builder.toString()
+}
+
+private const val MAP_GLYPH_PIXELS: Int = 4
+
 private class Quadrant(val name: String, val left: Int, val top: Int)
 
 /** Listed in the order their red means must descend; see the fixture colours below. */
@@ -489,6 +635,231 @@ private fun clearAndDraw(
     binding.bindFramebuffer(GL_READ_FRAMEBUFFER, 0)
     return ReadbackFrame(pixels)
 }
+
+/**
+ * Measures whether this context rasterises a quad that reaches far outside the viewport — the shape
+ * every basemap ground tile has.
+ *
+ * **Why the suite needs a driver measurement at all.** RenG's `0.3.0` publication failed closed
+ * because [assertGroundCoversTheFrameInTheFixturesOwnArrangement] found 3,005 of the frame's 15,876
+ * interior pixels untouched on a hosted GitHub macOS runner, and passed on every developer machine.
+ * A hosted runner has no GPU: it runs `Apple Software Renderer`, and that rasteriser drops large
+ * off-screen-extending quads. It is not RenG: the same four matrices, the same unit quad and a
+ * solid-colour fragment shader reproduce it in about eighty lines of C with no RenG code in the
+ * process, and the same draw is correct on `Apple M3 Max` and on Linux `llvmpipe`, which is itself a
+ * software rasteriser. The behaviour is deterministic but erratic in the projection's `w` — at the
+ * fixture's own footprint it is wrong at `w = 154.5` and right at `w = 247` — so no camera or frame
+ * size dodges it reliably. Enlarging the fixture to 256 pixels fixed the pitch-0 frame and still
+ * lost ground at pitch 55.
+ *
+ * **What this changes.** Only one case is skipped, and only when this probe fails: the positive
+ * ground-coverage case, whose every assertion is "the ground reached this pixel". The negative case,
+ * the sticker ordering, the coplanar sweep and the billboard sweep all still run and still assert —
+ * all four pass on `Apple Software Renderer` today. The skipped case is still gated on CI, on the
+ * Ubuntu job, where the same suite runs against `llvmpipe`.
+ *
+ * **Why a probe and not a driver-name check.** A name is a guess about a driver's behaviour; this
+ * draws the actual shape and counts the actual pixels, so a future driver with the same defect is
+ * caught and a future `Apple Software Renderer` that fixes it is trusted again.
+ *
+ * The four rectangles and the `w` are the fixture's own, measured off `drawGround`'s uniform at the
+ * fixture camera: four 512-pixel tiles meeting at the frame's ground anchor, seen through a
+ * projection whose near plane is one logical pixel away and whose far plane is at infinity.
+ */
+private fun measureLargeQuadRasterisation(
+    binding: GlBinding,
+    dialect: ShaderDialect,
+    targetFramebuffer: Int,
+): LargeQuadRasterisation {
+    // A probe that cannot run must fail rather than skip: silently declaring a driver untrustworthy
+    // would take the ground-coverage case off CI without anyone noticing, which is the failure mode
+    // this whole change exists to remove.
+    val vertexPlan = requireNotNull(scanShaderProfile(PROBE_VERTEX_SOURCE)) { "the probe vertex source must scan" }
+    val fragmentPlan =
+        requireNotNull(scanShaderProfile(PROBE_FRAGMENT_SOURCE)) { "the probe fragment source must scan" }
+    val program = when (
+        val result = compileShaderProgram(binding, dialect, PROBE_KEY, vertexPlan, fragmentPlan)
+    ) {
+        is GlProgramResult.Linked -> result.program
+        is GlProgramResult.Failed ->
+            throw AssertionError("the rasterisation probe's $dialect program did not link on this driver")
+    }
+
+    val names = IntArray(1)
+    binding.genVertexArrays(1, names)
+    val vertexArray = names[0]
+    binding.genBuffers(1, names)
+    val vertexBuffer = names[0]
+    binding.bindVertexArray(vertexArray)
+    binding.bindBuffer(GL_ARRAY_BUFFER, vertexBuffer)
+    val quad = littleEndianBytes(PROBE_QUAD)
+    binding.bufferData(GL_ARRAY_BUFFER, quad.size, quad, GL_STATIC_DRAW)
+    binding.enableVertexAttribArray(0)
+    binding.vertexAttribPointer(0, 2, GL_FLOAT, false, PROBE_STRIDE_BYTES, 0)
+
+    val pixels = ByteArray(READBACK_PIXELS * READBACK_PIXELS * 4)
+    var worst = 0
+    var worstRectangle = ""
+    try {
+        binding.useProgram(program)
+        val matrixLocation = binding.getUniformLocation(program, PROBE_MATRIX_UNIFORM_NAME)
+        PROBE_RECTANGLES.forEach { rectangle ->
+            binding.bindFramebuffer(GL_DRAW_FRAMEBUFFER, targetFramebuffer)
+            binding.viewport(0, 0, READBACK_PIXELS, READBACK_PIXELS)
+            binding.disable(GL_SCISSOR_TEST)
+            binding.disable(GL_DEPTH_TEST)
+            binding.disable(GL_CULL_FACE)
+            binding.disable(GL_BLEND)
+            binding.colorMask(true, true, true, true)
+            binding.clearColor(0f, 0f, 0f, 1f)
+            binding.clear(GL_COLOR_BUFFER_BIT)
+            if (matrixLocation >= 0) {
+                binding.uniformMatrix4fv(matrixLocation, 1, false, rectangle.modelViewProjection())
+            }
+            binding.drawArrays(GL_TRIANGLE_STRIP, 0, 4)
+
+            binding.bindFramebuffer(GL_READ_FRAMEBUFFER, targetFramebuffer)
+            binding.readBuffer(GL_COLOR_ATTACHMENT0)
+            binding.pixelStorei(GL_PACK_ALIGNMENT, 1)
+            binding.readPixels(0, 0, READBACK_PIXELS, READBACK_PIXELS, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
+            binding.bindFramebuffer(GL_READ_FRAMEBUFFER, 0)
+
+            var mismatched = 0
+            for (row in 0 until READBACK_PIXELS) {
+                for (column in 0 until READBACK_PIXELS) {
+                    val painted = pixels[(row * READBACK_PIXELS + column) * 4].toInt() and 0xff > 128
+                    if (painted != rectangle.covers(column, row)) mismatched += 1
+                }
+            }
+            if (mismatched > worst) {
+                worst = mismatched
+                worstRectangle = rectangle.name
+            }
+        }
+    } finally {
+        binding.bindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
+        binding.useProgram(0)
+        binding.bindVertexArray(0)
+        binding.deleteVertexArrays(1, intArrayOf(vertexArray))
+        binding.deleteBuffers(1, intArrayOf(vertexBuffer))
+        binding.deleteProgram(program)
+    }
+    return LargeQuadRasterisation(worst, worstRectangle)
+}
+
+/**
+ * How badly a context rasterises the four ground-tile footprints, in pixels of disagreement with the
+ * analytic rectangle.
+ *
+ * [MAXIMUM_PROBE_MISMATCHED_PIXELS] is an edge budget, not a defect budget: a rectangle's own
+ * boundary is one pixel wide on each of four sides, and drivers legitimately round it differently.
+ * The failure it exists to spot is nothing like that size — `Apple Software Renderer` disagrees over
+ * a whole tile, thousands of pixels at a time.
+ */
+private class LargeQuadRasterisation(
+    private val mismatchedPixels: Int,
+    private val worstRectangle: String,
+) {
+    val isTrustworthy: Boolean get() = mismatchedPixels <= MAXIMUM_PROBE_MISMATCHED_PIXELS
+
+    fun describe(): String = if (isTrustworthy) {
+        "large off-screen quads rasterise correctly (worst disagreement $mismatchedPixels pixels)"
+    } else {
+        "this driver mis-rasterises large off-screen quads: the $worstRectangle footprint " +
+            "disagrees with its analytic rectangle over $mismatchedPixels pixels, against a " +
+            "boundary budget of $MAXIMUM_PROBE_MISMATCHED_PIXELS"
+    }
+}
+
+/**
+ * The probe's own edge budget: one pixel of boundary on each of a rectangle's four sides, each at
+ * most [READBACK_PIXELS] long. Anything larger is not a fill-rule difference.
+ */
+private val MAXIMUM_PROBE_MISMATCHED_PIXELS: Int = READBACK_PIXELS * 4
+
+/**
+ * One ground-tile footprint: the window rectangle the tile's quad projects to, in `glReadPixels`
+ * bottom-up coordinates, at the fixture's own clip `w` and normalised depth.
+ */
+private class ProbeRectangle(
+    val name: String,
+    val left: Float,
+    val right: Float,
+    val bottom: Float,
+    val top: Float,
+) {
+    fun covers(x: Int, y: Int): Boolean {
+        val centreX = x + 0.5f
+        val centreY = y + 0.5f
+        return centreX > left && centreX < right && centreY > bottom && centreY < top
+    }
+
+    /**
+     * The column-major matrix that puts [PROBE_QUAD]'s unit square on this rectangle. Derived rather
+     * than tabulated, so the rectangle above stays the single readable statement of the footprint.
+     */
+    fun modelViewProjection(): FloatArray {
+        val half = READBACK_PIXELS / 2f
+        val scaleX = (right - left) / half * PROBE_CLIP_W
+        val offsetX = ((left + right) / 2f - half) / half * PROBE_CLIP_W
+        val scaleY = (top - bottom) / half * PROBE_CLIP_W
+        val offsetY = ((bottom + top) / 2f - half) / half * PROBE_CLIP_W
+        return floatArrayOf(
+            scaleX, 0f, 0f, 0f,
+            0f, scaleY, 0f, 0f,
+            0f, 0f, 0f, 0f,
+            offsetX, offsetY, PROBE_NDC_DEPTH * PROBE_CLIP_W, PROBE_CLIP_W,
+        )
+    }
+}
+
+/**
+ * The fixture's four ground tiles, measured off `drawGround`'s own uniform: 512 window pixels square,
+ * meeting one pixel above the frame's vertical centre, in a 128-pixel frame.
+ */
+private val PROBE_RECTANGLES: List<ProbeRectangle> = listOf(
+    ProbeRectangle("north-west tile", -448f, 64f, 33f, 545f),
+    ProbeRectangle("north-east tile", 64f, 576f, 33f, 545f),
+    ProbeRectangle("south-west tile", -448f, 64f, -479f, 33f),
+    ProbeRectangle("south-east tile", 64f, 576f, -479f, 33f),
+)
+
+/** `ResolvedMercatorCamera.cameraDistanceLogicalPixels` at the fixture camera, to two decimals. */
+private const val PROBE_CLIP_W: Float = 154.51f
+
+/** The fixture ground's own normalised depth: one logical pixel of near plane, far plane at infinity. */
+private const val PROBE_NDC_DEPTH: Float = -0.987f
+
+private val PROBE_QUAD: FloatArray = floatArrayOf(
+    -0.5f, -0.5f,
+    0.5f, -0.5f,
+    -0.5f, 0.5f,
+    0.5f, 0.5f,
+)
+
+private const val PROBE_STRIDE_BYTES: Int = 8
+
+private const val PROBE_MATRIX_UNIFORM_NAME: String = "rengProbeModelViewProjection"
+
+private val PROBE_VERTEX_SOURCE: String =
+    "#version 300 es\n" +
+        "layout(location = 0) in vec2 rengProbePosition;\n" +
+        "uniform mat4 $PROBE_MATRIX_UNIFORM_NAME;\n" +
+        "void main() {\n" +
+        "    gl_Position = $PROBE_MATRIX_UNIFORM_NAME * vec4(rengProbePosition, 0.0, 1.0);\n" +
+        "}\n"
+
+private val PROBE_FRAGMENT_SOURCE: String =
+    "#version 300 es\n" +
+        "precision highp float;\n" +
+        "layout(location = 0) out vec4 rengProbeColour;\n" +
+        "void main() {\n" +
+        "    rengProbeColour = vec4(1.0, 1.0, 1.0, 1.0);\n" +
+        "}\n"
+
+/** Only ever used to name a compile failure; the probe program is never cached. */
+private val PROBE_KEY: ResourceKey =
+    ResourceKey(ResourceKind.INTERNAL_PIPELINE, "0".repeat(64), null)
 
 private fun createReadbackTarget(binding: GlBinding): Int {
     val names = IntArray(1)
@@ -568,6 +939,25 @@ private val COPLANAR_GEOMETRY: IntArray = intArrayOf(0, 255, 128, 255)
  * serving a colour that happens to match.
  */
 private val HORIZON_FILLER_TILE: IntArray = intArrayOf(96, 32, 160, 255)
+
+/**
+ * The same palette as [FIXTURE_COLOURS], one character each, for [asciiMap]. No glyph means "no
+ * fixture colour", which prints as `?` and is itself a finding.
+ */
+private val FIXTURE_GLYPHS: List<Pair<Char, IntArray>> = listOf(
+    'R' to NORTH_WEST_TILE,
+    'Y' to NORTH_EAST_TILE,
+    'B' to SOUTH_WEST_TILE,
+    'T' to SOUTH_EAST_TILE,
+    'W' to DECOY_WHITE,
+    'K' to DECOY_BLACK,
+    'G' to DECOY_GREY,
+    'M' to FIRST_STICKER,
+    'O' to SECOND_STICKER,
+    'C' to COPLANAR_GEOMETRY,
+    'P' to HORIZON_FILLER_TILE,
+    '.' to ABSENT,
+)
 
 private val FIXTURE_COLOURS: List<Pair<String, IntArray>> = listOf(
     "north-west tile" to NORTH_WEST_TILE,
@@ -665,6 +1055,19 @@ private val BILLBOARD_PITCHES: List<Double> = listOf(0.0, 15.0, 30.0, 45.0, 55.0
  * 128x128 frame at every camera in [DEPTH_SWEEP_CAMERAS]; this is an order of magnitude below that.
  */
 private const val MINIMUM_SWEEP_GEOMETRY_PIXELS: Int = 200
+
+/**
+ * A floor on how many of the quad's pixels must have ground beneath them, so the identity below is
+ * never compared over an empty set.
+ *
+ * This is the absolute half of a guard whose other half is a ratio. The ratio -- at least half the
+ * quad's pixels -- is a statement about the *ground's* coverage, and on a driver that fails
+ * [measureLargeQuadRasterisation] the ground is missing for reasons this case does not own, so the
+ * ratio is only asserted when that probe says the driver draws. The floor is asserted always: 200
+ * ground-covered pixels is still a real comparison, and both defects ADR 0027 removed deleted
+ * thousands.
+ */
+private const val MINIMUM_SWEEP_COVERED_PIXELS: Int = 200
 
 /** The same floor for the billboard: its 2x2 image at scale 16 is a 32x32 output-pixel quad. */
 private const val MINIMUM_BILLBOARD_PIXELS: Int = 700

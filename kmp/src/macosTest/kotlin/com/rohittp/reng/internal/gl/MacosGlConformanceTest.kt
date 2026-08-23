@@ -10,10 +10,7 @@ class MacosGlConformanceTest {
     @Test fun theSuitePassesOnARealAppleCoreProfileContext() {
         val fixture = CglCoreProfileContext.create()
         try {
-            val binding = when (val result = openPlatformGlBinding()) {
-                is GlBindingResult.Bound -> result.binding
-                is GlBindingResult.Unsupported -> throw AssertionError("platform.OpenGL3 must bind")
-            }
+            val binding = bindOrFail()
             binding.viewport(0, 0, CONFORMANCE_SURFACE_PIXELS, CONFORMANCE_SURFACE_PIXELS)
             binding.scissor(0, 0, CONFORMANCE_SURFACE_PIXELS, CONFORMANCE_SURFACE_PIXELS)
 
@@ -35,17 +32,49 @@ class MacosGlConformanceTest {
      * what this catches and what it does not.
      */
     @Test fun theBasemapReadbackSuitePassesOnARealAppleCoreProfileContext() {
-        val fixture = CglCoreProfileContext.create()
+        runReadbackOn(MacosGlRenderer.DEFAULT)
+    }
+
+    /**
+     * The same gate on Apple's CPU rasteriser, which is the *only* driver a hosted GitHub macOS
+     * runner has.
+     *
+     * Without this a developer's whole macOS signal comes from one GPU. That is how `0.3.0` failed
+     * closed: the readback suite passed on an M3 Max and failed on the runner, and nothing on a
+     * developer's machine could reproduce it. The software renderer is a genuinely different
+     * rasteriser — it reports `GL_SUBPIXEL_BITS = 10` where the Metal path reports 4 — so it is the
+     * cheapest honest answer to "does this assertion survive a driver we do not own".
+     *
+     * It skips rather than fails when the renderer is unavailable: this is a portability probe, not
+     * a contract about which renderers a Mac must expose.
+     */
+    @Test fun theBasemapReadbackSuitePassesOnAppleSoftwareRenderer() {
+        runReadbackOn(MacosGlRenderer.SOFTWARE)
+    }
+
+    private fun runReadbackOn(renderer: MacosGlRenderer) {
+        val fixture = CglCoreProfileContext.createOrNull(renderer)
+        if (fixture == null) {
+            println("RenG basemap readback: skipped, $renderer is unavailable on this machine")
+            return
+        }
         try {
-            val binding = when (val result = openPlatformGlBinding()) {
-                is GlBindingResult.Bound -> result.binding
-                is GlBindingResult.Unsupported -> throw AssertionError("platform.OpenGL3 must bind")
-            }
+            val binding = bindOrFail()
+            println(
+                "RenG basemap readback driver: requested=$renderer " +
+                    "GL_RENDERER=${binding.getString(GL_RENDERER)} " +
+                    "GL_VERSION=${binding.getString(GL_VERSION)}",
+            )
             binding.viewport(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
             binding.scissor(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
             runBasemapReadbackSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
         } finally {
             fixture.destroy()
         }
+    }
+
+    private fun bindOrFail(): GlBinding = when (val result = openPlatformGlBinding()) {
+        is GlBindingResult.Bound -> result.binding
+        is GlBindingResult.Unsupported -> throw AssertionError("platform.OpenGL3 must bind")
     }
 }
