@@ -121,7 +121,7 @@ private fun assertContextAdoption(
 }
 
 private fun assertEntryPointInventory(binding: GlBinding) {
-    assertEquals(87, GlEntryPoint.entries.size)
+    assertEquals(91, GlEntryPoint.entries.size)
     assertTrue(binding.getString(GL_VENDOR)?.isNotBlank() == true)
 
     val names = IntArray(1)

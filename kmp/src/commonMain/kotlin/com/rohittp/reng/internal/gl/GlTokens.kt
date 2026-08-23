@@ -46,8 +46,16 @@ internal const val GL_RGBA: Int = 0x1908
 internal const val GL_RGBA8: Int = 0x8058
 internal const val GL_DEPTH_COMPONENT24: Int = 0x81A6
 internal const val GL_UNSIGNED_BYTE: Int = 0x1401
+internal const val GL_UNSIGNED_SHORT: Int = 0x1403
 internal const val GL_FLOAT: Int = 0x1406
 internal const val GL_UNSIGNED_INT: Int = 0x1405
+
+internal const val GL_REPEAT: Int = 0x2901
+internal const val GL_MIRRORED_REPEAT: Int = 0x8370
+internal const val GL_NEAREST_MIPMAP_NEAREST: Int = 0x2700
+internal const val GL_LINEAR_MIPMAP_NEAREST: Int = 0x2701
+internal const val GL_NEAREST_MIPMAP_LINEAR: Int = 0x2702
+internal const val GL_LINEAR_MIPMAP_LINEAR: Int = 0x2703
 
 internal const val GL_ARRAY_BUFFER: Int = 0x8892
 internal const val GL_ELEMENT_ARRAY_BUFFER: Int = 0x8893
@@ -60,6 +68,8 @@ internal const val GL_UNIFORM_BUFFER_BINDING: Int = 0x8A28
 internal const val GL_VERTEX_ARRAY_BINDING: Int = 0x85B5
 internal const val GL_STATIC_DRAW: Int = 0x88E4
 internal const val GL_DYNAMIC_DRAW: Int = 0x88E8
+internal const val GL_MAX_UNIFORM_BLOCK_SIZE: Int = 0x8A30
+internal const val GL_MAX_VERTEX_UNIFORM_BLOCKS: Int = 0x8A2B
 
 internal const val GL_VERTEX_SHADER: Int = 0x8B31
 internal const val GL_FRAGMENT_SHADER: Int = 0x8B30
@@ -94,7 +104,9 @@ internal const val GL_GEQUAL: Int = 0x0206
 internal const val GL_CULL_FACE: Int = 0x0B44
 internal const val GL_CULL_FACE_MODE: Int = 0x0B45
 internal const val GL_FRONT_FACE: Int = 0x0B46
+internal const val GL_FRONT: Int = 0x0404
 internal const val GL_BACK: Int = 0x0405
+internal const val GL_CW: Int = 0x0900
 internal const val GL_CCW: Int = 0x0901
 
 internal const val GL_VIEWPORT: Int = 0x0BA2

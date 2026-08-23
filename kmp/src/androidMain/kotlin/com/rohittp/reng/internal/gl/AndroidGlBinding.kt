@@ -43,6 +43,11 @@ internal object AndroidGlBinding : GlBinding {
 
     override fun isEnabled(cap: Int): Boolean = GLES30.glIsEnabled(cap)
 
+    override fun getIntegeri_v(pname: Int, index: Int, out: IntArray) {
+        require(out.isNotEmpty()) { "an indexed integer query needs a destination" }
+        GLES30.glGetIntegeri_v(pname, index, out, 0)
+    }
+
     // ===== Framebuffers / renderbuffers =====
 
     override fun genFramebuffers(count: Int, out: IntArray) {
@@ -202,6 +207,10 @@ internal object AndroidGlBinding : GlBinding {
         GLES30.glBindBuffer(target, buffer)
     }
 
+    override fun bindBufferBase(target: Int, index: Int, buffer: Int) {
+        GLES30.glBindBufferBase(target, index, buffer)
+    }
+
     override fun bufferData(target: Int, size: Int, data: ByteArray?, usage: Int) {
         GLES30.glBufferData(target, size, data?.takeIf { it.isNotEmpty() }?.let(ByteBuffer::wrap), usage)
     }
@@ -319,6 +328,13 @@ internal object AndroidGlBinding : GlBinding {
     override fun uniformMatrix4fv(location: Int, count: Int, transpose: Boolean, value: FloatArray) {
         if (value.isEmpty()) return
         GLES30.glUniformMatrix4fv(location, count, transpose, value, 0)
+    }
+
+    override fun getUniformBlockIndex(program: Int, name: String): Int =
+        GLES30.glGetUniformBlockIndex(program, name)
+
+    override fun uniformBlockBinding(program: Int, blockIndex: Int, bindingPoint: Int) {
+        GLES30.glUniformBlockBinding(program, blockIndex, bindingPoint)
     }
 
     // ===== Pipeline state / draw =====
