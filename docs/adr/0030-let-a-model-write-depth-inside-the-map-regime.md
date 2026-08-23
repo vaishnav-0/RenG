@@ -25,10 +25,19 @@ per-frame depth clear, so a pass that assumes it is off is assuming something no
 
 Models go before map-anchored stickers rather than after because a map-anchored sticker is a marker, and a
 marker paints over the scene it marks. Put the model last and it paints over every pin standing in front of
-it, which is the more common frame and the more obviously wrong one. This also means the model pass owes a
-`depthMask(false)` on the way out, before the stickers draw. Forgetting it would silently reinstate ADR
-0027's billboard defect in every frame carrying both a model and a billboard — the mask is frame state, not
-pass state, and the sticker pass has no reason to distrust what it inherits.
+it, which is the more common frame and the more obviously wrong one.
+
+The model pass therefore owes a `depthMask(false)` on the way out, and this ADR first claimed that
+forgetting it would reinstate ADR 0027's billboard defect. **That was overstated, and the implementer
+measured it.** `drawStickers` sets `depthMask(false)` for itself, exactly as ADR 0027 requires of every
+map-regime pass, so deleting the model pass's trailing call changes no pixel today. The line is defence in
+depth: it keeps the invariant "a pass leaves the mask as it found it" true of every pass rather than true of
+the regime by luck, and it is what stops the next pass added after models from inheriting a write mask
+nobody set for it. Two consequences worth stating plainly. A test that checks the mask at a *sticker* draw
+is a symmetry point and stays green with the line deleted, so the real assertion has to read the mask in the
+window between the model pass's last draw and the sticker program bind. And `drawStickers`' own
+`depthMask(false)` must not be removed as redundant on the strength of this ADR — it is the call that
+actually holds the billboard fix up.
 
 **The cost is real and is accepted rather than discovered.** A model is now an occluder, so a billboard
 sharing space with one can still be cut along its anchor row: the billboard's quad is screen-parallel and
