@@ -157,6 +157,8 @@ final enum class com.rohittp.reng/ResourceKind : kotlin/Enum<com.rohittp.reng/Re
     enum entry EXTERNAL // com.rohittp.reng/ResourceKind.EXTERNAL|null[0]
     enum entry GEOMETRY_PROGRAM // com.rohittp.reng/ResourceKind.GEOMETRY_PROGRAM|null[0]
     enum entry INTERNAL_PIPELINE // com.rohittp.reng/ResourceKind.INTERNAL_PIPELINE|null[0]
+    enum entry MODEL_GEOMETRY // com.rohittp.reng/ResourceKind.MODEL_GEOMETRY|null[0]
+    enum entry MODEL_IMAGE // com.rohittp.reng/ResourceKind.MODEL_IMAGE|null[0]
     enum entry OFFSCREEN_SURFACE // com.rohittp.reng/ResourceKind.OFFSCREEN_SURFACE|null[0]
 
     final val entries // com.rohittp.reng/ResourceKind.entries|#static{}entries[0]

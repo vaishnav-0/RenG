@@ -161,6 +161,81 @@ internal class ResourceKeyDeriver(
         )
     }
 
+    /**
+     * The identity of one **glTF primitive's** GPU geometry (vertex/index buffers) inside one GLB: the
+     * mesh-and-primitive pair a parsed document names, scoped to the model that owns it. There is no
+     * [ResourceLocator] here -- a primitive is not independently fetchable, it only exists nested inside
+     * an already-resolved GLB -- so this can never call [external], and the resulting [ResourceKey]
+     * carries a null [ResourceClass] exactly as [geometryProgram] and [basemapTile] do.
+     *
+     * [modelKey] namespaces the derivation the way [basemapTile] is namespaced by `styleDigest`: it must
+     * be the model's own `EXTERNAL`/[ResourceClass.MODEL_GLB] key, fed in via its `stableId` rather than
+     * re-deriving anything from the GLB bytes here. Two glTF documents that happen to declare an
+     * identical mesh at the same index therefore still key to different geometries, because they hang
+     * off different model keys; the same model's two primitives differ because [meshIndex] or
+     * [primitiveIndex] differs.
+     */
+    internal fun modelGeometry(
+        modelKey: ResourceKey,
+        meshIndex: Int,
+        primitiveIndex: Int,
+    ): DerivedResourceKey {
+        require(modelKey.kind == ResourceKind.EXTERNAL && modelKey.resourceClass == ResourceClass.MODEL_GLB) {
+            "model geometry derivation requires the model's external GLB resource key"
+        }
+        require(meshIndex >= 0) { "meshIndex must be non-negative" }
+        require(primitiveIndex >= 0) { "primitiveIndex must be non-negative" }
+
+        val identity = derive(
+            CanonicalBinary.root(CanonicalRootKind.MODEL_GEOMETRY) {
+                field(1, CanonicalBinary.u16(ResourceKind.MODEL_GEOMETRY.wireValue))
+                field(2, CanonicalBinary.exactUtf8(modelKey.stableId))
+                field(3, CanonicalBinary.u64(meshIndex.toLong()))
+                field(4, CanonicalBinary.u64(primitiveIndex.toLong()))
+            },
+        )
+        return DerivedResourceKey(
+            key = ResourceKey(
+                kind = ResourceKind.MODEL_GEOMETRY,
+                stableId = identity.digest.lowercaseHex,
+                resourceClass = null,
+            ),
+            rawKey = null,
+            identity = identity,
+        )
+    }
+
+    /**
+     * The identity of one **embedded** glTF image inside one GLB. An embedded image is packed straight
+     * into the binary chunk by its document index, never referenced by URI, so it has no
+     * [ResourceLocator] and therefore no [ResourceClass]: it cannot use [external] at all. As with
+     * [modelGeometry], [modelKey] must be the model's own `EXTERNAL`/[ResourceClass.MODEL_GLB] key, and
+     * it is fed in via its `stableId`; [imageIndex] is the glTF document's own image index.
+     */
+    internal fun modelImage(modelKey: ResourceKey, imageIndex: Int): DerivedResourceKey {
+        require(modelKey.kind == ResourceKind.EXTERNAL && modelKey.resourceClass == ResourceClass.MODEL_GLB) {
+            "model image derivation requires the model's external GLB resource key"
+        }
+        require(imageIndex >= 0) { "imageIndex must be non-negative" }
+
+        val identity = derive(
+            CanonicalBinary.root(CanonicalRootKind.MODEL_IMAGE) {
+                field(1, CanonicalBinary.u16(ResourceKind.MODEL_IMAGE.wireValue))
+                field(2, CanonicalBinary.exactUtf8(modelKey.stableId))
+                field(3, CanonicalBinary.u64(imageIndex.toLong()))
+            },
+        )
+        return DerivedResourceKey(
+            key = ResourceKey(
+                kind = ResourceKind.MODEL_IMAGE,
+                stableId = identity.digest.lowercaseHex,
+                resourceClass = null,
+            ),
+            rawKey = null,
+            identity = identity,
+        )
+    }
+
     private fun derive(canonicalBytes: CanonicalBytes): HashedCanonicalBytes = HashedCanonicalBytes(
         digest = sha256.digest(canonicalBytes),
         canonicalBytes = canonicalBytes,
@@ -174,6 +249,8 @@ private val ResourceKind.wireValue: Int
         ResourceKind.INTERNAL_PIPELINE -> 3
         ResourceKind.OFFSCREEN_SURFACE -> 4
         ResourceKind.BASEMAP_TILE -> 5
+        ResourceKind.MODEL_GEOMETRY -> 6
+        ResourceKind.MODEL_IMAGE -> 7
     }
 
 private val ResourceClass.wireValue: Int
