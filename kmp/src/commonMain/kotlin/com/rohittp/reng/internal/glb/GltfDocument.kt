@@ -220,6 +220,14 @@ internal data class GltfDocument(
  *   when it is not indexed, is not a multiple of three. Only `TRIANGLES` is checked: every other
  *   topology has its own arithmetic and is refused by `VALIDATE_GLB_FEATURES`, so applying a
  *   triangle rule to a strip would name the wrong fault.
+ * - [ALPHA_MODE] covers a material's `alphaMode` that is present and is not one of `OPAQUE`, `MASK`
+ *   or `BLEND`. The specification types the field as an enumeration of exactly those three, so a
+ *   fourth value is a schema violation and belongs here rather than in `VALIDATE_GLB_FEATURES`'
+ *   vocabulary -- there is no glTF asset for which it is legal. It is reported at all because the
+ *   alternative is the silent repair this project refuses everywhere else: an unrecognised value
+ *   would otherwise fall through to the `OPAQUE` default and render a transparent material solid,
+ *   with nothing said. A material with no `alphaMode` member at all is untouched: absent genuinely
+ *   means `OPAQUE`, which is the specification's own default rather than a guess.
  * - [ANIMATED_NODE_MATRIX] covers a node carrying `matrix` that some animation channel targets.
  *   Distinct from [NODE_MATRIX_AND_TRS], which is about one node contradicting itself: this is a
  *   contradiction between a node and an animation elsewhere in the document, and a consumer fixes
@@ -259,6 +267,7 @@ internal enum class GltfReject {
     ANIMATED_NODE_MATRIX,
     ANIMATION_SAMPLER_COUNTS,
     DUPLICATE_ANIMATION_CHANNEL_TARGET,
+    ALPHA_MODE,
 }
 
 internal sealed interface GltfParseResult {

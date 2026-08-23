@@ -34,6 +34,23 @@ class GltfParseTest {
     }
 
     @Test
+    fun rejectsAnAlphaModeOutsideTheSpecificationsOwnEnumeration() {
+        // The specification types alphaMode as an enumeration of exactly three values, so a fourth
+        // is a schema violation rather than an unsupported feature. It is checked at all because
+        // the alternative is a silent repair: an unrecognised value used to fall through to the
+        // OPAQUE default and render a transparent material solid, saying nothing.
+        assertEquals(GltfReject.ALPHA_MODE, reject(materialJson(""""alphaMode": "TRANSPARENT", """)))
+        assertEquals(GltfReject.ALPHA_MODE, reject(materialJson(""""alphaMode": "blend", """)))
+        assertEquals(GltfReject.ALPHA_MODE, reject(materialJson(""""alphaMode": 2, """)))
+
+        // Absent is not wrong: the specification's own default is OPAQUE.
+        assertIs<GltfParseResult.Parsed>(parse(materialJson("")))
+        for (mode in listOf("OPAQUE", "MASK", "BLEND")) {
+            assertIs<GltfParseResult.Parsed>(parse(materialJson(""""alphaMode": "$mode", """)))
+        }
+    }
+
+    @Test
     fun rejectsAContradictoryOrCyclicNodeGraph() {
         assertEquals(GltfReject.NODE_MATRIX_AND_TRS, reject(nodeWithMatrixAndTrs))
         assertEquals(GltfReject.NODE_GRAPH_NOT_DISJOINT_TREES, reject(nodeCycle))
@@ -847,6 +864,16 @@ class GltfParseTest {
 
     private fun parse(json: String, binChunkLength: Long = 0L, maximumNodeDepth: Int = 128): GltfParseResult =
         parseGltf(obj(json), binChunkLength, maximumNodeDepth)
+
+    /** A minimal document carrying exactly one material, with [alphaModeMember] spliced into it. */
+    private fun materialJson(alphaModeMember: String): String = """
+        {
+          "asset": {"version": "2.0"},
+          "materials": [{$alphaModeMember"doubleSided": true}],
+          "scenes": [{"nodes": []}],
+          "scene": 0
+        }
+    """.trimIndent()
 
     private fun reject(json: String, binChunkLength: Long = 0L, maximumNodeDepth: Int = 128): GltfReject =
         assertIs<GltfParseResult.Malformed>(parse(json, binChunkLength, maximumNodeDepth)).reason

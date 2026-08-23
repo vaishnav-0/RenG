@@ -104,6 +104,27 @@ private fun majorMinor(text: String): Pair<Int, Int>? {
     return major to minor
 }
 
+/** The three values the specification's `alphaMode` enumeration defines. A fourth is a schema
+ * violation, not an unsupported feature: there is no glTF asset for which it is legal. */
+private val ALPHA_MODES = setOf("OPAQUE", "MASK", "BLEND")
+
+/**
+ * A material's `alphaMode`, defaulting to the specification's own `OPAQUE` when the member is
+ * absent and rejecting any present value outside [ALPHA_MODES].
+ *
+ * The rejection is the point. Reading this as `(value as? JsonValue.Text)?.value ?: "OPAQUE"` --
+ * which is what it used to be -- silently folded a misspelt or future `alphaMode`, and a
+ * non-string one, into `OPAQUE`, rendering a transparent material solid with nothing said. That is
+ * the quiet repair ADR 0021 refuses everywhere else. Absent is different from wrong: absent
+ * genuinely means `OPAQUE` because the specification says so.
+ */
+private fun alphaMode(value: JsonValue?): String {
+    if (value == null) return "OPAQUE"
+    val text = (value as? JsonValue.Text)?.value ?: reject(GltfReject.ALPHA_MODE)
+    if (text !in ALPHA_MODES) reject(GltfReject.ALPHA_MODE)
+    return text
+}
+
 private fun numberValue(value: JsonValue?): Double? = when (value) {
     is JsonValue.Integer -> value.value.toDouble()
     is JsonValue.Real -> value.value
@@ -394,7 +415,7 @@ private class GltfParser(
                 occlusionTexture = textureRef(members, "occlusionTexture", texturesCount),
                 emissiveTexture = textureRef(members, "emissiveTexture", texturesCount),
                 emissiveFactor = numberList(members["emissiveFactor"]),
-                alphaMode = (members["alphaMode"] as? JsonValue.Text)?.value ?: "OPAQUE",
+                alphaMode = alphaMode(members["alphaMode"]),
                 alphaCutoff = numberValue(members["alphaCutoff"]) ?: 0.5,
                 doubleSided = (members["doubleSided"] as? JsonValue.Bool)?.value ?: false,
             )
