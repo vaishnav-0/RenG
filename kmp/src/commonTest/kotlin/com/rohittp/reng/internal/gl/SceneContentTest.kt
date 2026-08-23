@@ -12,7 +12,19 @@ import com.rohittp.reng.ResourceLocator
 import com.rohittp.reng.ShaderPair
 import com.rohittp.reng.ShaderValue
 import com.rohittp.reng.Vector3
+import com.rohittp.reng.internal.glb.GltfDocument
+import com.rohittp.reng.internal.glb.GltfMesh
+import com.rohittp.reng.internal.glb.GltfNode
+import com.rohittp.reng.internal.glb.GltfPrimitive
+import com.rohittp.reng.internal.glb.GltfScene
+import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.math.DoubleVector3
+import com.rohittp.reng.internal.model.BinChunk
+import com.rohittp.reng.internal.model.DecodedModel
+import com.rohittp.reng.internal.model.DecodedPrimitive
+import com.rohittp.reng.internal.model.ModelDrawItem
+import com.rohittp.reng.internal.model.ModelIndices
+import com.rohittp.reng.internal.model.ResolvedMaterial
 import com.rohittp.reng.internal.planning.BasemapTileInstance
 import com.rohittp.reng.internal.planning.resolveBasemapTileQuad
 import com.rohittp.reng.internal.planning.SpatialOutcome
@@ -80,30 +92,36 @@ class SceneContentTest {
         assertTrue(depthDisabled in 0 until screenDraw, "every depth-tested thing draws before the screen regime composites")
     }
 
-    // --- ADR 0027: nothing a scene draws writes depth --------------------------------------------
+    // --- ADRs 0027 and 0030: the map regime's three depth phases ---------------------------------
 
     /**
-     * ADR 0027 as an invariant over the whole scene rather than as three separate per-pipeline
-     * assertions, because the defect it closes was a *pass* that forgot.
+     * ADR 0027 as an invariant over the whole scene rather than as per-pipeline assertions, because
+     * the defect it closes was a *pass* that forgot — now carrying ADR 0030's amendment.
      *
      * `drawFrame` hands [SceneContent] a context with `glDepthMask(GL_TRUE)` — it has to, or the
-     * per-frame depth clear would not take — so every pass owes its own `depthMask(false)`. A future
-     * fourth map-regime pass (models are next) that inherits the enable but forgets the mask
-     * reintroduces exactly the two defects ADR 0027 removes, and would pass
-     * `theGroundDrawsDepthTestedAndWritesNoDepth` and `theMapRegimeTurnsDepthWritesOffBeforeItDraws`
-     * untouched. This walks the call log with the mask's real starting value and fails on the first
-     * draw issued while depth writes are on, whichever pass issued it.
+     * per-frame depth clear would not take — so every pass owes its own depth state. This walks the
+     * call log with the mask's real starting value and makes three claims at once:
      *
-     * A model pipeline that genuinely needs to write depth is a deliberate change to ADR 0027, and
-     * has to come here and say so.
+     * - every flat map-plane draw (the ground, each `Geometry`) and every sticker draws with writes
+     *   **off**, exactly as before;
+     * - **exactly one** phase turns writes on, and it is the model pass;
+     * - the mask is off again **on the way out of the model pass**, before the sticker pass runs.
+     *
+     * That last claim is deliberately checked at the model pass's own exit rather than at the first
+     * sticker draw. [drawStickers] sets `depthMask(false)` for itself, so a check taken at the
+     * sticker's draw call sits at a symmetry point and would stay green with the model pass's exit
+     * mask deleted outright — asserting nothing about the very line ADR 0030 says is the easiest one
+     * to forget. Measuring the state at the boundary between the two passes is what makes deleting
+     * `drawModels`' trailing `depthMask(false)` fail here.
      */
     @Test
-    fun noDrawInAWholeSceneRunsWithDepthWritesOn() {
-        val binding = RecordingGlBinding()
+    fun exactlyOnePhaseWritesDepthItIsTheModelPassAndTheMaskIsOffAgainOnTheWayOut() {
+        val binding = modelCapableBinding()
         val camera = topDownCamera()
         val geometryPipeline = newGeometryPipeline(binding)
         val stickerPipeline = newStickerPipeline(binding)
         val groundPipeline = newGroundPipeline(binding)
+        val modelPipelines = newModelPipelines(binding)
 
         val scene = Scene(
             outputPixelSize = OUTPUT_SIZE,
@@ -114,29 +132,431 @@ class SceneContentTest {
             ),
             geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
             groundTiles = listOf(groundTile(canonicalX = 0, tileY = 0, texture = 303)),
+            models = listOf(sceneModel(indexCounts = listOf(OPAQUE_INDEX_COUNT))),
         )
         binding.log.clear()
 
-        SceneContent(camera, scene, stickerPipeline, groundPipeline).draw(binding)
+        SceneContent(camera, scene, stickerPipeline, groundPipeline, modelPipelines).draw(binding)
 
         // `drawFrame` leaves the mask on for its depth clear, so that is the state a scene inherits.
         var depthWrites = true
-        var draws = 0
+        var flatDraws = 0
+        var modelDraws = 0
         binding.log.forEachIndexed { index, call ->
             when {
                 call == "depthMask(true)" -> depthWrites = true
                 call == "depthMask(false)" -> depthWrites = false
                 call.startsWith("drawArrays") -> {
-                    draws += 1
+                    flatDraws += 1
                     assertFalse(
                         depthWrites,
                         "call $index ($call) draws with depth writes still on; ADR 0027 requires " +
-                            "every map-regime pass to turn them off for itself",
+                            "the ground, every Geometry and every sticker to turn them off",
+                    )
+                }
+                call.startsWith("drawElements") -> {
+                    modelDraws += 1
+                    assertTrue(
+                        depthWrites,
+                        "call $index ($call) is an opaque model draw and ADR 0030 requires it to " +
+                            "write depth, or a mesh cannot occlude itself",
                     )
                 }
             }
         }
-        assertEquals(4, draws, "the scene must issue one ground, one geometry and two sticker draws")
+        assertEquals(4, flatDraws, "the scene must issue one ground, one geometry and two sticker draws")
+        assertEquals(1, modelDraws, "the scene must issue exactly one model draw")
+
+        assertEquals(
+            1,
+            binding.log.count { it == "depthMask(true)" },
+            "exactly one map-regime phase may enable depth writes: ${binding.log}",
+        )
+        // The enable belongs to the model pass, pinned by position rather than by name: `drawModels`
+        // sets the mask before it binds any program, so the ground and the geometry -- and only
+        // those two -- have already drawn by the time it fires.
+        val writesOn = binding.log.indexOf("depthMask(true)")
+        val modelDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
+        assertTrue(writesOn in 0 until modelDraw, "the one depth-write enable precedes the model's own draw")
+        assertEquals(
+            2,
+            binding.log.subList(0, writesOn).count { it.startsWith("drawArrays") },
+            "the enable falls after the ground and the geometry and before every sticker: ${binding.log}",
+        )
+
+        // The model pass ends where the sticker pass begins; the last mask call before that boundary
+        // is the model pass's exit mask, and it must be off.
+        val stickerPassStart = binding.log.indexOf("useProgram(${stickerPipeline.program})")
+        assertTrue(modelDraw < stickerPassStart, "the sticker pass begins after the model pass draws")
+        val exitMask = binding.log.subList(modelDraw, stickerPassStart).lastOrNull { it.startsWith("depthMask") }
+        assertEquals(
+            "depthMask(false)",
+            exitMask,
+            "ADR 0030: the model pass owes a depthMask(false) on the way out, or ADR 0027's " +
+                "billboard fix silently stops working in every frame with a model and a billboard",
+        )
+    }
+
+    // --- ADR 0030: ground, geometries, models, then map-anchored stickers -------------------------
+
+    /**
+     * ADR 0025's map-regime order with ADR 0030's models inserted before the stickers, because a
+     * map-anchored sticker is a marker and a marker paints over the scene it marks. Each pass is
+     * located by its own `useProgram`, not by its draw call: the ground, a `Geometry` and a sticker
+     * all issue a bit-identical `drawArrays(GL_TRIANGLE_STRIP, 0, 4)`, so a draw-call index cannot
+     * tell three of the four passes apart.
+     */
+    @Test
+    fun theMapRegimeDrawsGroundThenGeometriesThenModelsThenMapAnchoredStickers() {
+        val binding = modelCapableBinding()
+        val camera = topDownCamera()
+        val geometryPipeline = newGeometryPipeline(binding)
+        val stickerPipeline = newStickerPipeline(binding)
+        val groundPipeline = newGroundPipeline(binding)
+        val modelPipelines = newModelPipelines(binding)
+        val mapTexture = 101
+        val screenTexture = 202
+
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(
+                SceneSticker(mapPlacement(), texture = mapTexture),
+                SceneSticker(screenPlacement(z = 5.0), texture = screenTexture),
+            ),
+            geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
+            groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = 303)),
+            models = listOf(sceneModel()),
+        )
+        binding.log.clear()
+
+        SceneContent(camera, scene, stickerPipeline, groundPipeline, modelPipelines).draw(binding)
+
+        val ground = binding.log.indexOf("useProgram(${groundPipeline.program})")
+        val geometry = binding.log.indexOf("useProgram(${geometryPipeline.program})")
+        val model = binding.log.indexOf("useProgram(${modelPipelines.values.first().program})")
+        val stickers = binding.log.indexOf("useProgram(${stickerPipeline.program})")
+        val mapSticker = binding.log.indexOf("bindTexture(${hex(GL_TEXTURE_2D)},$mapTexture)")
+        val depthDisabled = binding.log.indexOf("disable(${hex(GL_DEPTH_TEST)})")
+        val screenSticker = binding.log.indexOf("bindTexture(${hex(GL_TEXTURE_2D)},$screenTexture)")
+
+        assertTrue(ground >= 0 && geometry >= 0 && model >= 0 && stickers >= 0, "all four passes must run")
+        assertTrue(ground < geometry, "the ground is the backdrop everything else paints onto")
+        assertTrue(geometry < model, "geometries draw before models")
+        assertTrue(model < stickers, "models draw before map-anchored stickers, which mark them")
+        assertTrue(stickers < mapSticker, "the map-anchored sticker draws inside the sticker pass")
+        assertTrue(mapSticker < depthDisabled, "the whole map regime is depth-tested")
+        assertTrue(depthDisabled < screenSticker, "the screen regime still composites last")
+    }
+
+    /**
+     * The blended half of the model pass draws inside the model pass, and still before the stickers.
+     * A model with one opaque and one blended primitive is the case where the model pass's own two
+     * phases could be mistaken for the whole map regime's — the opaque draw writes depth, the blended
+     * one does not, and both precede every map-anchored sticker.
+     */
+    @Test
+    fun aBlendedModelPrimitiveStillDrawsInsideTheModelPassAndBeforeTheStickers() {
+        val binding = modelCapableBinding()
+        val stickerPipeline = newStickerPipeline(binding)
+        val modelPipelines = newModelPipelines(binding)
+
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(SceneSticker(mapPlacement(), texture = 101)),
+            models = listOf(
+                sceneModel(
+                    indexCounts = listOf(OPAQUE_INDEX_COUNT, BLENDED_INDEX_COUNT),
+                    alphaModes = listOf("OPAQUE", "BLEND"),
+                ),
+            ),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, stickerPipeline, newGroundPipeline(binding), modelPipelines)
+            .draw(binding)
+
+        val opaque =
+            binding.log.indexOfFirst { it.startsWith("drawElements(${hex(GL_TRIANGLES)},$OPAQUE_INDEX_COUNT,") }
+        val blended =
+            binding.log.indexOfFirst { it.startsWith("drawElements(${hex(GL_TRIANGLES)},$BLENDED_INDEX_COUNT,") }
+        val stickers = binding.log.indexOf("useProgram(${stickerPipeline.program})")
+        assertTrue(opaque in 0 until blended, "the opaque primitive draws before the blended one")
+        assertTrue(blended in 0 until stickers, "both halves of the model pass precede the stickers")
+    }
+
+    // --- what SceneContent derives per model, on top of what Task 16 hands it --------------------
+
+    /**
+     * A model's model-view-projection is the placement's own camera-space model matrix with the
+     * node's global transform inserted on its right, projected once — never the placement matrix
+     * narrowed to `Float` and then multiplied by the node transform, which would throw away the
+     * precision the rest of this file exists to keep. The node transform here is a translation on
+     * every axis with distinct components and a non-uniform scale, so a dropped or transposed node
+     * transform cannot coincide with the right answer.
+     */
+    @Test
+    fun aModelsMvpIsTheProjectionOfThePlacementMatrixTimesItsNodeTransform() {
+        val binding = modelCapableBinding().withDeclaredNames(
+            MODEL_VIEW_PROJECTION_UNIFORM_NAME to MVP_LOCATION,
+            MODEL_NORMAL_MATRIX_UNIFORM_NAME to NORMAL_LOCATION,
+        )
+        binding.integers[GL_MAX_UNIFORM_BLOCK_SIZE] = intArrayOf(16384)
+        val camera = topDownCamera()
+        val modelPipelines = newModelPipelines(binding)
+        val placement = mapPlacementAt(Vector3(0.5, -0.25, 0.0))
+        val node = asymmetricNodeTransform()
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(sceneModel(placement = placement, nodeTransforms = listOf(node))),
+        )
+        binding.log.clear()
+
+        SceneContent(camera, scene, newStickerPipeline(binding), newGroundPipeline(binding), modelPipelines)
+            .draw(binding)
+
+        val resolved = (resolvePlacement(placement, camera) as SpatialOutcome.Success).value
+        val expected = columnMajor(camera.projectionMatrix * composeMapCameraSpaceModel(camera, resolved) * node)
+        val withoutNode = columnMajor(camera.projectionMatrix * composeMapCameraSpaceModel(camera, resolved))
+
+        val actual = requireNotNull(binding.uniformMatrix4fvValues[MVP_LOCATION]) { "the MVP must be bound" }
+        assertContentEquals(expected, actual)
+        assertTrue(actual.toList() != withoutNode.toList(), "the node transform must actually be applied")
+    }
+
+    /**
+     * The normal matrix is derived from the same camera-space model matrix the position travels
+     * through, node transform included. The fixture's node scale is `diag(2, 3, 5)` rather than
+     * anything symmetric: a normal matrix on `diag(2, 2, 2)` or on any symmetric block equals its own
+     * transpose, and a check taken there stays green with the transpose deleted.
+     */
+    @Test
+    fun aModelsNormalMatrixIsTheInverseTransposeOfTheSameCameraSpaceModel() {
+        val binding = modelCapableBinding().withDeclaredNames(
+            MODEL_VIEW_PROJECTION_UNIFORM_NAME to MVP_LOCATION,
+            MODEL_NORMAL_MATRIX_UNIFORM_NAME to NORMAL_LOCATION,
+        )
+        binding.integers[GL_MAX_UNIFORM_BLOCK_SIZE] = intArrayOf(16384)
+        val camera = topDownCamera()
+        val modelPipelines = newModelPipelines(binding)
+        val placement = mapPlacementAt(Vector3(0.5, -0.25, 0.0))
+        val node = asymmetricNodeTransform()
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(sceneModel(placement = placement, nodeTransforms = listOf(node))),
+        )
+        binding.log.clear()
+
+        SceneContent(camera, scene, newStickerPipeline(binding), newGroundPipeline(binding), modelPipelines)
+            .draw(binding)
+
+        val resolved = (resolvePlacement(placement, camera) as SpatialOutcome.Success).value
+        val expected = requireNotNull(modelNormalMatrix(composeMapCameraSpaceModel(camera, resolved) * node))
+        val actual = requireNotNull(binding.uniformMatrix4fvValues[NORMAL_LOCATION]) { "the normal matrix is bound" }
+        assertContentEquals(expected, actual)
+    }
+
+    /**
+     * With no override, a primitive's material resolves its base-colour image index through
+     * [SceneModel.imageTextures] to the GL name Task 16 uploaded it to. Without this the next test's
+     * "the authored image is not bound" half would be vacuous — a path that never binds anything
+     * satisfies it too.
+     */
+    @Test
+    fun theAuthoredBaseColourImageIsBoundWhenThereIsNoOverride() {
+        val binding = modelCapableBinding()
+        val modelPipelines = newModelPipelines(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(
+                sceneModel(
+                    baseColourImageIndex = 0,
+                    imageTextures = listOf(AUTHORED_TEXTURE),
+                    attributes = TEXTURED_ATTRIBUTES,
+                ),
+            ),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, newStickerPipeline(binding), newGroundPipeline(binding), modelPipelines)
+            .draw(binding)
+
+        assertTrue(
+            binding.log.contains("bindTexture(${hex(GL_TEXTURE_2D)},$AUTHORED_TEXTURE)"),
+            "the authored image's uploaded texture must be bound: ${binding.log}",
+        )
+    }
+
+    /**
+     * `CONTEXT.md`: a `Model.texture` override "replaces every rendered primitive's base-colour
+     * texture while preserving other material properties".
+     */
+    @Test
+    fun aModelTextureOverrideWinsOverTheAuthoredBaseColourImage() {
+        val binding = modelCapableBinding()
+        val modelPipelines = newModelPipelines(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(
+                sceneModel(
+                    baseColourImageIndex = 0,
+                    imageTextures = listOf(AUTHORED_TEXTURE),
+                    overrideTexture = OVERRIDE_TEXTURE,
+                    attributes = TEXTURED_ATTRIBUTES,
+                ),
+            ),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, newStickerPipeline(binding), newGroundPipeline(binding), modelPipelines)
+            .draw(binding)
+
+        assertTrue(
+            binding.log.contains("bindTexture(${hex(GL_TEXTURE_2D)},$OVERRIDE_TEXTURE)"),
+            "the override must be the texture bound: ${binding.log}",
+        )
+        assertFalse(
+            binding.log.contains("bindTexture(${hex(GL_TEXTURE_2D)},$AUTHORED_TEXTURE)"),
+            "the authored image must not also be bound: ${binding.log}",
+        )
+    }
+
+    /**
+     * glTF's own rule: a node whose global transform has a negative determinant winds its triangles
+     * the other way, and [drawModels] answers that with `glFrontFace(GL_CW)`. The mirrored fixture
+     * negates one axis only — a fixture that negated all three would have a negative determinant and
+     * be a rotation composed with a point reflection, which is a different thing to get right.
+     */
+    @Test
+    fun aMirroredNodeTransformReversesTheWindingAndAnUnmirroredOneDoesNot() {
+        val mirrored = modelCapableBinding()
+        SceneContent(
+            topDownCamera(),
+            Scene(OUTPUT_SIZE, 0L, models = listOf(sceneModel(nodeTransforms = listOf(mirroredNodeTransform())))),
+            newStickerPipeline(mirrored),
+            newGroundPipeline(mirrored),
+            newModelPipelines(mirrored),
+        ).also { mirrored.log.clear() }.draw(mirrored)
+
+        val upright = modelCapableBinding()
+        SceneContent(
+            topDownCamera(),
+            Scene(OUTPUT_SIZE, 0L, models = listOf(sceneModel(nodeTransforms = listOf(asymmetricNodeTransform())))),
+            newStickerPipeline(upright),
+            newGroundPipeline(upright),
+            newModelPipelines(upright),
+        ).also { upright.log.clear() }.draw(upright)
+
+        assertTrue(mirrored.log.contains("frontFace(${hex(GL_CW)})"), "a mirrored node winds clockwise")
+        assertFalse(upright.log.contains("frontFace(${hex(GL_CW)})"), "an unmirrored node does not")
+    }
+
+    /**
+     * A draw item at a node the default scene never reaches has no global transform, and drawing it
+     * at the origin would put a detached mesh in the middle of the map. It is dropped instead — and
+     * dropping it must not drop the model's other primitives with it.
+     */
+    @Test
+    fun aDrawItemAtAnUnreachedNodeIsDroppedRatherThanDrawnAtTheOrigin() {
+        val binding = modelCapableBinding()
+        val modelPipelines = newModelPipelines(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(
+                sceneModel(
+                    indexCounts = listOf(OPAQUE_INDEX_COUNT, BLENDED_INDEX_COUNT),
+                    nodeIndices = listOf(0, 1),
+                    nodeTransforms = listOf(DoubleMatrix4.identity, null),
+                ),
+            ),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, newStickerPipeline(binding), newGroundPipeline(binding), modelPipelines)
+            .draw(binding)
+
+        val drawn = binding.log.filter { it.startsWith("drawElements") }
+        assertEquals(1, drawn.size, "only the reachable node's primitive draws: $drawn")
+        assertTrue(drawn.single().startsWith("drawElements(${hex(GL_TRIANGLES)},$OPAQUE_INDEX_COUNT,"))
+    }
+
+    /**
+     * `CONTEXT.md` calls a zero **Scale** valid, and a zero-scaled model has no volume to draw.
+     * [modelNormalMatrix] returns `null` for the singular camera-space matrix that produces, and this
+     * pins that the answer is "paint nothing" rather than an identity normal matrix — which would
+     * light the model as though it were neither scaled nor rotated, a wrong picture reported as a
+     * correct one.
+     */
+    @Test
+    fun aZeroScaledModelDrawsNothingRatherThanTakingAnIdentityNormalMatrix() {
+        val binding = modelCapableBinding()
+        val modelPipelines = newModelPipelines(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(sceneModel(placement = mapPlacementScaled(0.0))),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, newStickerPipeline(binding), newGroundPipeline(binding), modelPipelines)
+            .draw(binding)
+
+        assertTrue(binding.log.none { it.startsWith("drawElements") }, "nothing may draw: ${binding.log}")
+        assertTrue(binding.log.none { it == "depthMask(true)" }, "an empty model pass touches no depth state")
+    }
+
+    /**
+     * ADR 0029 refuses a `SCREEN`-positioned **Model** at frame planning, so one reaching a draw is a
+     * caller contract violation rather than a case to handle. Asserted rather than degraded, because
+     * the screen projection carries no z row at all and a mesh drawn through it would show its own
+     * back faces through its front ones — a silently wrong picture.
+     */
+    @Test
+    fun aScreenPositionedModelIsRefusedAtDrawTimeRatherThanCompositedFlat() {
+        val binding = modelCapableBinding()
+        val modelPipelines = newModelPipelines(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(sceneModel(placement = screenPlacement(z = 1.0))),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            SceneContent(
+                topDownCamera(),
+                scene,
+                newStickerPipeline(binding),
+                newGroundPipeline(binding),
+                modelPipelines,
+            ).draw(binding)
+        }
+    }
+
+    /**
+     * The one hazard [SceneContent]'s `modelPipelines` default carries: a caller that supplies models
+     * and forgets the pipelines. It fails loudly at the first primitive rather than drawing a frame
+     * with the models silently missing, which is what makes the default safe where
+     * [SceneGeometry.consumerUniforms]'s absent default would not have been.
+     */
+    @Test
+    fun aSceneWithModelsAndNoPipelinesFailsLoudlyRatherThanDrawingNothing() {
+        val binding = modelCapableBinding()
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            models = listOf(sceneModel()),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            SceneContent(topDownCamera(), scene, newStickerPipeline(binding), newGroundPipeline(binding))
+                .draw(binding)
+        }
     }
 
     // --- ADR 0025: the ground is first, and map-regime draw order is a contract ------------------
@@ -562,6 +982,15 @@ class SceneContentTest {
 
     private fun mapPlacement(): Placement = mapPlacementAt(Vector3(0.0, 0.0, 0.0))
 
+    private fun mapPlacementScaled(scale: Double): Placement = Placement(
+        positionMode = AnchoringMode.MAP,
+        position = Vector3(0.0, 0.0, 0.0),
+        rotationMode = AnchoringMode.SCREEN,
+        rotation = Vector3(0.0, 0.0, 0.0),
+        scaleMode = AnchoringMode.SCREEN,
+        scale = scale,
+    )
+
     private fun screenPlacement(z: Double): Placement = Placement(
         positionMode = AnchoringMode.SCREEN,
         position = Vector3(400.0, 300.0, z),
@@ -595,6 +1024,156 @@ class SceneContentTest {
 
     private fun newGroundPipeline(binding: RecordingGlBinding = RecordingGlBinding().withNoDeclaredNames()): GroundPipeline =
         (createGroundPipeline(binding, ShaderDialect.GLES, GlProgramCache()) as GroundPipelineResult.Created).pipeline
+
+    /**
+     * A [RecordingGlBinding] a model pipeline can actually be built on. [createModelPipeline] reads
+     * `GL_MAX_UNIFORM_BLOCK_SIZE` first and refuses anything below 16384, and the fake answers an
+     * unseeded integer query with `0` — so without this seed every model pipeline fails, and the
+     * failure looks like a pipeline bug rather than a fixture one.
+     */
+    private fun modelCapableBinding(): RecordingGlBinding = RecordingGlBinding()
+        .withDeclaredNames(
+            MODEL_VIEW_PROJECTION_UNIFORM_NAME to MVP_LOCATION,
+            MODEL_NORMAL_MATRIX_UNIFORM_NAME to NORMAL_LOCATION,
+            MODEL_BASE_COLOUR_FACTOR_UNIFORM_NAME to 32,
+            MODEL_BASE_COLOUR_TEXTURE_UNIFORM_NAME to 33,
+            MODEL_LIGHT_DIRECTION_UNIFORM_NAME to 34,
+            MODEL_AMBIENT_UNIFORM_NAME to 35,
+            MODEL_FORCE_OPAQUE_UNIFORM_NAME to 36,
+            MODEL_VERTEX_COLOUR_PRESENT_UNIFORM_NAME to 37,
+        )
+        .also { it.integers[GL_MAX_UNIFORM_BLOCK_SIZE] = intArrayOf(16384) }
+
+    private fun newModelPipelines(binding: RecordingGlBinding): Map<ModelShaderVariant, ModelPipeline> {
+        val cache = GlProgramCache()
+        return allModelShaderVariants().associateWith { variant ->
+            (createModelPipeline(binding, ShaderDialect.GLES, cache, variant) as ModelPipelineResult.Created).pipeline
+        }
+    }
+
+    /**
+     * One [SceneModel] over a single mesh whose primitives are identified in the call log by their
+     * own index counts. Everything a real [SceneModel] arrives with already derived — node
+     * transforms, joint palettes, uploaded geometry, texture names — is a parameter here, because
+     * that is exactly the shape [SceneContent] consumes it in.
+     */
+    private fun sceneModel(
+        placement: Placement = mapPlacement(),
+        indexCounts: List<Int> = listOf(OPAQUE_INDEX_COUNT),
+        alphaModes: List<String> = indexCounts.map { "OPAQUE" },
+        nodeIndices: List<Int> = indexCounts.map { 0 },
+        nodeTransforms: List<DoubleMatrix4?> = listOf(DoubleMatrix4.identity),
+        baseColourImageIndex: Int? = null,
+        imageTextures: List<Int> = emptyList(),
+        overrideTexture: Int? = null,
+        attributes: Set<ModelVertexAttribute> = UNTEXTURED_ATTRIBUTES,
+    ): SceneModel {
+        val decoded = DecodedModel(
+            primitives = indexCounts.indices.map { index ->
+                DecodedPrimitive(
+                    positions = FloatArray(9) { it.toFloat() },
+                    normals = FloatArray(9) { 0.0f },
+                    texCoords = null,
+                    colours = null,
+                    joints = null,
+                    weights = null,
+                    indices = ModelIndices(shortArrayOf(0, 1, 2), null, GL_UNSIGNED_SHORT, 3),
+                    material = modelMaterial(alphaModes[index], baseColourImageIndex),
+                )
+            },
+            drawItems = indexCounts.indices.map { ModelDrawItem(nodeIndices[it], 0, it, null) },
+            images = emptyList(),
+            skins = emptyList(),
+            document = GltfDocument(
+                accessors = emptyList(),
+                bufferViews = emptyList(),
+                meshes = listOf(GltfMesh(indexCounts.map { gltfPrimitive() })),
+                nodes = nodeTransforms.map { gltfNode() },
+                skins = emptyList(),
+                scenes = listOf(GltfScene(listOf(0))),
+                defaultScene = 0,
+                animations = emptyList(),
+                materials = emptyList(),
+                images = emptyList(),
+                textures = emptyList(),
+                samplers = emptyList(),
+                extensionsRequired = emptyList(),
+                buffers = emptyList(),
+            ),
+            bin = BinChunk(ByteArray(0), IntRange.EMPTY),
+            decodedCpuBytes = 0L,
+        )
+        return SceneModel(
+            placement = placement,
+            model = decoded,
+            nodeTransforms = nodeTransforms,
+            jointMatricesBySkin = emptyMap(),
+            uploaded = indexCounts.indices.associate { index ->
+                (0 to index) to UploadedPrimitive(
+                    vertexArray = 900 + index,
+                    buffers = listOf(910 + index),
+                    indexBuffer = 920 + index,
+                    indexCount = indexCounts[index],
+                    indexType = GL_UNSIGNED_SHORT,
+                    attributes = attributes,
+                )
+            },
+            imageTextures = imageTextures,
+            overrideTexture = overrideTexture,
+        )
+    }
+
+    private fun modelMaterial(alphaMode: String, baseColourImageIndex: Int?): ResolvedMaterial = ResolvedMaterial(
+        baseColourFactor = floatArrayOf(1.0f, 1.0f, 1.0f, 1.0f),
+        baseColourImageIndex = baseColourImageIndex,
+        baseColourSampler = TextureSamplerState(GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_REPEAT),
+        alphaMode = alphaMode,
+        alphaCutoff = 0.5f,
+        doubleSided = true,
+    )
+
+    private fun gltfPrimitive(): GltfPrimitive =
+        GltfPrimitive(attributes = emptyMap(), indices = null, mode = 4, material = null, targetCount = 0)
+
+    private fun gltfNode(): GltfNode = GltfNode(
+        children = emptyList(),
+        mesh = 0,
+        skin = null,
+        camera = null,
+        matrix = null,
+        translation = null,
+        rotation = null,
+        scale = null,
+    )
+
+    /**
+     * A node transform that sits at no symmetry point of anything being checked through it: the
+     * linear block is non-symmetric (so a stray transpose shows), non-uniformly scaled by three
+     * distinct factors (so a dropped inverse-transpose shows), and its translation components are
+     * three distinct non-zero values (so a dropped or reordered column shows). Its determinant is
+     * `+30.125`, comfortably non-singular and positive.
+     */
+    private fun asymmetricNodeTransform(): DoubleMatrix4 = DoubleMatrix4.fromRows(
+        listOf(
+            listOf(2.0, 0.7, -0.3, 4.0),
+            listOf(0.0, 3.0, 0.5, -6.0),
+            listOf(0.1, 0.0, 5.0, 9.0),
+            listOf(0.0, 0.0, 0.0, 1.0),
+        ),
+    )
+
+    /** [asymmetricNodeTransform] with its x axis alone negated: determinant `-30.125`. */
+    private fun mirroredNodeTransform(): DoubleMatrix4 = DoubleMatrix4.fromRows(
+        listOf(
+            listOf(-2.0, 0.7, -0.3, 4.0),
+            listOf(0.0, 3.0, 0.5, -6.0),
+            listOf(-0.1, 0.0, 5.0, 9.0),
+            listOf(0.0, 0.0, 0.0, 1.0),
+        ),
+    )
+
+    private fun columnMajor(matrix: DoubleMatrix4): FloatArray =
+        FloatArray(16) { index -> matrix[index % 4, index / 4].toFloat() }
 
     private fun groundTile(canonicalX: Int, tileY: Int, texture: Int): SceneGroundTile = SceneGroundTile(
         instance = BasemapTileInstance(
@@ -637,6 +1216,26 @@ class SceneContentTest {
 }
 
 private val OUTPUT_SIZE = OutputPixelSize(width = 800, height = 600)
+
+/** Index counts, used as per-primitive identities in `drawElements` log lines. */
+private const val OPAQUE_INDEX_COUNT: Int = 11
+private const val BLENDED_INDEX_COUNT: Int = 22
+
+private const val MVP_LOCATION: Int = 30
+private const val NORMAL_LOCATION: Int = 31
+
+private const val AUTHORED_TEXTURE: Int = 707
+private const val OVERRIDE_TEXTURE: Int = 808
+
+private val UNTEXTURED_ATTRIBUTES: Set<ModelVertexAttribute> =
+    setOf(ModelVertexAttribute.POSITION, ModelVertexAttribute.NORMAL)
+
+/**
+ * `modelShaderVariantFor` picks a textured variant only when the primitive carries a `TEXCOORD_0` to
+ * sample with, so a fixture asserting on a bound base-colour texture has to declare one — without it
+ * the untextured variant draws, binds nothing, and the assertion has nothing to find.
+ */
+private val TEXTURED_ATTRIBUTES: Set<ModelVertexAttribute> = UNTEXTURED_ATTRIBUTES + ModelVertexAttribute.TEX_COORD
 
 private fun minimalShaderPair(): ShaderPair = ShaderPair(
     vertexSource = "#version 300 es\nvoid main() {\n    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n}\n",
