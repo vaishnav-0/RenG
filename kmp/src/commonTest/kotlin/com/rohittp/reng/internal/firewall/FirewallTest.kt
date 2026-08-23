@@ -250,7 +250,7 @@ class FirewallTest {
         // permits the consumer write "only after RenG verifies that it matches the latched response", so a
         // write on a route with no latched response is refused (see
         // `rejectsAWriteOnARouteWithNoLatchedTransportResponse`). This is also the exact ordering Rentile
-        // 0.2.0 itself produces -- every raw-store write sits immediately after a transport on the same key.
+        // 0.5.0 itself produces -- every raw-store write sits immediately after a transport on the same key.
         fw.transport.execute(engineRequestFor(rasterRoute))
         val resource = engineStoredResourceOf(VALID_STICKER_PNG)
         fw.store.write(engineKeyFor(rasterRoute), resource)
@@ -262,7 +262,7 @@ class FirewallTest {
     @Test
     fun rejectsAWriteOnARouteWithNoLatchedTransportResponse() = runTest {
         // The gap Addendum D closed: the latched-digest check used to be "verify only if a digest exists",
-        // so an engine that wrote a route it had never fetched skipped verification entirely. Rentile 0.2.0
+        // so an engine that wrote a route it had never fetched skipped verification entirely. Rentile 0.5.0
         // cannot do this, but the firewall's premise is that the engine is untrusted.
         val store = CountingStore()
         val fw = firewall(store = store)

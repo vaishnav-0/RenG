@@ -3,7 +3,7 @@ agp = "9.3.1"
 kotlin = "2.3.21"
 kotlinxCoroutines = "1.11.0"
 mavenPublish = "0.36.0"
-rentile = "0.2.0"
+rentile = "0.5.0"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }

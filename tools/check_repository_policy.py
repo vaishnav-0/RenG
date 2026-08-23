@@ -239,11 +239,11 @@ _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS = {
     }),
     # ADR 0019's coroutines dependency (see _PERMITTED_NEW_DEPENDENCIES above) is a second,
     # equally-exact accepted form of these two files, alongside the pre-Cycle-C original.
-    # Both forms carry the rentile 0.2.0 bump (see _dependency_name_policy_token's base_versions
+    # Both forms carry the rentile 0.5.0 bump (see _dependency_name_policy_token's base_versions
     # below, which must move in lockstep with these fingerprints).
     "gradle/libs.versions.toml": frozenset({
-        "d1b92cfe95d922c1c79a22183e047994c2e3006c81ea630a575f4013c5b30d2b",
-        "a8eee8b3f7f7550465d498acb997fb5519ebd56ba61375171fe7fd1a47f9b0ad",
+        "c53967f3a738a29f39817a93be0090ba96884c90b173591b021d32c2d30a71b9",
+        "7eb2e12a272e4b1eb7e48dc62e27eced1e76f873b84cb7ac036b67934de7d59f",
     }),
     "kmp/build.gradle.kts": frozenset({
         "cb2e7408aea431f014fbb1235b0a1793a39289a4dbf52c331e2f2fda23f236df",
@@ -1846,7 +1846,7 @@ def check_dependencies(root: Path) -> list[Violation]:
             "agp": "9.3.1",
             "kotlin": "2.3.21",
             "mavenPublish": "0.36.0",
-            "rentile": "0.2.0",
+            "rentile": "0.5.0",
         }
         base_libraries = {
             "rentile-kmp": {

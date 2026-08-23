@@ -42,7 +42,7 @@ private const val MAXIMUM_UNWRAP_DEPTH: Int = 8
  * in a `when` with no `else`. A code a future Rentile adds therefore fails this file's compilation
  * rather than being silently swept into some default bucket, which is the exact failure mode ADR 0016's
  * firewall exists to prevent. The `as?` casts alongside it are belt-and-braces for the same reason:
- * Rentile 0.2.0 pairs each code with exactly one sealed subclass, so they cannot fail today, but a
+ * Rentile 0.5.0 pairs each code with exactly one sealed subclass, so they cannot fail today, but a
  * future Rentile that reused a code across two classes would fail closed here instead of throwing a
  * `ClassCastException` out of a function whose whole purpose is to stop engine faults escaping.
  *
@@ -129,6 +129,16 @@ internal fun classifyEngineFailure(failure: Throwable): FailureDescriptor {
             RentileErrorCode.FOREIGN_PREPARED_BATCH,
             RentileErrorCode.INVALID_TILE_ID,
             RentileErrorCode.TILE_NOT_IN_PREPARED_BATCH,
+            // Rentile 0.5.0's three label-candidate codes. All three are raised only from
+            // `acquireLabelCandidates` and the `LabelCandidatePlan` it returns -- an entry point RenG
+            // does not call and does not expose, so none of them is reachable from `prepare`,
+            // `prepareBatch`, or `render`. They join the fail-closed bucket rather than getting a
+            // RenG code of their own precisely because RenG has no label work to attribute them to:
+            // inventing one would claim a labelling stage that does not exist. When RenG does draw
+            // labels, these three move out of here into shapes that name the label plan.
+            RentileErrorCode.FOREIGN_LABEL_CANDIDATE_PLAN,
+            RentileErrorCode.LABEL_CANDIDATE_PLAN_CLOSED,
+            RentileErrorCode.GLYPH_TEMPLATE_MISMATCH,
             -> return basemapRenderFailure()
 
             // The three wrapping codes. Each reports its own aggregate shape, not the fault; the fault

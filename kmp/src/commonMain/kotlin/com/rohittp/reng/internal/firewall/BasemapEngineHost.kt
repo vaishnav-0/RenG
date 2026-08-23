@@ -545,7 +545,7 @@ internal class BasemapEngineHost(
      * A [RenGException] is rethrown as-is, so that a firewall failure which reaches this seam unwrapped
      * keeps its precise code, stage, and resource rather than being reclassified: [classifyEngineFailure]
      * would see a non-`RentileException` and answer the opaque `BASEMAP_RENDER_FAILED`. Stated honestly,
-     * this branch is defensive and **no test covers it**, because Rentile 0.2.0 wraps every adapter
+     * this branch is defensive and **no test covers it**, because Rentile 0.5.0 wraps every adapter
      * throwable at every call site it has — `RasterResourceAcquirer` turns a store read fault into its own
      * `ResourceStoreException` and a transport fault into its own `ResourceAcquisitionException`, dropping
      * the cause in both — so a RenG failure raised inside an adapter arrives here already converted. That
