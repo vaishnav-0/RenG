@@ -9,10 +9,11 @@ Cycle 0 is complete: the original graphics contract is recorded in ADRs 0001–0
 ADRs 0014–0015 supersede its preparation-ordering and exact-context deletion details, ADRs 0016–0017
 add the strict Rentile firewall and terminal renderer ownership rules, ADR 0018 fixes canonical content
 identities, ADRs 0019–0022 record the coroutines dependency, PNG decode ownership, the GLB subset, and the
-corrected GL source-set visibility, ADR 0023 corrects the GL restore set, and ADRs 0024–0026 fix the
+corrected GL source-set visibility, ADR 0023 corrects the GL restore set, ADRs 0024–0026 fix the
 draw-regime order, the map-regime depth rule and draw order for coplanar content, and the single
-world-anchored light models are shaded by. Everything below
-inherits the current decisions rather than revisiting them without new evidence.
+world-anchored light models are shaded by, ADR 0027 supersedes 0025's depth-*write* ruling so that no
+map-regime draw writes depth, and ADR 0028 narrows ADR 0021's flat GLB accessor subset to a per-role one.
+Everything below inherits the current decisions rather than revisiting them without new evidence.
 
 ## Order
 
@@ -49,10 +50,9 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | I | macOS harness: plans in, video out | A rendered sequence encodes and plays |
 | J | Golden-image corpus gate | Corpus job wired into `ci.yml` and `publish.yml` |
 
-**Where the sequence stands.** A, B, C, D and F-1 are released: A as `0.1.0`, and B, C, D and F-1 together
-as `0.2.0`. E-basemap is complete and gathered on `feat/cycle-e-basemap`, unmerged and unreleased —
-merging it to `main` is what starts its publication. Everything from F-2 onward is unstarted, though F-2
-and E-labels have both been spiked; see `HANDOFF.md` for what those spikes settled.
+**Where the sequence stands.** A, B, C, D, F-1 and E-basemap are released: A as `0.1.0`, B/C/D/F-1 together
+as `0.2.0`, and E-basemap as `0.3.0`. Everything from F-2 onward is unstarted, though F-2 and E-labels have
+both been spiked; see `HANDOFF.md` for what those spikes settled and for the five defects F-2 inherits.
 
 **Pixel verification is deferred to Cycle J** by owner decision, recorded at
 `docs/superpowers/specs/2026-08-19-cycle-f1-stickers-and-geometries-design.md:204-205`. The gate rows for
@@ -62,13 +62,15 @@ plausible — a transposed tile index, a v-flipped texture, a silently empty gro
 black because its mipmap filter has no mipmaps — and it cannot tell anyone whether the result *looks*
 right. That remains Cycle J's job, and these cycles should not imply otherwise.
 
-**A visual harness runs earlier than Cycle I.** Pulled forward on the reasoning that RenG has drawn a
-basemap no human has looked at: analytical assertions prove relationships, not resemblance. It belongs in
-`consumer-smoke` under a `macosArm64`-only source set rather than in its own directory, because
+**A visual harness runs earlier than Cycle I, and it now exists.** Pulled forward on the reasoning that
+RenG had drawn a basemap no human had looked at: analytical assertions prove relationships, not
+resemblance. It lives in `consumer-smoke/src/macosArm64Main/` rather than in its own directory, because
 `tools/check_repository_policy.py` permits Kotlin source in exactly two places — `kmp/src` and
 `consumer-smoke` — and because the six-target resolution proof is what protects every release and should
-not share a source set with rendering machinery. It writes a frame sequence and leaves assembly to
-`ffmpeg`; a self-contained encoder through AVFoundation cinterop stays with Cycle I.
+not share a source set with rendering machinery. It writes a PPM frame sequence and leaves assembly to
+`ffmpeg`; a self-contained encoder through AVFoundation cinterop stays with Cycle I. It earned the
+reordering immediately: four of the five defects the basemap cycle fixed after its suite went green were
+found by looking at its output.
 
 The MVP release is **internal**: breaking the public interface in a later cycle is accepted. Publication
 itself stays immutable regardless — a later breaking change means a new version, never overwriting a
@@ -106,8 +108,14 @@ The second release, `0.2.0`, completed the same way from exact source commit
 `a2cbe6a965247f221f7e279a962b40306baac21b`, carrying Cycles B, C, D and F-1 together: both CI jobs and the
 publication workflow passed on that commit and its immutable completion record verifies anonymously. The
 first attempt failed closed before any R2 write, on a test ceiling calibrated for developer hardware;
-nothing was published, so the same version was retried after the ceiling was replaced. Recovery by explicit
-retry, never by overwrite, is exactly ADR 0013's intent.
+nothing was published, so the same version was retried after the ceiling was replaced.
+
+The third, `0.3.0`, carries E-basemap, from exact source commit
+`49cc1d5843ba40ac866f96d00123ca07b662f6fc`; its completion record verifies anonymously and all seven
+publications resolve over public HTTP with no credentials. It too failed closed once first — on a readback
+case that a hosted macOS runner's software rasteriser cannot draw — and it too was retried at the same
+version once the suite learned to measure the driver rather than name it. Recovery by explicit retry, never
+by overwrite, is exactly ADR 0013's intent, and it has now been exercised twice.
 
 ## B — Public API surface and pure core
 
@@ -204,14 +212,16 @@ inside the model cycle would hold a shippable release hostage. All three slots b
 one subject — what the map itself draws — and are described together here.
 
 **E-labels.** Map text drawn by RenG as screen-space primitives from Rentile's `LabelCandidate`s, which
-already carry laid-out glyph quads, so text shaping and line breaking are Rentile's. Blocked on a Rentile
-API that reports the glyph closure before fetching it — ADR 0016's firewall preregisters exact URLs, and
-glyph-range URLs are the one resource class RenG cannot derive in advance, because the range set comes
-from text inside decoded vector tiles. The request is at
-`docs/research/2026-08-22-rentile-glyph-closure-request.md`. Placed before terrain on consumer value: a
-map without text serves fewer consumers than a flat one does.
+already carry laid-out glyph quads, so text shaping and line breaking are Rentile's. It **was** blocked on
+a Rentile API that reports the glyph closure before fetching it — ADR 0016's firewall preregisters exact
+URLs, and glyph-range URLs are the one resource class RenG cannot derive in advance, because the range set
+comes from text inside decoded vector tiles. **Rentile `0.5.0` shipped it**: `planLabelCandidates` freezes
+the closure without acquiring any of it, and `acquireLabelCandidates(plan)` consumes that same frozen plan,
+so the closure cannot under-approximate the acquisition. The cycle is unblocked; `HANDOFF.md` carries the
+API detail and the work that remains. Placed before terrain on consumer value: a map without text serves
+fewer consumers than a flat one does.
 
-**E-basemap — complete and gathered on `feat/cycle-e-basemap`, unmerged and unreleased.** Rentile PNG
+**E-basemap — released as `0.3.0`.** Rentile PNG
 tiles decoded, uploaded, and drawn as the mercator ground under a camera, with texture residency and
 eviction bounded by an explicit GPU byte budget and driven by the prepared frames that are alive. It picked
 up five of Cycle C's deferred tasks — sprite/style commits, the production Rentile private-key resolver,
@@ -226,13 +236,17 @@ interior pixel is the clear colour, four named samples carry four fixture colour
 a fixed order, and `drawBasemap = false` leaves the frame untouched. Golden baselines were deferred to
 Cycle J with all other pixel verification.
 
-Two decisions came out of drawing the ground rather than out of planning it. **ADR 0025** supersedes ADR
+Three decisions came out of drawing the ground rather than out of planning it. **ADR 0025** supersedes ADR
 0024's depth rule: with strict `GL_GREATER`, every altitude-0 map-anchored thing vanished the instant a
 ground existed at altitude 0 — the draw call issued, the pixels never written — so the comparison becomes
 `GL_GEQUAL` and the map regime's draw order becomes a contract (ground, then geometries, then map-anchored
-stickers, later declaration winning an exact tie). **ADR 0026** invents the single directional
-world-anchored light models will be shaded by, before the cycle that needs it, so the constant is argued in
-the open rather than appearing unexplained in a shader.
+stickers). **ADR 0027** then supersedes 0025's depth-*write* ruling: near ties, which a moving camera
+produces constantly, z-fight where exact ties do not, and a map-anchored billboard is bisected at any
+nonzero pitch — so no map-regime draw writes depth at all, and declaration order becomes the whole rule
+rather than only the tie-break. Its stated cost, that map-regime content can no longer occlude anything, is
+correct for flat quads and billboards and is what F-2 must reopen for models. **ADR 0026** invents the
+single directional world-anchored light models will be shaded by, before the cycle that needs it, so the
+constant is argued in the open rather than appearing unexplained in a shader.
 
 When golden baselines do arrive they need a finer key than the platform. A hosted macOS runner renders
 through a software renderer while a developer's machine renders through Metal, so the reported renderer
@@ -264,7 +278,10 @@ draw-path assertions. This cycle's release is the internal MVP.
 
 **F-2 — models with textures and animation.** Models with their textures and animation-track time
 sampling, split out so they can ship after the MVP and after the basemap without blocking either — models
-have consumers waiting, unlike terrain.
+have consumers waiting, unlike terrain. It also inherits five open defects from the basemap cycle, two of
+them folded into its scope by owner decision: the composite's double alpha multiply, and reopening ADR
+0027's no-intra-regime-occlusion ruling, which is correct for flat quads and wrong for anything with
+volume. `HANDOFF.md` enumerates all five with their file and line.
 
 ## H — Android and iOS bring-up
 
@@ -284,8 +301,11 @@ rendering work.
 
 A consumer that happens to live in this repo, under its own build like `consumer-smoke`, resolving the
 published coordinate rather than a project dependency. It owns everything RenG refuses to: creating the
-headless CGL context, driving a capture framebuffer, reading back frames, and encoding MP4. It consumes
-a sequence of `FramePlan` JSON documents, which means plan serialization is settled by then.
+headless CGL context, driving a capture framebuffer, reading back frames, and encoding MP4. **Half of it
+already exists** — the visual harness pulled forward into the basemap cycle owns the context, the capture
+and the readback. What is still this cycle's: consuming a sequence of `FramePlan` JSON documents, which
+means plan serialization is settled by then and is still unowned, and a self-contained AVFoundation
+encoder in place of the current print-an-`ffmpeg`-line step.
 
 ## J — Golden-image corpus
 

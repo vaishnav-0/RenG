@@ -167,3 +167,39 @@ semantics would be exactly the boundary violation ADR 0016 exists to prevent. Th
 Whether an unsupported operator should kill the style or drop the layer that uses it is Rentile's call.
 Dropping the layer would turn a total outage into a visible gap, which is the friendlier failure — but
 it is a semantics change with its own consequences, so it is raised rather than requested.
+
+---
+
+## Erratum, 2026-08-23: both requests were answered, and this document's second half is now history
+
+Written against Rentile `0.2.0`, with a `0.4.0` spike in view. The pin is now `0.5.0` (`0f385c7`), and two
+of this document's load-bearing statements no longer describe the engine RenG depends on. The requests are
+left unedited above — they are the record of what was asked and why — and what changed is recorded here.
+
+**The glyph closure shipped, and larger than the ask.** `BasemapRasterizer.planLabelCandidates(style,
+tiles, resourceAccess)` acquires and evaluates the label tiles and freezes the closure *without acquiring
+any of it*, returning a `LabelCandidatePlan` whose `glyphClosure: List<GlyphRangeRef>` is documented as
+exactly the ranges `acquireLabelCandidates` will request from that plan — not a superset and not an
+estimate — sorted, de-duplicated and stable across runs. `acquireLabelCandidates(plan)` then consumes the
+same frozen plan, so the closure cannot under-approximate the acquisition that follows it. Beyond the ask:
+`glyphUrls(template)` composes the concrete URLs through Rentile's own substitution, so RenG never
+reproduces glyph URL composition at all, and `GlyphRangeRef` is `(fontStackDigest, rangeStart)` — identity
+only, no URL, no credential, with the raw font stack deliberately withheld because `text-font` may be
+data-driven. Three new `RentileErrorCode` entries come with it, all raised only from these entry points.
+ADR 0016's exact-URL preregistration can therefore cover glyph ranges, and **E-labels is no longer blocked**.
+
+**"Why it is a total outage rather than a degradation" is no longer true, and the reason it was true is
+gone.** Both premises have changed: `0.5.0` *does* compile symbol-layer text inside `prepare(style)`, and
+the compiler catches the preparation failure rather than letting `failRetained` escape. The layer's
+`textProgram` becomes `null`, the descriptor survives, and an **INFO** `UNSUPPORTED_TEXT_CONSTRUCT`
+diagnostic is emitted — Rentile's own ADR 0026 rule that no style which prepared successfully before may
+fail to prepare after. So the friendlier failure this document raised without requesting is what Rentile
+chose.
+
+**The four operators are still absent** from `compileNode` at the pinned commit, so the defect report
+stands; only its severity moves. And the new failure mode is arguably worse for a consumer than the old
+one: 20 of 34 styles now lose their map text **silently**, because RenG reads no Rentile diagnostic
+anywhere — deliberately, since `RenderDiagnostic` carries free-form `details` that ADR 0016's redaction
+rule forbids forwarding (`EngineFailureClassification.kt:50-52`). A loud outage is at least visible.
+Surfacing `code` and `severity` without `details` is a design decision E-labels owes, and there is no
+symbol-layer style fixture anywhere under `kmp/src/`, so RenG's own suite detects neither behaviour.
