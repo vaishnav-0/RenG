@@ -48,6 +48,15 @@ private val ACCESSOR_BOUND_FIELDS = listOf("min", "max")
 private const val CUBIC_SPLINE_INTERPOLATION = "CUBICSPLINE"
 
 /**
+ * The glTF scene-graph node depth every caller of [parseGltf] outside this file's own tests passes:
+ * generous for anything RenG draws, finite for a cyclic graph the specification forbids. Shared
+ * rather than restated per call site because the two `PARSE_GLB`/`VALIDATE_GLB_FEATURES` gates and
+ * [com.rohittp.reng.internal.model.decodeModel] must agree on it exactly -- a decoder with a
+ * shallower bound than the gate that admitted a document would refuse a model the gate passed.
+ */
+internal const val MAXIMUM_GLB_NODE_DEPTH: Int = 128
+
+/**
  * Parses [json] -- already scanned as a well-formed GLB JSON chunk by [scanGlb] -- into a fully
  * parsed, internally consistent [GltfDocument], or reports the first structural fault found.
  *

@@ -86,6 +86,23 @@ internal class BinChunk(private val bytes: ByteArray, private val range: IntRang
         offset >= 0L && length >= 0L && offset <= byteCount.toLong() - length
 
     /**
+     * The [length] bytes starting at [offset], copied out of the chunk, or `null` when that span is
+     * not entirely inside it. This is the one read in this file that is not accessor-shaped: an
+     * embedded glTF image is an opaque byte run addressed by a buffer view alone -- no component
+     * type, no element count -- and its decoder ([com.rohittp.reng.internal.image.decodePng]) takes
+     * a `ByteArray` of exactly that run.
+     *
+     * A copy, unlike the array [BinChunk] itself holds: the returned bytes outlive this call inside
+     * a decoder that is entitled to assume nothing else can rewrite them, and the run is one image
+     * rather than the whole model.
+     */
+    internal fun copyOfRange(offset: Long, length: Long): ByteArray? {
+        if (!covers(offset, length)) return null
+        val from = start + offset.toInt()
+        return bytes.copyOfRange(from, from + length.toInt())
+    }
+
+    /**
      * The [componentByteCount] bytes at [offset] read as an unsigned little-endian integer. All six
      * published targets are little-endian and glTF fixes the BIN chunk's byte order as little-endian
      * regardless, so this is the format on the wire, not a host assumption (the same reasoning
