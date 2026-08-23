@@ -153,6 +153,7 @@ class NodeTransformsTest {
         bufferViews = emptyList(),
         meshes = emptyList<GltfMesh>(),
         nodes = nodes,
+        skins = emptyList(),
         scenes = scenes,
         defaultScene = defaultScene,
         animations = emptyList<GltfAnimation>(),
