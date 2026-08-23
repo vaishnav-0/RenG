@@ -9,8 +9,11 @@ import com.rohittp.reng.ResourceKind
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.rentile.BatchRenderException
 import com.rohittp.rentile.ForeignPreparedBatchException
+import com.rohittp.rentile.ForeignLabelCandidatePlanException
 import com.rohittp.rentile.ForeignPreparedStyleException
+import com.rohittp.rentile.GlyphTemplateMismatchException
 import com.rohittp.rentile.InvalidTileIdException
+import com.rohittp.rentile.LabelCandidatePlanClosedException
 import com.rohittp.rentile.PngEncodingException
 import com.rohittp.rentile.PreparedBatchClosedException
 import com.rohittp.rentile.RasterizationException
@@ -40,7 +43,7 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
 
 /**
  * The firewall's failure half. Every assertion here is a contract about what a consumer is allowed to
- * observe after Rentile fails, so each one is written against Rentile's real 0.2.0 exception surface --
+ * observe after Rentile fails, so each one is written against Rentile's real 0.5.0 exception surface --
  * the exemplars below are constructed with the exact constructor signatures Rentile publishes, so a
  * signature change in a future Rentile breaks this test's compilation rather than silently reclassifying.
  */
@@ -197,6 +200,28 @@ class EngineFailureClassificationTest {
             stage = PipelineStage.RESOURCE_DECODING,
             diagnosticPresent = true,
         ),
+        // Rentile 0.5.0's three label-candidate codes. RenG never calls `acquireLabelCandidates`, so
+        // none of these can arrive from a `prepare`, `prepareBatch`, or `render` RenG made; they are
+        // asserted anyway because the classifier must still answer for every code the enum admits, and
+        // the answer that does not fabricate a label stage RenG has not built is the fail-closed one.
+        RentileErrorCode.FOREIGN_LABEL_CANDIDATE_PLAN to ExpectedClassification(
+            failure = ForeignLabelCandidatePlanException(),
+            code = RenGErrorCode.BASEMAP_RENDER_FAILED,
+            stage = PipelineStage.BASEMAP_RENDER,
+            diagnosticPresent = false,
+        ),
+        RentileErrorCode.LABEL_CANDIDATE_PLAN_CLOSED to ExpectedClassification(
+            failure = LabelCandidatePlanClosedException(),
+            code = RenGErrorCode.BASEMAP_RENDER_FAILED,
+            stage = PipelineStage.BASEMAP_RENDER,
+            diagnosticPresent = false,
+        ),
+        RentileErrorCode.GLYPH_TEMPLATE_MISMATCH to ExpectedClassification(
+            failure = GlyphTemplateMismatchException(credentialBearingMessage),
+            code = RenGErrorCode.BASEMAP_RENDER_FAILED,
+            stage = PipelineStage.BASEMAP_RENDER,
+            diagnosticPresent = false,
+        ),
     )
 
     @Test
@@ -269,22 +294,63 @@ class EngineFailureClassificationTest {
         assertNull(diagnostic.limit)
     }
 
+    /**
+     * Every engine resource class either has a RenG counterpart or fails closed, and which of the two
+     * it does is asserted per class rather than in aggregate.
+     *
+     * This test read `mapped.filterValues { it == null }` against `emptyList()` while Rentile had eight
+     * classes and RenG routed all eight. Rentile 0.3.0 added a ninth, `GLYPH_RANGE`, reachable only from
+     * `acquireLabelCandidates` -- an entry point RenG does not call -- and RenG deliberately does not
+     * route it. Its own failure message already prescribed what to do about that: *an unmapped one must
+     * fail closed*. So the unmapped set is now asserted to be exactly `GLYPH_RANGE`, and
+     * [failsClosedOnAnEngineResourceClassRenGDoesNotRoute] proves the failing-closed half rather than
+     * leaving it asserted only by a name. A tenth class a future Rentile adds still breaks this test,
+     * which is the whole point of it.
+     *
+     * The injectivity assertion now counts **mapped** values only. With a `null` in the map the old
+     * `mapped.values.toSet().size == entries.size` form still passes -- eight distinct classes plus
+     * `null` is nine distinct values for nine entries -- so it would have gone on reporting success
+     * while measuring nothing. Counting the non-null values against the mapped keys keeps it honest: it
+     * fails if two engine classes ever collapse onto one RenG class.
+     */
     @Test
     fun mapsEveryEngineResourceClassOntoARenGResourceClass() {
         val mapped = RentileResourceClass.entries.associateWith { rengResourceClassOf(it) }
+        val unmapped = mapped.filterValues { it == null }.keys.toList()
+        val routed = mapped.filterValues { it != null }
 
         assertEquals(
-            emptyList(),
-            mapped.filterValues { it == null }.keys.toList(),
-            "every Rentile 0.2.0 resource class has a RenG counterpart; an unmapped one must fail closed",
+            listOf(RentileResourceClass.GLYPH_RANGE),
+            unmapped,
+            "GLYPH_RANGE is the one engine class RenG does not route; any other unmapped one must fail closed",
         )
         assertEquals(
-            RentileResourceClass.entries.size,
-            mapped.values.toSet().size,
+            routed.size,
+            routed.values.toSet().size,
             "the engine-to-RenG resource class correspondence must stay injective",
         )
         assertEquals(ResourceClass.BASEMAP_STYLE, rengResourceClassOf(RentileResourceClass.STYLE))
         assertEquals(ResourceClass.BASEMAP_GEO_JSON, rengResourceClassOf(RentileResourceClass.GEO_JSON))
+    }
+
+    /**
+     * The other half of the contract above: an engine failure that names a class RenG does not route is
+     * reported as a basemap failure that names nothing, not as a thrown exception out of the classifier
+     * and not as a guessed RenG class. Asserted on both identity-bearing engine failures, because both
+     * reach [rengResourceClassOf] and both would otherwise have a `ResourceKey` to fabricate.
+     */
+    @Test
+    fun failsClosedOnAnEngineResourceClassRenGDoesNotRoute() {
+        listOf(
+            acquisitionFailure(resourceClass = RentileResourceClass.GLYPH_RANGE),
+            decodeFailure(resourceClass = RentileResourceClass.GLYPH_RANGE),
+        ).forEach { engineFailure ->
+            val descriptor = classifyEngineFailure(engineFailure)
+
+            assertEquals(RenGErrorCode.BASEMAP_RENDER_FAILED, descriptor.code)
+            assertEquals(PipelineStage.BASEMAP_RENDER, descriptor.stage)
+            assertNull(descriptor.diagnostic, "a class RenG does not route must name no resource")
+        }
     }
 
     @Test
