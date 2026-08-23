@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 
 class DoubleLinearAlgebraTest {
     @Test
@@ -155,10 +156,78 @@ class DoubleLinearAlgebraTest {
         assertVectorClose(DoubleVector3(1.0, -1.0, 0.0), composed * DoubleVector3(0.0, 1.0, 1.0))
     }
 
+    @Test
+    fun aMatrix3InverseUndoesARotation() {
+        val rotation = DoubleMatrix3.rotationYDegrees(37.0) * DoubleMatrix3.rotationXDegrees(52.0)
+        val inverse = rotation.inverse()
+
+        assertMatrixNear(DoubleMatrix3.identity, rotation * inverse!!, 1e-12)
+        // A rotation's inverse is its transpose -- a cheap check the adjugate implementation is right.
+        assertMatrixNear(rotation.transpose(), inverse, 1e-12)
+    }
+
+    @Test
+    fun aSingularMatrix3HasNoInverse() {
+        // The third row is the first row doubled: the rows are linearly dependent, so det is zero.
+        val singular = DoubleMatrix3.fromRows(
+            listOf(
+                listOf(1.0, 2.0, 3.0),
+                listOf(4.0, 5.0, 6.0),
+                listOf(2.0, 4.0, 6.0),
+            ),
+        )
+
+        assertNull(singular.inverse(), "a rank-deficient 3 by 3 matrix has no inverse and must say so")
+    }
+
+    @Test
+    fun anAffineInverseUndoesATranslateRotateScale() {
+        val m = translate(3.0, -4.0, 5.0) *
+            DoubleMatrix4.fromRotation(DoubleMatrix3.rotationZDegrees(37.0)) *
+            scale(2.0, 0.5, 3.0)
+
+        assertMatrixNear(DoubleMatrix4.identity, m * m.inverseAffine()!!, 1e-10)
+    }
+
+    @Test
+    fun anAffineInverseOfASingularTransformIsNull() {
+        assertNull(scale(1.0, 0.0, 1.0).inverseAffine(), "a zero-scale node has no inverse and must say so")
+    }
+
+    private fun translate(x: Double, y: Double, z: Double): DoubleMatrix4 = DoubleMatrix4.fromRows(
+        listOf(
+            listOf(1.0, 0.0, 0.0, x),
+            listOf(0.0, 1.0, 0.0, y),
+            listOf(0.0, 0.0, 1.0, z),
+            listOf(0.0, 0.0, 0.0, 1.0),
+        ),
+    )
+
+    private fun scale(x: Double, y: Double, z: Double): DoubleMatrix4 = DoubleMatrix4.fromRows(
+        listOf(
+            listOf(x, 0.0, 0.0, 0.0),
+            listOf(0.0, y, 0.0, 0.0),
+            listOf(0.0, 0.0, z, 0.0),
+            listOf(0.0, 0.0, 0.0, 1.0),
+        ),
+    )
+
     private fun assertVectorClose(expected: DoubleVector3, actual: DoubleVector3, tolerance: Double = 1e-12) {
         assertClose(expected.x, actual.x, tolerance)
         assertClose(expected.y, actual.y, tolerance)
         assertClose(expected.z, actual.z, tolerance)
+    }
+
+    private fun assertMatrixNear(expected: DoubleMatrix3, actual: DoubleMatrix3, tolerance: Double) {
+        for (row in 0 until 3) for (column in 0 until 3) {
+            assertClose(expected[row, column], actual[row, column], tolerance)
+        }
+    }
+
+    private fun assertMatrixNear(expected: DoubleMatrix4, actual: DoubleMatrix4, tolerance: Double) {
+        for (row in 0 until 4) for (column in 0 until 4) {
+            assertClose(expected[row, column], actual[row, column], tolerance)
+        }
     }
 
     private fun assertClose(expected: Double, actual: Double, tolerance: Double) {
