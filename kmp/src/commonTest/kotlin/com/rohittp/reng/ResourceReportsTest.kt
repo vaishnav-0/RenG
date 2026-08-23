@@ -1,5 +1,6 @@
 package com.rohittp.reng
 
+import com.rohittp.reng.internal.reportOrder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -161,6 +162,34 @@ class ResourceReportsTest {
         assertEquals(report.hashCode(), equalReport.hashCode())
         assertNotEquals(report, ResourceReport(report.entries, ResourceUsage(3L, 2L, 2L, false)))
         assertRedacted(report.toString(), stableId('a'), stableId('b'), stableId('c'), stableId('d'), stableId('e'), stableId('f'))
+    }
+
+    @Test
+    fun theTwoNewKindsSortAfterEveryExistingOneInAReport() {
+        assertEquals(5, ResourceKind.MODEL_GEOMETRY.reportOrder)
+        assertEquals(6, ResourceKind.MODEL_IMAGE.reportOrder)
+        ResourceKind.entries
+            .filter { it != ResourceKind.MODEL_GEOMETRY && it != ResourceKind.MODEL_IMAGE }
+            .forEach { existing -> assertTrue(existing.reportOrder < ResourceKind.MODEL_GEOMETRY.reportOrder) }
+
+        val entries = mutableListOf(
+            entryWith(key = ResourceKey(ResourceKind.MODEL_IMAGE, stableId('a'), null)),
+            entryWith(key = ResourceKey(ResourceKind.MODEL_GEOMETRY, stableId('b'), null)),
+            entryWith(key = ResourceKey(ResourceKind.OFFSCREEN_SURFACE, stableId('c'), null)),
+            entryWith(key = externalKey('d', ResourceClass.STICKER_IMAGE)),
+        )
+        val report = ResourceReport(entries, ResourceUsage(0L, 0L, 0L, false))
+        entries.clear()
+
+        assertEquals(
+            listOf(
+                externalKey('d', ResourceClass.STICKER_IMAGE),
+                ResourceKey(ResourceKind.OFFSCREEN_SURFACE, stableId('c'), null),
+                ResourceKey(ResourceKind.MODEL_GEOMETRY, stableId('b'), null),
+                ResourceKey(ResourceKind.MODEL_IMAGE, stableId('a'), null),
+            ),
+            report.entries.map { it.key },
+        )
     }
 
     @Test

@@ -67,6 +67,8 @@ class ResourcesTest {
                 ResourceKind.INTERNAL_PIPELINE,
                 ResourceKind.OFFSCREEN_SURFACE,
                 ResourceKind.BASEMAP_TILE,
+                ResourceKind.MODEL_GEOMETRY,
+                ResourceKind.MODEL_IMAGE,
             ),
             ResourceKind.entries,
         )
