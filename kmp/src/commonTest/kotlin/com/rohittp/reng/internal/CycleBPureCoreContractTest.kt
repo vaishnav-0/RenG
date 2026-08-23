@@ -2089,8 +2089,10 @@ private fun plan(
 
 private fun sticker(token: String): Sticker = Sticker(screenPlacement(), ResourceLocator("$token.png"))
 
+// MAP, not SCREEN: ADR 0029 refuses a SCREEN-positioned Model at frame planning, and this trace
+// test is not about draw regime.
 private fun model(glb: String, texture: String? = null): Model = Model(
-    placement = screenPlacement(),
+    placement = mapPlacement(),
     glb = ResourceLocator("$glb.glb"),
     texture = texture?.let { ResourceLocator("$it.png") },
 )
@@ -2110,6 +2112,15 @@ private fun screenPlacement(): Placement = Placement(
     rotationMode = AnchoringMode.SCREEN,
     rotation = Vector3(0.0, 0.0, 0.0),
     scaleMode = AnchoringMode.SCREEN,
+    scale = 1.0,
+)
+
+private fun mapPlacement(): Placement = Placement(
+    positionMode = AnchoringMode.MAP,
+    position = Vector3(10.0, 20.0, 0.0),
+    rotationMode = AnchoringMode.MAP,
+    rotation = Vector3(0.0, 0.0, 0.0),
+    scaleMode = AnchoringMode.MAP,
     scale = 1.0,
 )
 

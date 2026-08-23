@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.planning
 
+import com.rohittp.reng.AnchoringMode
 import com.rohittp.reng.FramePlan
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.PipelineStage
@@ -164,6 +165,15 @@ internal fun planMercatorSpatial(
         appendByDrawRegime((outcome as SpatialOutcome.Success).value, mapEntries, screenEntries)
     }
     for ((index, model) in plan.modelsForCore().withIndex()) {
+        // ADR 0029: a SCREEN-positioned Model is refused before acquisition or drawing, never
+        // substituted. screenOrthographicProjection (internal/gl/SceneContent.kt) has no z row at
+        // all, so a volumetric mesh drawn there would show its back faces through its front ones --
+        // a silently wrong picture rather than a missing one. Only a Model's SCREEN *position* is
+        // refused: a SCREEN-positioned Sticker is flat and has no interior to occlude, and a SCREEN
+        // rotation or scale over a MAP position is the billboard ADR 0029 explicitly keeps working.
+        if (model.placement.positionMode == AnchoringMode.SCREEN) {
+            return screenPositionedModelFailure()
+        }
         val outcome = resolveDrawnThing(DrawnThingReference.ModelAt(index), model.placement, camera)
         if (outcome is SpatialOutcome.Failure) return outcome
         appendByDrawRegime((outcome as SpatialOutcome.Success).value, mapEntries, screenEntries)
@@ -226,6 +236,17 @@ private fun basemapTileBudgetFailure(
             fieldName = DiagnosticField.BASEMAP_TILE_INSTANCES,
             limit = overBudget.limit.toLong(),
             actual = overBudget.actual,
+        ),
+    ),
+)
+
+private fun screenPositionedModelFailure(): SpatialOutcome.Failure = SpatialOutcome.Failure(
+    FailureDescriptor(
+        code = RenGErrorCode.UNSUPPORTED_ANCHORING_MODE,
+        stage = PipelineStage.FRAME_PLANNING,
+        diagnostic = failureContextDiagnostic(
+            stage = PipelineStage.FRAME_PLANNING,
+            fieldName = DiagnosticField.PLACEMENT_POSITION_MODE,
         ),
     ),
 )

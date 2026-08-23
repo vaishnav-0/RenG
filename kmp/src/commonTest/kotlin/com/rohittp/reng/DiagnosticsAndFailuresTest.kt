@@ -29,6 +29,7 @@ class DiagnosticsAndFailuresTest {
         assertEquals(
             listOf(
                 "INVALID_VALUE", "RESOURCE_LIMIT_EXCEEDED", "UNSUPPORTED_PROJECTION_MODE",
+                "UNSUPPORTED_ANCHORING_MODE",
                 "PREPARATION_ORDER_VIOLATION", "PREPARATION_IN_PROGRESS", "RENDERER_CLOSED",
                 "RENDER_CONTEXT_ADOPTION_REQUIRED", "NO_CURRENT_RENDER_CONTEXT",
                 "DIFFERENT_CURRENT_RENDER_CONTEXT", "UNSUPPORTED_RENDER_CONTEXT",
@@ -56,7 +57,7 @@ class DiagnosticsAndFailuresTest {
                 "plans", "frameIndex", "projectionMode", "camera.latitude",
                 "camera.unwrappedLongitude", "mapPosition.latitude",
                 "mapPosition.unwrappedLongitude", "mapPosition.altitude", "screenPosition.x",
-                "screenPosition.y", "placement.scale", "geometry.latitude",
+                "screenPosition.y", "placement.positionMode", "placement.scale", "geometry.latitude",
                 "geometry.unwrappedLongitude", "geometry.altitude", "basemapTileInstances",
                 "responseBodyBytes", "resource", "frameIdentity", "animationSelector",
                 "shaderPair", "renderTarget",
@@ -93,9 +94,9 @@ class DiagnosticsAndFailuresTest {
 
     @Test
     fun failureFactoryAcceptsEveryAllowedFailureTableShape() {
-        assertEquals(97, allowedFailureCases.size)
+        assertEquals(98, allowedFailureCases.size)
         assertEquals(28, allowedFailureCases.count { !it.hasDiagnostic })
-        assertEquals(69, allowedFailureCases.count { it.hasDiagnostic })
+        assertEquals(70, allowedFailureCases.count { it.hasDiagnostic })
         assertEquals(RenGErrorCode.entries.toSet(), allowedFailureCases.map { it.code }.toSet())
 
         allowedFailureCases.forEach(::assertFailureTableOutcome)
@@ -448,6 +449,7 @@ class DiagnosticsAndFailuresTest {
                 DiagnosticField.MAP_POSITION_ALTITUDE,
                 DiagnosticField.SCREEN_POSITION_X,
                 DiagnosticField.SCREEN_POSITION_Y,
+                DiagnosticField.PLACEMENT_POSITION_MODE,
                 DiagnosticField.PLACEMENT_SCALE,
                 DiagnosticField.GEOMETRY_LATITUDE,
                 DiagnosticField.GEOMETRY_UNWRAPPED_LONGITUDE,
@@ -558,6 +560,7 @@ class DiagnosticsAndFailuresTest {
                 ),
             )
             add(failureContext(RenGErrorCode.UNSUPPORTED_PROJECTION_MODE, PipelineStage.FRAME_PLANNING, DiagnosticField.PROJECTION_MODE))
+            add(failureContext(RenGErrorCode.UNSUPPORTED_ANCHORING_MODE, PipelineStage.FRAME_PLANNING, DiagnosticField.PLACEMENT_POSITION_MODE))
             add(failureContext(RenGErrorCode.PREPARATION_ORDER_VIOLATION, PipelineStage.FRAME_PLANNING, DiagnosticField.FRAME_INDEX))
             add(failureContext(RenGErrorCode.INVALID_RENDER_TARGET, PipelineStage.RENDER_TARGET, DiagnosticField.RENDER_TARGET))
             add(failureContext(RenGErrorCode.AMBIGUOUS_RESOURCE_ROUTE, PipelineStage.RESOURCE_LOOKUP, DiagnosticField.RESOURCE))

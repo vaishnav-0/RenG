@@ -22,6 +22,7 @@ internal enum class DiagnosticField(internal val wireName: String) {
     MAP_POSITION_ALTITUDE("mapPosition.altitude"),
     SCREEN_POSITION_X("screenPosition.x"),
     SCREEN_POSITION_Y("screenPosition.y"),
+    PLACEMENT_POSITION_MODE("placement.positionMode"),
     PLACEMENT_SCALE("placement.scale"),
     GEOMETRY_LATITUDE("geometry.latitude"),
     GEOMETRY_UNWRAPPED_LONGITUDE("geometry.unwrappedLongitude"),
@@ -136,6 +137,7 @@ private val diagnosticFieldsByStage: Map<PipelineStage, Set<DiagnosticField>> = 
         DiagnosticField.MAP_POSITION_ALTITUDE,
         DiagnosticField.SCREEN_POSITION_X,
         DiagnosticField.SCREEN_POSITION_Y,
+        DiagnosticField.PLACEMENT_POSITION_MODE,
         DiagnosticField.PLACEMENT_SCALE,
         DiagnosticField.GEOMETRY_LATITUDE,
         DiagnosticField.GEOMETRY_UNWRAPPED_LONGITUDE,
@@ -274,6 +276,17 @@ private fun failureRule(code: RenGErrorCode, stage: PipelineStage): FailureRule?
             stage,
             PipelineStage.FRAME_PLANNING,
             FailureRule.Context(setOf(DiagnosticField.PROJECTION_MODE)),
+        )
+
+        // ADR 0029: a SCREEN-positioned Model is refused at frame planning for the same reason
+        // UNSUPPORTED_PROJECTION_MODE refuses ProjectionMode.GLOBE -- RenG never substitutes a
+        // mode it does not implement. One level down from a projection: the screen projection has
+        // no z row at all, so a volumetric mesh drawn there would show its back faces through its
+        // front ones.
+        RenGErrorCode.UNSUPPORTED_ANCHORING_MODE -> ruleAt(
+            stage,
+            PipelineStage.FRAME_PLANNING,
+            FailureRule.Context(setOf(DiagnosticField.PLACEMENT_POSITION_MODE)),
         )
 
         RenGErrorCode.PREPARATION_ORDER_VIOLATION -> ruleAt(
