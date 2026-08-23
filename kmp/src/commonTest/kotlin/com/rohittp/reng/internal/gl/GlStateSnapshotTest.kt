@@ -96,6 +96,22 @@ class GlStateSnapshotTest {
         assertTrue(binding.log.contains("bindBuffer(0x8892,41)"))
         assertTrue(binding.log.contains("bindBuffer(0x88EC,42)"))
         assertTrue(binding.log.contains("bindBuffer(0x8A11,43)"))
+        assertTrue(binding.log.contains("bindBufferBase(0x8A11,0,44)"))
+    }
+
+    /**
+     * `glBindBufferBase(GL_UNIFORM_BUFFER, n, b)` writes an indexed binding the generic
+     * `GL_UNIFORM_BUFFER_BINDING` query never reaches. This test proves the corrected Restore Set
+     * captures and restores that indexed binding: a caller's own UBO binding at
+     * [RENG_JOINT_UNIFORM_BINDING_POINT] must survive a RenG frame that rebinds it mid-frame, the
+     * same way every other member of the Restore Set survives.
+     */
+    @Test fun theIndexedUniformBufferBindingIsCapturedAndRestored() {
+        val binding = RecordingGlBinding().apply { indexedUniformBuffer[0] = 77 }
+        withCapturedGlState(binding, esProfile(), FRAME_TEXTURE_UNIT_COUNT) {
+            binding.bindBufferBase(GL_UNIFORM_BUFFER, 0, 5)
+        }
+        assertEquals(77, binding.indexedUniformBuffer[0], "a caller's own UBO binding must survive a RenG frame")
     }
 
     @Test fun restoreWritesBackBlendState() {
@@ -231,6 +247,7 @@ class GlStateSnapshotTest {
         integers[GL_ARRAY_BUFFER_BINDING] = intArrayOf(41)
         integers[GL_PIXEL_UNPACK_BUFFER_BINDING] = intArrayOf(42)
         integers[GL_UNIFORM_BUFFER_BINDING] = intArrayOf(43)
+        indexedUniformBuffer[RENG_JOINT_UNIFORM_BINDING_POINT] = 44
         integers[GL_BLEND_SRC_RGB] = intArrayOf(GL_SRC_ALPHA)
         integers[GL_BLEND_DST_RGB] = intArrayOf(GL_ONE_MINUS_SRC_ALPHA)
         integers[GL_BLEND_SRC_ALPHA] = intArrayOf(GL_ONE)

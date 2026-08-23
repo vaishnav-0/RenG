@@ -93,4 +93,14 @@ internal enum class GlEntryPoint(internal val cName: String) {
     DRAW_ARRAYS("glDrawArrays"),
     DRAW_ELEMENTS("glDrawElements"),
     FINISH("glFinish"),
+
+    // Uniform buffers, added for skinning: joint counts in the consumer's own corpus reach 112,
+    // and GLSL ES 3.00 guarantees only 64 mat4 of vertex uniforms, so joint matrices travel in a
+    // uniform buffer instead. Appended after FINISH rather than interleaved so every existing
+    // GlEntryPoint.ordinal — which LinuxGlBinding indexes its resolved function-pointer table by —
+    // stays unchanged.
+    BIND_BUFFER_BASE("glBindBufferBase"),
+    GET_UNIFORM_BLOCK_INDEX("glGetUniformBlockIndex"),
+    UNIFORM_BLOCK_BINDING("glUniformBlockBinding"),
+    GET_INTEGERI_V("glGetIntegeri_v"),
 }

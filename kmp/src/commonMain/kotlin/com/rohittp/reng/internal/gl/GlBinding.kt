@@ -9,6 +9,14 @@ internal interface GlBinding {
     fun getBooleanv(pname: Int, out: BooleanArray)
     fun isEnabled(cap: Int): Boolean
 
+    /**
+     * The indexed form of [getIntegerv]: reads slot [index] of an indexed target such as
+     * `GL_UNIFORM_BUFFER_BINDING`, where the plain (non-indexed) query only ever reports the
+     * generic binding. RenG needs this because `glBindBufferBase` writes both bindings at once —
+     * see [GlStateSnapshot]'s indexed uniform-buffer capture.
+     */
+    fun getIntegeri_v(pname: Int, index: Int, out: IntArray)
+
     fun genFramebuffers(count: Int, out: IntArray)
     fun deleteFramebuffers(count: Int, names: IntArray)
     fun bindFramebuffer(target: Int, framebuffer: Int)
@@ -49,6 +57,14 @@ internal interface GlBinding {
     fun genBuffers(count: Int, out: IntArray)
     fun deleteBuffers(count: Int, names: IntArray)
     fun bindBuffer(target: Int, buffer: Int)
+
+    /**
+     * Binds [buffer] to the indexed binding point [index] of [target] (in RenG's case always
+     * `GL_UNIFORM_BUFFER`), for the joint-matrix uniform buffer skinning needs. Unlike [bindBuffer],
+     * this also writes an indexed binding the corrected Restore Set must save and restore — see
+     * [GlStateSnapshot].
+     */
+    fun bindBufferBase(target: Int, index: Int, buffer: Int)
     fun bufferData(target: Int, size: Int, data: ByteArray?, usage: Int)
     fun bufferSubData(target: Int, offset: Int, size: Int, data: ByteArray)
     fun genVertexArrays(count: Int, out: IntArray)
@@ -89,6 +105,17 @@ internal interface GlBinding {
      */
     fun uniform1ui(location: Int, value: Int)
     fun uniformMatrix4fv(location: Int, count: Int, transpose: Boolean, value: FloatArray)
+
+    /**
+     * Looks up the index of the uniform block named [name] in [program], for binding it to a
+     * uniform-buffer binding point with [uniformBlockBinding]. Returns `GL_INVALID_INDEX`'s bit
+     * pattern (`-1` as a signed [Int]) when [program] declares no such block, mirroring
+     * [getUniformLocation]'s negative-location convention for an undeclared uniform.
+     */
+    fun getUniformBlockIndex(program: Int, name: String): Int
+
+    /** Binds the uniform block at [blockIndex] in [program] to [bindingPoint]. */
+    fun uniformBlockBinding(program: Int, blockIndex: Int, bindingPoint: Int)
 
     fun enable(cap: Int)
     fun disable(cap: Int)

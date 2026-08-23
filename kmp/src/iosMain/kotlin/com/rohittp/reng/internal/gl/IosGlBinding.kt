@@ -27,6 +27,7 @@ import kotlinx.cinterop.value
 import platform.gles3.glActiveTexture
 import platform.gles3.glAttachShader
 import platform.gles3.glBindBuffer
+import platform.gles3.glBindBufferBase
 import platform.gles3.glBindFramebuffer
 import platform.gles3.glBindRenderbuffer
 import platform.gles3.glBindSampler
@@ -81,12 +82,14 @@ import platform.gles3.glGetBooleanv
 import platform.gles3.glGetError
 import platform.gles3.glGetFloatv
 import platform.gles3.glGetIntegerv
+import platform.gles3.glGetIntegeri_v
 import platform.gles3.glGetProgramInfoLog
 import platform.gles3.glGetProgramiv
 import platform.gles3.glGetShaderInfoLog
 import platform.gles3.glGetShaderiv
 import platform.gles3.glGetString
 import platform.gles3.glGetStringi
+import platform.gles3.glGetUniformBlockIndex
 import platform.gles3.glGetUniformLocation
 import platform.gles3.glIsEnabled
 import platform.gles3.glIsFramebuffer
@@ -107,6 +110,7 @@ import platform.gles3.glUniform1ui
 import platform.gles3.glUniform2f
 import platform.gles3.glUniform3f
 import platform.gles3.glUniform4f
+import platform.gles3.glUniformBlockBinding
 import platform.gles3.glUniformMatrix4fv
 import platform.gles3.glUseProgram
 import platform.gles3.glVertexAttribPointer
@@ -149,6 +153,15 @@ internal object IosGlBinding : GlBinding {
     }
 
     override fun isEnabled(cap: Int): Boolean = glIsEnabled(cap.toUInt()).toInt() != 0
+
+    override fun getIntegeri_v(pname: Int, index: Int, out: IntArray) {
+        require(out.isNotEmpty()) { "an indexed integer query needs a destination" }
+        memScoped {
+            val buffer = allocArray<IntVar>(out.size)
+            glGetIntegeri_v(pname.toUInt(), index.toUInt(), buffer)
+            for (i in out.indices) out[i] = buffer[i]
+        }
+    }
 
     override fun genFramebuffers(count: Int, out: IntArray) = memScoped {
         generateNames(count, out, "glGenFramebuffers") { n, buf -> glGenFramebuffers(n, buf) }
@@ -306,6 +319,10 @@ internal object IosGlBinding : GlBinding {
         glBindBuffer(target.toUInt(), buffer.toUInt())
     }
 
+    override fun bindBufferBase(target: Int, index: Int, buffer: Int) {
+        glBindBufferBase(target.toUInt(), index.toUInt(), buffer.toUInt())
+    }
+
     override fun bufferData(target: Int, size: Int, data: ByteArray?, usage: Int) {
         if (data == null || data.isEmpty()) {
             glBufferData(target.toUInt(), size.toLong(), null, usage.toUInt())
@@ -461,6 +478,13 @@ internal object IosGlBinding : GlBinding {
         value.usePinned { pinned ->
             glUniformMatrix4fv(location, count, transpose.toGlBoolean(), pinned.addressOf(0))
         }
+    }
+
+    override fun getUniformBlockIndex(program: Int, name: String): Int =
+        glGetUniformBlockIndex(program.toUInt(), name).toInt()
+
+    override fun uniformBlockBinding(program: Int, blockIndex: Int, bindingPoint: Int) {
+        glUniformBlockBinding(program.toUInt(), blockIndex.toUInt(), bindingPoint.toUInt())
     }
 
     override fun enable(cap: Int) {

@@ -10,7 +10,7 @@ import platform.posix.dlsym
 private const val EGL_DISPATCH_LIBRARY: String = "libEGL.so.1"
 
 /**
- * Resolves all eighty-four roster entries against the running system's EGL dispatch library.
+ * Resolves all ninety-one roster entries against the running system's EGL dispatch library.
  *
  * Resolution is eager and total: every name must resolve or the whole binding is
  * [GlBindingResult.Unsupported]. This turns a partially resolvable driver into a setup-time
@@ -45,7 +45,7 @@ private fun Boolean.toGlBoolean(): UByte = if (this) 1u.toUByte() else 0u.toUByt
 private fun UByte.toKotlinBoolean(): Boolean = this.toInt() != 0
 
 /**
- * The eighty-four-entry [GlBinding] over a fully resolved function-pointer table.
+ * The ninety-one-entry [GlBinding] over a fully resolved function-pointer table.
  *
  * [table] is indexed by [GlEntryPoint.ordinal]; each property below reinterprets exactly one
  * slot to the C signature Kotlin/Native needs to call it, using the standard width mapping:
@@ -70,6 +70,8 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
         table[GlEntryPoint.GET_BOOLEANV.ordinal].reinterpret()
     private val isEnabledFn: CPointer<CFunction<(UInt) -> UByte>> =
         table[GlEntryPoint.IS_ENABLED.ordinal].reinterpret()
+    private val getIntegeriVFn: CPointer<CFunction<(UInt, UInt, CPointer<IntVar>?) -> Unit>> =
+        table[GlEntryPoint.GET_INTEGERI_V.ordinal].reinterpret()
 
     // ----- Framebuffers / renderbuffers -----
     private val genFramebuffersFn: CPointer<CFunction<(Int, CPointer<UIntVar>?) -> Unit>> =
@@ -141,6 +143,8 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
         table[GlEntryPoint.DELETE_BUFFERS.ordinal].reinterpret()
     private val bindBufferFn: CPointer<CFunction<(UInt, UInt) -> Unit>> =
         table[GlEntryPoint.BIND_BUFFER.ordinal].reinterpret()
+    private val bindBufferBaseFn: CPointer<CFunction<(UInt, UInt, UInt) -> Unit>> =
+        table[GlEntryPoint.BIND_BUFFER_BASE.ordinal].reinterpret()
     private val bufferDataFn: CPointer<CFunction<(UInt, Long, COpaquePointer?, UInt) -> Unit>> =
         table[GlEntryPoint.BUFFER_DATA.ordinal].reinterpret()
     private val bufferSubDataFn: CPointer<CFunction<(UInt, Long, Long, COpaquePointer?) -> Unit>> =
@@ -208,6 +212,10 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
     private val uniformMatrix4fvFn: CPointer<CFunction<
         (Int, Int, UByte, CPointer<FloatVar>?) -> Unit>> =
         table[GlEntryPoint.UNIFORM_MATRIX_4FV.ordinal].reinterpret()
+    private val getUniformBlockIndexFn: CPointer<CFunction<(UInt, CPointer<ByteVar>?) -> UInt>> =
+        table[GlEntryPoint.GET_UNIFORM_BLOCK_INDEX.ordinal].reinterpret()
+    private val uniformBlockBindingFn: CPointer<CFunction<(UInt, UInt, UInt) -> Unit>> =
+        table[GlEntryPoint.UNIFORM_BLOCK_BINDING.ordinal].reinterpret()
 
     // ----- Pipeline state / draw -----
     private val enableFn: CPointer<CFunction<(UInt) -> Unit>> =
@@ -287,6 +295,15 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
     }
 
     override fun isEnabled(cap: Int): Boolean = isEnabledFn(cap.toUInt()).toInt() != 0
+
+    override fun getIntegeri_v(pname: Int, index: Int, out: IntArray) {
+        require(out.isNotEmpty()) { "an indexed integer query needs a destination" }
+        memScoped {
+            val buffer = allocArray<IntVar>(out.size)
+            getIntegeriVFn(pname.toUInt(), index.toUInt(), buffer)
+            for (i in out.indices) out[i] = buffer[i]
+        }
+    }
 
     // ===== Framebuffers / renderbuffers =====
 
@@ -404,6 +421,9 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
     override fun deleteBuffers(count: Int, names: IntArray) = deleteNames(count, names, deleteBuffersFn)
 
     override fun bindBuffer(target: Int, buffer: Int) = bindBufferFn(target.toUInt(), buffer.toUInt())
+
+    override fun bindBufferBase(target: Int, index: Int, buffer: Int) =
+        bindBufferBaseFn(target.toUInt(), index.toUInt(), buffer.toUInt())
 
     override fun bufferData(target: Int, size: Int, data: ByteArray?, usage: Int) {
         if (data == null || data.isEmpty()) {
@@ -535,6 +555,13 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
             uniformMatrix4fvFn(location, count, transpose.toGlBoolean(), pinned.addressOf(0))
         }
     }
+
+    override fun getUniformBlockIndex(program: Int, name: String): Int = memScoped {
+        getUniformBlockIndexFn(program.toUInt(), name.cstr.ptr).toInt()
+    }
+
+    override fun uniformBlockBinding(program: Int, blockIndex: Int, bindingPoint: Int) =
+        uniformBlockBindingFn(program.toUInt(), blockIndex.toUInt(), bindingPoint.toUInt())
 
     // ===== Pipeline state / draw =====
 

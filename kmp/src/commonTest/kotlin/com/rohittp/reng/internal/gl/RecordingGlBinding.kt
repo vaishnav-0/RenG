@@ -12,6 +12,12 @@ package com.rohittp.reng.internal.gl
  * exactly what was passed, not merely that something of a given size was passed. Query results are driven
  * by the public mutable fields below, which tests set up before exercising a binding
  * consumer. This class lives only in `commonTest` and is never part of production source.
+ *
+ * [indexedUniformBuffer] models exactly the one indexed target RenG's Restore Set captures —
+ * `GL_UNIFORM_BUFFER_BINDING` at `RENG_JOINT_UNIFORM_BINDING_POINT` — keyed by binding index alone
+ * rather than by `(pname, index)`, since that is the only indexed query this fake is ever asked to
+ * answer. [getIntegeri_v] reads it and [bindBufferBase] writes it, the same way [integers] backs
+ * [getIntegerv] and the various bind calls above it.
  */
 internal class RecordingGlBinding : GlBinding {
     val log: MutableList<String> = mutableListOf()
@@ -52,6 +58,7 @@ internal class RecordingGlBinding : GlBinding {
     val bufferSubDataPayloads: MutableMap<Int, ByteArray> = mutableMapOf()
     val uniformMatrix4fvValues: MutableMap<Int, FloatArray> = mutableMapOf()
     val pixels: MutableMap<Int, ByteArray> = mutableMapOf()
+    val indexedUniformBuffer: MutableMap<Int, Int> = mutableMapOf()
     private var lastTexImage2DPixels: ByteArray? = null
 
     private fun hex(value: Int): String = "0x${value.toString(16).uppercase()}"
@@ -89,6 +96,12 @@ internal class RecordingGlBinding : GlBinding {
     override fun isEnabled(cap: Int): Boolean {
         log += "isEnabled(${hex(cap)})"
         return enabled[cap] ?: false
+    }
+
+    override fun getIntegeri_v(pname: Int, index: Int, out: IntArray) {
+        require(out.isNotEmpty()) { "an indexed integer query needs a destination" }
+        log += "getIntegeri_v(${hex(pname)},$index)"
+        out[0] = indexedUniformBuffer[index] ?: 0
     }
 
     override fun genFramebuffers(count: Int, out: IntArray) = generate("genFramebuffers", count, out)
@@ -227,6 +240,11 @@ internal class RecordingGlBinding : GlBinding {
         log += "bindBuffer(${hex(target)},$buffer)"
     }
 
+    override fun bindBufferBase(target: Int, index: Int, buffer: Int) {
+        log += "bindBufferBase(${hex(target)},$index,$buffer)"
+        indexedUniformBuffer[index] = buffer
+    }
+
     override fun bufferData(target: Int, size: Int, data: ByteArray?, usage: Int) {
         log += "bufferData(${hex(target)},$size,${hex(usage)})"
         bufferDataPayloads[target] = data
@@ -362,6 +380,15 @@ internal class RecordingGlBinding : GlBinding {
     override fun uniformMatrix4fv(location: Int, count: Int, transpose: Boolean, value: FloatArray) {
         log += "uniformMatrix4fv($location,$count,$transpose)"
         uniformMatrix4fvValues[location] = value
+    }
+
+    override fun getUniformBlockIndex(program: Int, name: String): Int {
+        log += "getUniformBlockIndex($program,$name)"
+        return declaredNames[name] ?: -1
+    }
+
+    override fun uniformBlockBinding(program: Int, blockIndex: Int, bindingPoint: Int) {
+        log += "uniformBlockBinding($program,$blockIndex,$bindingPoint)"
     }
 
     override fun enable(cap: Int) {
