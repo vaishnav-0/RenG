@@ -44,6 +44,27 @@ jobs:
           :kmp:compileKotlinLinuxArm64
           :kmp:bundleAndroidMainAar
 
+      # Diagnostics only, and only after something has already failed. A Kotlin/Native test
+      # failure reaches the Gradle console as "kotlin.AssertionError at null:-1" with its
+      # message stripped, so without these two steps a failure on a hosted runner is
+      # unreadable -- which is exactly how RenG's 0.3.0 publication failed closed. Neither
+      # step runs on a green job, neither can turn a red job green, and neither touches a
+      # gate, a gate's order, or R2.
+      - name: Print failing test details (android-linux)
+        if: failure()
+        shell: bash
+        run: python3 tools/print_test_failures.py kmp/build/test-results
+      - name: Upload test reports (android-linux)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-android-linux
+          path: |
+            kmp/build/reports/tests/**
+            kmp/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
   apple-publication:
     name: Apple and publication metadata
     runs-on: macos-latest
@@ -75,3 +96,24 @@ jobs:
             compileKotlinMacosArm64 \
             compileKotlinLinuxX64 \
             compileKotlinLinuxArm64
+
+      # Diagnostics only, and only after something has already failed. A Kotlin/Native test
+      # failure reaches the Gradle console as "kotlin.AssertionError at null:-1" with its
+      # message stripped, so without these two steps a failure on a hosted runner is
+      # unreadable -- which is exactly how RenG's 0.3.0 publication failed closed. Neither
+      # step runs on a green job, neither can turn a red job green, and neither touches a
+      # gate, a gate's order, or R2.
+      - name: Print failing test details (apple-publication)
+        if: failure()
+        shell: bash
+        run: python3 tools/print_test_failures.py kmp/build/test-results
+      - name: Upload test reports (apple-publication)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-apple-publication
+          path: |
+            kmp/build/reports/tests/**
+            kmp/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14

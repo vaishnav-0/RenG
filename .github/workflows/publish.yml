@@ -104,6 +104,27 @@ jobs:
             :kmp:compileKotlinLinuxArm64 \
             :kmp:bundleAndroidMainAar
 
+      # Diagnostics only, and only after something has already failed. A Kotlin/Native test
+      # failure reaches the Gradle console as "kotlin.AssertionError at null:-1" with its
+      # message stripped, so without these two steps a failure on a hosted runner is
+      # unreadable -- which is exactly how RenG's 0.3.0 publication failed closed. Neither
+      # step runs on a green job, neither can turn a red job green, and neither touches a
+      # gate, a gate's order, or R2.
+      - name: Print failing test details (linux-release)
+        if: failure()
+        shell: bash
+        run: python3 tools/print_test_failures.py kmp/build/test-results
+      - name: Upload test reports (linux-release)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-linux-release
+          path: |
+            kmp/build/reports/tests/**
+            kmp/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
   publish:
     needs: [resolve-version, linux-release]
     name: Publish kmp ${{ needs.resolve-version.outputs.version }}
@@ -321,3 +342,24 @@ jobs:
             --source-commit "$SOURCE_COMMIT" \
             --attempts 12 \
             --retry-delay 5
+
+      # Diagnostics only, and only after something has already failed. A Kotlin/Native test
+      # failure reaches the Gradle console as "kotlin.AssertionError at null:-1" with its
+      # message stripped, so without these two steps a failure on a hosted runner is
+      # unreadable -- which is exactly how RenG's 0.3.0 publication failed closed. Neither
+      # step runs on a green job, neither can turn a red job green, and neither touches a
+      # gate, a gate's order, or R2.
+      - name: Print failing test details (publish)
+        if: failure()
+        shell: bash
+        run: python3 tools/print_test_failures.py kmp/build/test-results
+      - name: Upload test reports (publish)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-publish
+          path: |
+            kmp/build/reports/tests/**
+            kmp/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
