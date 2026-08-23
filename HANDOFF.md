@@ -17,9 +17,16 @@ anonymously over `https://maven.rohittp.com`. `0.3.0`'s names source commit `49c
 `49101f2d5ac66f96d60d6ea580b173bf051da8fa58b680d74fe50476cf4cdbf1`; aggregate metadata lists all three
 versions with `0.3.0` as `<latest>` and `<release>`; all seven publications resolve over public HTTP with
 no credentials. `0.3.0`'s version was declared explicitly in `6e7c023` rather than left to the resolver,
-which would have advanced to `0.2.1` and understated the release. **Its two run IDs are recorded in no
-file, no commit message and no ledger — do not invent them, and do not call the GitHub API and then write
-the answer down as though it had always been here.**
+which would have advanced to `0.2.1` and understated the release. Its run IDs were absent from every file,
+commit message and ledger; they are recorded here **from direct observation at release time** — CI
+`32621399551` and publication `32621399566`, both against `49cc1d5` — alongside an anonymous check of the
+completion record and all seven POMs. They are written down because they were watched, not recovered
+afterwards: a later reader should treat a run ID that appears without that provenance as unverified, and
+should not call the GitHub API and then record the answer as though it had always been here.
+
+The first `0.3.0` attempt, run `32597181882` on `806007d`, **failed closed** before any R2 step — every
+one of them is `skipped` in that run — which is why `0.3.0` was retried at the same version rather than
+bumped.
 
 **`main` is five commits ahead of `origin/main`, and the difference is code.** `origin/main` is exactly
 `49cc1d5`, the released commit. Local `main` is `00464c2` and adds ADR 0028's per-role GLB accessor gates
@@ -767,7 +774,8 @@ upload to R2, or claim a public release. Three releases are public and immutable
 `af92901b…`, `0.2.0` from `a2cbe6a9…`, and `0.3.0` from `49cc1d58…`. None can be overwritten, deleted,
 reused or skipped; a partial release is recovered by an explicit upward `VERSION_NAME` change and nothing
 else. Do not infer that any outward gate passed without an observed workflow result — and note that
-`0.3.0`'s own run IDs were never recorded, which is exactly the gap that makes such an inference tempting.
+`0.3.0`'s run IDs were recorded only because someone watched them, which is exactly the gap that makes
+such an inference tempting.
 
 **The unpushed commits on `main` are unreleased.** Pushing them publishes `0.3.1` unless `VERSION_NAME`
 says otherwise in the same push.
