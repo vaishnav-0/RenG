@@ -242,6 +242,90 @@ class GltfParseTest {
         assertIs<GltfParseResult.Parsed>(parse(primitiveWithoutPosition, binChunkLength = 1024L))
     }
 
+    // ---- F-2: skins, and the two structural rules owed alongside them ----
+
+    @Test
+    fun aSkinIsRetainedWithItsJointsAndInverseBindMatrices() {
+        val parsed = assertIs<GltfParseResult.Parsed>(parse(skinnedDocument, binChunkLength = 4096L))
+        val skin = parsed.document.skins.single()
+        assertEquals(listOf(1, 2, 3), skin.joints)
+        assertEquals(0, skin.inverseBindMatrices)
+        assertEquals(1, skin.skeleton)
+    }
+
+    @Test
+    fun aSkinJointNamingNoNodeIsMalformed() {
+        // A joint is a node reference like any other, and an unresolvable reference is
+        // malformation rather than a feature RenG declines.
+        assertEquals(GltfReject.INDEX_OUT_OF_RANGE, reject(skinJointNamingNoNode, binChunkLength = 4096L))
+        assertEquals(
+            GltfReject.INDEX_OUT_OF_RANGE,
+            reject(skinInverseBindMatricesNamingNoAccessor, binChunkLength = 4096L),
+        )
+    }
+
+    @Test
+    fun aSkinWithNoJointsIsMalformed() {
+        // The specification's own `joints` schema carries `minItems: 1`, and a skin with no joint
+        // deforms nothing -- the same class of fault SIZE_FIELD_OUT_OF_RANGE already names.
+        assertEquals(GltfReject.SIZE_FIELD_OUT_OF_RANGE, reject(skinWithEmptyJoints, binChunkLength = 4096L))
+        assertEquals(GltfReject.SIZE_FIELD_OUT_OF_RANGE, reject(skinWithNoJointsMember, binChunkLength = 4096L))
+    }
+
+    @Test
+    fun anAnimationSamplerWhoseOutputCountDisagreesWithItsInputIsMalformed() {
+        // input.count = 4 keyframe times, output.count = 3 values: undecidable. There is no
+        // keyframe the surplus value belongs to and no value the missing keyframe reads.
+        assertEquals(
+            GltfReject.ANIMATION_SAMPLER_COUNTS,
+            reject(samplerCounts(inputCount = 4, outputCount = 3), binChunkLength = 4096L),
+        )
+        assertIs<GltfParseResult.Parsed>(
+            parse(samplerCounts(inputCount = 4, outputCount = 4), binChunkLength = 4096L),
+        )
+    }
+
+    @Test
+    fun readsACubicSplineSamplerAgainstItsOwnThreeValuesPerKeyframe() {
+        // CUBICSPLINE stores an in-tangent, a value and an out-tangent per keyframe. RenG refuses
+        // that interpolation, but PARSE_GLB must not report a legal cubic-spline asset as corrupt:
+        // ADR 0021 gives the refusal to VALIDATE_GLB_FEATURES, which names the interpolation.
+        assertIs<GltfParseResult.Parsed>(
+            parse(
+                samplerCounts(inputCount = 4, outputCount = 12, interpolation = "CUBICSPLINE"),
+                binChunkLength = 4096L,
+            ),
+        )
+        assertEquals(
+            GltfReject.ANIMATION_SAMPLER_COUNTS,
+            reject(
+                samplerCounts(inputCount = 4, outputCount = 4, interpolation = "CUBICSPLINE"),
+                binChunkLength = 4096L,
+            ),
+        )
+    }
+
+    @Test
+    fun twoChannelsInOneAnimationDrivingTheSameNodeAndPathAreMalformed() {
+        assertEquals(
+            GltfReject.DUPLICATE_ANIMATION_CHANNEL_TARGET,
+            reject(
+                twoChannels("""{"node": 0, "path": "translation"}""", """{"node": 0, "path": "translation"}"""),
+                binChunkLength = 4096L,
+            ),
+        )
+        // One node driven on two different paths, two nodes driven on the same path, and two
+        // channels naming no node at all are all ordinary documents: the rule is one target, not
+        // one node, and a channel with no target node is specified as a no-op.
+        for (pair in listOf(
+            """{"node": 0, "path": "translation"}""" to """{"node": 0, "path": "scale"}""",
+            """{"node": 0, "path": "translation"}""" to """{"node": 1, "path": "translation"}""",
+            """{"path": "translation"}""" to """{"path": "translation"}""",
+        )) {
+            assertIs<GltfParseResult.Parsed>(parse(twoChannels(pair.first, pair.second), binChunkLength = 4096L))
+        }
+    }
+
     // ---- fixtures ----
 
     private val dracoShapedDocument = """
@@ -673,6 +757,91 @@ class GltfParseTest {
         accessors = """{"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3"}""",
         tail = ""","meshes": [{"primitives": [{"attributes": {"NORMAL": 0}, "mode": 4}]}]""",
     )
+
+    // ---- F-2 fixtures ----
+
+    /** Four nodes over one buffer: node 0 draws nothing and nodes 1..3 are available as joints.
+     * Only the skin object itself varies between the fixtures below. */
+    private fun documentWithSkin(skin: String) = """
+        {
+          "asset": {"version": "2.0"},
+          "buffers": [{"byteLength": 4096}],
+          "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 512}],
+          "accessors": [
+            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "MAT4"}
+          ],
+          "nodes": [{}, {}, {}, {}],
+          "skins": [$skin],
+          "scene": 0,
+          "scenes": [{"nodes": [0]}]
+        }
+    """.trimIndent()
+
+    private val skinnedDocument =
+        documentWithSkin("""{"inverseBindMatrices": 0, "joints": [1, 2, 3], "skeleton": 1}""")
+
+    private val skinJointNamingNoNode = documentWithSkin("""{"joints": [1, 9]}""")
+
+    private val skinInverseBindMatricesNamingNoAccessor =
+        documentWithSkin("""{"inverseBindMatrices": 7, "joints": [1]}""")
+
+    private val skinWithEmptyJoints = documentWithSkin("""{"joints": []}""")
+
+    private val skinWithNoJointsMember = documentWithSkin("{}")
+
+    /** One node driven by one channel, varying only the two accessor counts the sampler reads and
+     * the interpolation that fixes the ratio between them. */
+    private fun samplerCounts(inputCount: Int, outputCount: Int, interpolation: String = "LINEAR") = """
+        {
+          "asset": {"version": "2.0"},
+          "buffers": [{"byteLength": 4096}],
+          "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 512},
+            {"buffer": 0, "byteOffset": 512, "byteLength": 512}
+          ],
+          "accessors": [
+            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": $inputCount, "type": "SCALAR"},
+            {"bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": $outputCount, "type": "VEC3"}
+          ],
+          "nodes": [{"translation": [0, 0, 0]}],
+          "scene": 0,
+          "scenes": [{"nodes": [0]}],
+          "animations": [
+            {
+              "channels": [{"sampler": 0, "target": {"node": 0, "path": "translation"}}],
+              "samplers": [{"input": 0, "output": 1, "interpolation": "$interpolation"}]
+            }
+          ]
+        }
+    """.trimIndent()
+
+    /** Two channels of one animation over two animatable nodes, varying only what each targets. */
+    private fun twoChannels(firstTarget: String, secondTarget: String) = """
+        {
+          "asset": {"version": "2.0"},
+          "buffers": [{"byteLength": 4096}],
+          "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 512},
+            {"buffer": 0, "byteOffset": 512, "byteLength": 512}
+          ],
+          "accessors": [
+            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "SCALAR"},
+            {"bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "VEC3"}
+          ],
+          "nodes": [{"translation": [0, 0, 0]}, {"translation": [0, 0, 0]}],
+          "scene": 0,
+          "scenes": [{"nodes": [0, 1]}],
+          "animations": [
+            {
+              "channels": [
+                {"sampler": 0, "target": $firstTarget},
+                {"sampler": 0, "target": $secondTarget}
+              ],
+              "samplers": [{"input": 0, "output": 1, "interpolation": "LINEAR"}]
+            }
+          ]
+        }
+    """.trimIndent()
 
     // ---- fixture-name plumbing ----
 

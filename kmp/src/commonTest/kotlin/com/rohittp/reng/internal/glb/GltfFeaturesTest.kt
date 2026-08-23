@@ -23,7 +23,6 @@ class GltfFeaturesTest {
         assertEquals(GltfUnsupported.PRIMITIVE_MODE, unsupported(pointsMode))
         assertEquals(GltfUnsupported.ATTRIBUTE_SEMANTIC, unsupported(customAttribute))
         assertEquals(GltfUnsupported.ATTRIBUTE_SEMANTIC, unsupported(nonCanonicalTexcoordIndex))
-        assertEquals(GltfUnsupported.SKIN, unsupported(documentWithSkin))
         assertEquals(GltfUnsupported.MORPH_TARGET, unsupported(documentWithMorphTargets))
         assertEquals(GltfUnsupported.ANIMATION_TARGET_PATH, unsupported(weightsChannel))
         assertEquals(GltfUnsupported.INTERPOLATION, unsupported(cubicSplineSampler))
@@ -60,15 +59,6 @@ class GltfFeaturesTest {
         // PARSE_GLB tolerates a second declared buffer -- nothing about it is malformed on its
         // own -- but RenG has no route to any buffer but the GLB-embedded buffers[0].
         assertEquals(GltfUnsupported.MULTIPLE_BUFFERS, unsupported(secondBufferDeclared))
-    }
-
-    @Test
-    fun skinTakesPrecedenceOverAttributeSemanticWhenAMeshCarriesBoth() {
-        // A skinned mesh carries both the flagged JOINTS_0 attribute and a node.skin reference.
-        // Stripping the attribute alone would not fix the file -- the skin reference remains and
-        // export fails again next round, now against SKIN. This pins that SKIN, not
-        // ATTRIBUTE_SEMANTIC, is what the document actually reports.
-        assertEquals(GltfUnsupported.SKIN, unsupported(skinnedMeshWithDisallowedAttribute))
     }
 
     @Test
@@ -198,6 +188,117 @@ class GltfFeaturesTest {
         )
     }
 
+    // ---- F-2: vertex skinning, and the sampler state a model is textured through ----
+
+    @Test
+    fun aSkinnedNodeIsNoLongerRejected() {
+        // 7 of the consumer's 41 models are truly vertex-skinned -- two elephants at 112 joints,
+        // three motorbikes at 44, two dinosaurs at 38.
+        assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(skinnedDocument(joints = 38)))
+    }
+
+    @Test
+    fun aSecondInfluenceSetIsRejected() {
+        // JOINTS_1/WEIGHTS_1 means more than four influences per vertex; RenG binds one set, and
+        // dropping the second deforms the mesh differently rather than not at all.
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.MULTIPLE_SKIN_INFLUENCE_SETS),
+            validateGltfFeatures(skinnedDocument(influenceSets = 2)),
+        )
+    }
+
+    @Test
+    fun aRigBeyondTheUniformBlockCapacityIsRejected() {
+        // The number itself is a portability claim, not a preference: GLES 3.0 and GL 3.3 both
+        // guarantee a GL_MAX_UNIFORM_BLOCK_SIZE of at least 16384 bytes, which is exactly 256
+        // mat4. Raising it would put the joint block past what either specification promises on
+        // some driver, and every assertion below is stated relative to the constant, so nothing
+        // else here would notice.
+        assertEquals(256, MAXIMUM_SKIN_JOINTS)
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.SKIN_JOINT_COUNT),
+            validateGltfFeatures(skinnedDocument(joints = MAXIMUM_SKIN_JOINTS + 1)),
+        )
+        // The cap itself is inside the block, not outside it.
+        assertEquals(
+            GltfFeatureResult.Supported,
+            validateGltfFeatures(skinnedDocument(joints = MAXIMUM_SKIN_JOINTS)),
+        )
+    }
+
+    @Test
+    fun aSkinnedNodeWhoseMeshCarriesNoWeightsIsRejected() {
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.SKINNED_PRIMITIVE_ATTRIBUTES),
+            validateGltfFeatures(skinnedDocument(attributes = listOf("POSITION", "JOINTS_0"))),
+        )
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.SKINNED_PRIMITIVE_ATTRIBUTES),
+            validateGltfFeatures(skinnedDocument(attributes = listOf("POSITION", "WEIGHTS_0"))),
+        )
+    }
+
+    @Test
+    fun theEighteenExporterLeftoverSkinsStillPass() {
+        // A `skins` array no node references is exporter debris, not a skinned model: 18 of the
+        // consumer's 41 models carry one. Rejecting on `document.skins.isNotEmpty()` rather than
+        // on `node.skin != null` would refuse all 18 for dead data.
+        assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(documentWithUnreferencedSkin()))
+        // ... including one whose rig no uniform block could hold, since it deforms nothing.
+        assertEquals(
+            GltfFeatureResult.Supported,
+            validateGltfFeatures(documentWithUnreferencedSkin(joints = MAXIMUM_SKIN_JOINTS + 1)),
+        )
+    }
+
+    @Test
+    fun aSkinnedInfluenceAttributeInAFormatRenGDoesNotBindIsRejected() {
+        // The influence set is the one attribute pair RenG *does* read on a skinned mesh, so the
+        // per-role table covers it: JOINTS_0 is an unnormalized unsigned VEC4 index, and WEIGHTS_0
+        // is a VEC4 float or a normalized unsigned one. A float joint index addresses no joint.
+        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(floatJointIndices))
+        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(unnormalizedByteWeights))
+    }
+
+    @Test
+    fun anInverseBindMatrixAccessorRenGCannotReadIsRejected() {
+        // One MAT4 float per joint, or nothing at all -- an absent accessor is the specification's
+        // own identity default and stays supported.
+        assertEquals(GltfUnsupported.ATTRIBUTE_FORMAT, unsupported(vec4InverseBindMatrices))
+        assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(mat4InverseBindMatrices.document))
+    }
+
+    @Test
+    fun aSamplerFilterOutsideTheGlEnumerationIsRejected() {
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.SAMPLER_STATE),
+            validateGltfFeatures(documentWithSampler(minFilter = 1234)),
+        )
+        // The rule names four fields, so all four are pinned: a magFilter the enumeration has no
+        // mipmapped form of, and a wrap mode outside the three the specification defines.
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.SAMPLER_STATE),
+            validateGltfFeatures(documentWithSampler(magFilter = 9987)),
+        )
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.SAMPLER_STATE),
+            validateGltfFeatures(documentWithSampler(wrapS = 1234)),
+        )
+        assertEquals(
+            GltfFeatureResult.Unsupported(GltfUnsupported.SAMPLER_STATE),
+            validateGltfFeatures(documentWithSampler(wrapT = 1234)),
+        )
+        // What all 47 samplers in the consumer's corpus actually ask for, plus the sampler that
+        // declares nothing at all: both stay supported.
+        assertEquals(
+            GltfFeatureResult.Supported,
+            validateGltfFeatures(
+                documentWithSampler(magFilter = 9729, minFilter = 9987, wrapS = 10497, wrapT = 10497),
+            ),
+        )
+        assertEquals(GltfFeatureResult.Supported, validateGltfFeatures(documentWithSampler()))
+    }
+
     // ---- reject fixtures ----
 
     // Same shape as GltfParseTest's dracoShapedDocument: extensionsRequired names a compression
@@ -270,32 +371,6 @@ class GltfFeaturesTest {
         }
     """.trimIndent()
 
-    private val documentWithSkin = """
-        {
-          "asset": {"version": "2.0"},
-          "scenes": [{"nodes": []}],
-          "skins": [{}],
-          "nodes": [{"skin": 0}]
-        }
-    """.trimIndent()
-
-    // Combines both faults SKIN and ATTRIBUTE_SEMANTIC guard against: the mesh's one primitive
-    // carries the disallowed JOINTS_0 semantic, and the node drawing that mesh also carries a
-    // skin reference. Pins that SKIN wins the precedence, since validateNodes() now runs before
-    // validateMeshes().
-    private val skinnedMeshWithDisallowedAttribute = """
-        {
-          "asset": {"version": "2.0"},
-          "scenes": [{"nodes": [0]}],
-          "skins": [{}],
-          "buffers": [{"byteLength": 1024}],
-          "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 100}],
-          "accessors": [{"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
-          "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "JOINTS_0": 0}, "mode": 4}]}],
-          "nodes": [{"mesh": 0, "skin": 0}]
-        }
-    """.trimIndent()
-
     private val documentWithMorphTargets = """
         {
           "asset": {"version": "2.0"},
@@ -310,6 +385,11 @@ class GltfFeaturesTest {
     private val weightsChannel = animationChannel(path = "weights", interpolation = "LINEAR")
     private val cubicSplineSampler = animationChannel(path = "translation", interpolation = "CUBICSPLINE")
 
+    // CUBICSPLINE stores an in-tangent, a value and an out-tangent per keyframe, so its output
+    // count is three times its input count. The fixture honours that rather than declaring one
+    // value per keyframe: a sampler whose counts disagree is malformed (PARSE_GLB's
+    // ANIMATION_SAMPLER_COUNTS), and this fixture must reach *this* gate to be refused for the
+    // interpolation it uses -- which is the whole of ADR 0021's split.
     private fun animationChannel(path: String, interpolation: String) = """
         {
           "asset": {"version": "2.0"},
@@ -322,7 +402,10 @@ class GltfFeaturesTest {
           "nodes": [{}],
           "accessors": [
             {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "SCALAR"},
-            {"bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": 1, "type": "VEC3"}
+            {
+              "bufferView": 1, "byteOffset": 0, "componentType": 5126, "type": "VEC3",
+              "count": ${if (interpolation == "CUBICSPLINE") 3 else 1}
+            }
           ],
           "animations": [
             {
@@ -742,6 +825,163 @@ class GltfFeaturesTest {
             ]
         """.trimIndent(),
     )
+
+    // ---- F-2 skin and sampler fixtures ----
+
+    /** The accessor format the specification gives [semantic]'s role, so a fixture varying one
+     * attribute list still declares every attribute in a form RenG binds. */
+    private fun attributeFormat(semantic: String): String = when {
+        semantic == "POSITION" || semantic == "NORMAL" -> """"componentType": 5126, "type": "VEC3""""
+        semantic.startsWith("JOINTS_") -> """"componentType": 5121, "type": "VEC4""""
+        semantic.startsWith("WEIGHTS_") -> """"componentType": 5126, "type": "VEC4""""
+        else -> error("no format known for $semantic")
+    }
+
+    /** Node 0 draws mesh 0 and references skin 0, whose joints are the [joints] nodes after it.
+     * The primitive carries [attributes] when given, and otherwise `POSITION` plus [influenceSets]
+     * complete influence sets. Each attribute gets its own 256-byte view of one 4096-byte buffer,
+     * which is [FIXTURE_BIN_CHUNK_LENGTH] exactly. */
+    private fun skinnedDocument(
+        joints: Int = 3,
+        influenceSets: Int = 1,
+        attributes: List<String>? = null,
+    ): GltfDocument {
+        val semantics = attributes
+            ?: listOf("POSITION") + (0 until influenceSets).flatMap { listOf("JOINTS_$it", "WEIGHTS_$it") }
+        val views = semantics.indices.joinToString(", ") {
+            """{"buffer": 0, "byteOffset": ${it * 256}, "byteLength": 256}"""
+        }
+        val accessors = semantics.mapIndexed { view, semantic ->
+            """{"bufferView": $view, "byteOffset": 0, "count": 3, ${attributeFormat(semantic)}}"""
+        }
+        val names = semantics.mapIndexed { view, semantic -> """"$semantic": $view""" }
+        return """
+            {
+              "asset": {"version": "2.0"},
+              "buffers": [{"byteLength": 4096}],
+              "bufferViews": [$views],
+              "accessors": [${accessors.joinToString(", ")}],
+              "meshes": [{"primitives": [{"attributes": {${names.joinToString(", ")}}, "mode": 4}]}],
+              "nodes": [{"mesh": 0, "skin": 0}${jointNodes(joints)}],
+              "skins": [{"joints": [${(1..joints).joinToString(", ")}]}],
+              "scene": 0,
+              "scenes": [{"nodes": [0]}]
+            }
+        """.trimIndent().document
+    }
+
+    /** [joints] transform-only nodes, as the joint hierarchy of whichever skin names them. */
+    private fun jointNodes(joints: Int) = (1..joints).joinToString("") { ", {}" }
+
+    /** A drawable mesh under a node with no `skin`, plus a [joints]-joint skin nothing references
+     * -- the exporter debris 18 of the consumer's 41 models carry. */
+    private fun documentWithUnreferencedSkin(joints: Int = 1): GltfDocument = """
+        {
+          "asset": {"version": "2.0"},
+          "buffers": [{"byteLength": 1024}],
+          "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 512}],
+          "accessors": [{"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+          "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "mode": 4}]}],
+          "nodes": [{"mesh": 0}${jointNodes(joints)}],
+          "skins": [{"joints": [${(1..joints).joinToString(", ")}]}],
+          "scene": 0,
+          "scenes": [{"nodes": [0]}]
+        }
+    """.trimIndent().document
+
+    private val floatJointIndices = skinnedPrimitive(
+        """{"bufferView": 1, "byteOffset": 0, "count": 3, "componentType": 5126, "type": "VEC4"}""",
+        """{"bufferView": 2, "byteOffset": 0, "count": 3, "componentType": 5126, "type": "VEC4"}""",
+    )
+
+    private val unnormalizedByteWeights = skinnedPrimitive(
+        """{"bufferView": 1, "byteOffset": 0, "count": 3, "componentType": 5121, "type": "VEC4"}""",
+        """{"bufferView": 2, "byteOffset": 0, "count": 3, "componentType": 5121, "type": "VEC4"}""",
+    )
+
+    /** One skinned primitive whose `POSITION` is well-formed, varying only the influence pair. */
+    private fun skinnedPrimitive(jointsAccessor: String, weightsAccessor: String) = """
+        {
+          "asset": {"version": "2.0"},
+          "buffers": [{"byteLength": 4096}],
+          "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 256},
+            {"buffer": 0, "byteOffset": 256, "byteLength": 256},
+            {"buffer": 0, "byteOffset": 512, "byteLength": 256}
+          ],
+          "accessors": [
+            {"bufferView": 0, "byteOffset": 0, "count": 3, "componentType": 5126, "type": "VEC3"},
+            $jointsAccessor,
+            $weightsAccessor
+          ],
+          "meshes": [
+            {"primitives": [{"attributes": {"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2}, "mode": 4}]}
+          ],
+          "nodes": [{"mesh": 0, "skin": 0}, {}],
+          "skins": [{"joints": [1]}],
+          "scene": 0,
+          "scenes": [{"nodes": [0]}]
+        }
+    """.trimIndent()
+
+    private val vec4InverseBindMatrices = inverseBindMatrices(""""componentType": 5126, "type": "VEC4"""")
+
+    private val mat4InverseBindMatrices = inverseBindMatrices(""""componentType": 5126, "type": "MAT4"""")
+
+    /** One skinned node whose skin names an inverse-bind-matrix accessor, varying only that
+     * accessor's format. */
+    private fun inverseBindMatrices(format: String) = """
+        {
+          "asset": {"version": "2.0"},
+          "buffers": [{"byteLength": 4096}],
+          "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 256},
+            {"buffer": 0, "byteOffset": 256, "byteLength": 256},
+            {"buffer": 0, "byteOffset": 512, "byteLength": 256},
+            {"buffer": 0, "byteOffset": 768, "byteLength": 256}
+          ],
+          "accessors": [
+            {"bufferView": 0, "byteOffset": 0, "count": 3, "componentType": 5126, "type": "VEC3"},
+            {"bufferView": 1, "byteOffset": 0, "count": 3, "componentType": 5121, "type": "VEC4"},
+            {"bufferView": 2, "byteOffset": 0, "count": 3, "componentType": 5126, "type": "VEC4"},
+            {"bufferView": 3, "byteOffset": 0, "count": 1, $format}
+          ],
+          "meshes": [
+            {"primitives": [{"attributes": {"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2}, "mode": 4}]}
+          ],
+          "nodes": [{"mesh": 0, "skin": 0}, {}],
+          "skins": [{"joints": [1], "inverseBindMatrices": 3}],
+          "scene": 0,
+          "scenes": [{"nodes": [0]}]
+        }
+    """.trimIndent()
+
+    /** One PNG behind one texture, varying only the sampler state that texture is read through.
+     * An omitted member is genuinely absent, which the specification permits for both filters. */
+    private fun documentWithSampler(
+        magFilter: Int? = null,
+        minFilter: Int? = null,
+        wrapS: Int? = null,
+        wrapT: Int? = null,
+    ): GltfDocument {
+        val members = listOfNotNull(
+            magFilter?.let { """"magFilter": $it""" },
+            minFilter?.let { """"minFilter": $it""" },
+            wrapS?.let { """"wrapS": $it""" },
+            wrapT?.let { """"wrapT": $it""" },
+        ).joinToString(", ")
+        return """
+            {
+              "asset": {"version": "2.0"},
+              "scenes": [{"nodes": []}],
+              "buffers": [{"byteLength": 1024}],
+              "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 100}],
+              "images": [{"bufferView": 0, "mimeType": "image/png"}],
+              "samplers": [{$members}],
+              "textures": [{"source": 0, "sampler": 0}]
+            }
+        """.trimIndent().document
+    }
 
     // ---- fixture-name plumbing ----
 
