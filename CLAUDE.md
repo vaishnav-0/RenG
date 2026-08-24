@@ -32,12 +32,16 @@ over public HTTP with no credentials. The version was declared explicitly in `6e
 the resolver, which would have advanced to `0.2.1` and understated the release. **Unlike the first two
 releases, its CI and publication run IDs are recorded nowhere in this repository — do not invent them.**
 
-**Local `main` is five commits ahead of `origin/main`, and the difference is code.** `origin/main` is
-exactly `49cc1d5`, the released commit; local `main` is `00464c2` and adds ADR 0028's per-role GLB
-accessor gates and the Rentile `0.5.0` bump. `publish.yml` ignores only `docs/**`, `**/*.md` and
-`LICENSE`, so **pushing `main` as it stands cuts a release**, and the resolver will select `0.3.1` because
-`0.3.0` has a valid completion record. Decide the version deliberately in the same push if `0.3.1` is not
-what is wanted.
+**Cycle F-2 is complete, unreleased, and lives on `feat/f2-models`.** That branch is 50 commits ahead of
+`origin/main` and 40 ahead of local `main`; `main` itself is `9a43b14`, ten ahead of the released
+`49cc1d5`, carrying ADR 0028's per-role GLB accessor gates, the Rentile `0.5.0` bump, and F-2's spec and
+plan. **Nothing of F-2 is published**, so `consumer-smoke` — which resolves the published coordinate on
+purpose — still gets `0.3.0` and cannot draw a model yet.
+
+`publish.yml` ignores only `docs/**`, `**/*.md` and `LICENSE`, so **pushing either branch as it stands cuts
+a release**, and the resolver will select `0.3.1` because `0.3.0` has a valid completion record. F-2 grows
+the public ABI by three enum entries, so `0.4.0` is the defensible number rather than `0.3.1`; either way,
+decide it deliberately in the same push by declaring `VERSION_NAME`.
 
 **`0.3.0` failed closed once before it published, and the cause was the runner's driver rather than
 RenG.** The first attempt failed on the hosted macOS runner with `kotlin.AssertionError at null:-1` as its
@@ -79,8 +83,8 @@ resolver (`internal/firewall/`: `FirewallTransport`, `FirewallStore`, `Operation
 route derivation from a real style, style compilation against the bytes the frame actually commits, tile
 rendering through the engine, sources that declare their tiles by reference through TileJSON, bounded GPU
 texture residency, and the drawn ground (`internal/gl/GroundPipeline.kt`) gated by analytical readback
-rather than by any stored image. Test counts last measured in this checkout: **931 Android host / 966
-`macosArm64`, no failures, none skipped**; 84 Python tests pass.
+rather than by any stored image. Its test counts were **931 Android host / 966 `macosArm64`** at the time
+it shipped; the figures for this checkout are F-2's, below.
 
 **Exactly one public field is added by the basemap cycle**: `ResourceLimits.maximumResidentGpuTextureBytes`,
 plus its mechanical constructor/`copy`/`component11` fallout. It was inert for most of the cycle —
@@ -130,6 +134,37 @@ fixtures in `tools/tests/test_check_repository_policy.py`. Those fingerprints ar
 SHA-256 digests, whatever older prose and the checker's own comment say — `HANDOFF.md` gives the real
 derivation and a recompute command, because recomputing the wrong thing is the trap here.
 
+**What Cycle F-2 contains.** Its authority is `docs/superpowers/specs/2026-08-23-cycle-f2-models-design.md`,
+its plan is `docs/superpowers/plans/2026-08-23-cycle-f2-models.md`, and the per-task ledger — every ruling,
+every mutation observation, every measured number — is
+`.superpowers/sdd/2026-08-23-cycle-f2-models/progress.md`. **Until this cycle no code in RenG had ever read
+a byte of a GLB's BIN chunk**; `parseGltf` took `binChunkLength` and never the bytes. F-2 is the numeric
+half: `internal/model/` (accessor decoding, node transforms, animation resolution and sampling, model
+assembly), `internal/gl/ModelPipeline.kt` and `SceneLight.kt`, and the renderer arm that acquires,
+decodes, uploads and draws. Test counts last measured in this checkout: **1123 Android host / 1159
+`macosArm64`, no failures, none skipped**; 84 Python tests pass.
+
+It reaches **40 of the consumer's 41 models**, measured against
+`docs/research/2026-08-22-consumer-model-corpus-check.md` rather than against glTF's breadth. Morph targets
+and JPEG stay rejected by decision, not oversight — zero of 41 carry a morph target and exactly one carries
+a JPEG. ADR 0021 and ADR 0028 each carry a 2026-08-2x erratum recording what widened; **read those errata,
+because both ADR bodies still describe the narrower subset.**
+
+**Three things F-2 leaves owed, all measured rather than suspected.** A model pays all three GLB parses on
+**every frame** — a `RESIDENT`-provenance route still runs the class gates — about 3 ms per model per frame
+on an M3 Max, roughly 18% of a 60 Hz budget for one model; that is the argument for a parsed-model
+residency. `decodedCpuBytes` shares `maximumDecodedImageBytes` with rasters instead of taking its own
+public limit. And all-zero skin weights collapse a vertex to the origin, which is the specification's
+formula applied literally rather than a repair.
+
+**Seven vacuous checks were caught during F-2, every one a fixture or an assertion sitting at a symmetry
+point of the thing being tested** — a cap whose fixture was derived from the mutated constant; a slerp check
+at `t = 0.5`, where slerp and nlerp agree exactly; a normal matrix on `diag(2, 4, 1)`, its own transpose; a
+depth-mask check read at a sticker draw, where the sticker pass sets the mask itself; a screen-order check
+at unequal z, which passes under either authority; a premultiplication check on a colour-type-2 PNG, where
+premultiplying is the identity; and an animation check at `t = 1.0`, which `timeSeconds % duration` maps
+back onto `t = 0`. **Assume the next one exists.**
+
 Design decisions live in `CONTEXT.md` (vocabulary) and `docs/adr/` (ADRs 0001–0012 establish the
 original graphics contract, ADR 0013 governs fail-closed publication, ADRs 0014–0015 supersede
 preparation ordering and GL-deletion context behavior, ADRs 0016–0017 govern the Rentile firewall and
@@ -144,7 +179,9 @@ elevation 45° with an ambient term, leaving stickers, geometries and the ground
 ADR 0025's depth-*write* ruling so that no map-regime draw writes depth and declaration order becomes the
 whole rule inside the regime rather than only its tie-break, ADR 0028 narrows ADR 0021's flat accessor
 subset to a per-role one, and ADR 0029 rejects a `SCREEN`-positioned **Model** at frame planning because
-the screen projection carries no z row at all). Read both before proposing anything that touches the public API — where this
+the screen projection carries no z row at all, and ADR 0030 supersedes ADR 0027 **for the model pass alone**
+so that a mesh writes depth and can occlude itself, giving the map regime three depth phases and the order
+ground, geometries, models, map-anchored stickers). Read both before proposing anything that touches the public API — where this
 file and an ADR disagree, the newer ADR wins.
 
 ## What RenG is

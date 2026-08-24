@@ -338,7 +338,9 @@ _Avoid_: Height map, DEM image, hillshade, terrain texture
 **Scene Light**:
 The single fixed light RenG shades **Models** by. It is world-anchored — its direction is fixed relative
 to the map, not to the camera — at azimuth 335 degrees and elevation 45 degrees, with an ambient term so a
-surface facing away from it stays readable rather than going black against a bright ground. The azimuth is
+surface facing away from it stays readable rather than going black against a bright ground. The ambient and
+diffuse terms are `0.35` and `0.65`, summing to one so a fully lit surface reaches its own colour exactly;
+ADR 0026 committed to "an ambient term" without a value, and those are it. The azimuth is
 the cartographic relief-shading convention, chosen because light from the north-west avoids the inversion
 illusion that makes hills read as valleys; taking it means **Model** shading and terrain hillshading already
 agree when the ground gains relief.
