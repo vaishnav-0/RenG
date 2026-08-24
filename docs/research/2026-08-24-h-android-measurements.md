@@ -11,7 +11,8 @@ comes, and so the grilling does not have to guess.
 
 ## The emulator provides GLES 3.1, and it provides it through ANGLE
 
-`Pixel_10_Pro_XL`, booted headless with `-gpu swiftshader_indirect`:
+`Pixel_10_Pro_XL`, booted headless with **`-gpu swiftshader_indirect`** — and that flag is load-bearing for
+everything below, see the correction after the table:
 
 ```
 ro.product.cpu.abi      arm64-v8a
@@ -27,6 +28,15 @@ GLES: Google (Google Inc. (Google)), Android Emulator OpenGL ES Translator
       OpenGL ES 3.1 (OpenGL ES 3.1.0 (ANGLE 2.1.1 git hash: fbf66f49c7cc))
 ```
 
+**Correction, from the official-documentation strand.** That reading is what SwiftShader gives *because this
+run forced it*. The emulator's own default host backend on Apple silicon is **ANGLE-over-Metal**:
+`~/Library/Android/sdk/emulator/lib64/gles_angle/libGLESv2.dylib` is an arm64 Mach-O containing
+`ANGLE Metal Renderer`, `DisplayMtl` and `ContextMtl`, and the guest's maximum GLES version is computed from
+the host at boot (`GLESDynamicVersion = on`). So there are **two** emulator rasterisers reachable by a flag,
+not one: ANGLE-over-Metal by default and ANGLE-over-Vulkan-over-SwiftShader when SwiftShader is forced. A
+Cycle H test job has to pick one deliberately and record which, because the tolerance question below has a
+different answer for each.
+
 Three things follow.
 
 **RenG's requirement is met with room to spare.** RenG targets GLES 3.0; the emulator reports 3.1.
@@ -37,16 +47,22 @@ carries `libEGL_emulation.so`, `libGLESv2_emulation.so` and `libGLESv1_CM_emulat
 **This is a fourth distinct rasteriser, and that is the risk it carries.** RenG's readback suites assert
 tolerances, not exact pixel counts, precisely because rasterisers round differently — `0.3.0` failed
 publication once when a hosted runner's `Apple Software Renderer` dropped primitives an M3 Max did not. The
-rasterisers now in play are Apple M3 Max (Metal), Apple Software Renderer, Mesa llvmpipe, and now
-ANGLE-over-Vulkan-over-SwiftShader. Every tolerance in `BasemapReadbackSuite` and `ModelReadbackSuite` was
-derived against the first three. **Whether they survive the fourth is unmeasured and is the single most
-likely source of a late surprise in the Android half.**
+rasterisers now in play are Apple M3 Max (Metal), Apple Software Renderer, Mesa llvmpipe, and now **two**
+more from the Android emulator alone — ANGLE-over-Metal by default, ANGLE-over-Vulkan-over-SwiftShader when
+forced. The iOS spike has since added a sixth reading, though it turns out to be the second again: the iOS
+simulator is also `Apple Software Renderer`. Every tolerance in `BasemapReadbackSuite` and
+`ModelReadbackSuite` was derived against the first three. **Whether they survive either ANGLE backend is
+unmeasured, and it is the single most likely source of a late surprise in the Android half.**
 
-**It is also direct evidence for the iOS pivot question.** The owner asked for ANGLE to be evaluated early
-as the likely fallback if iOS's stock OpenGL ES proves unusable. Google ships ANGLE as the *default* GLES
-implementation of its own Android emulator, translating to Vulkan. That is not proof it is right for iOS —
-the iOS backend is Metal, not Vulkan, and is a different code path — but it establishes that ANGLE is
-production infrastructure rather than an experiment, which is worth knowing before the option is weighed.
+**It bears on the iOS pivot question, which has since been settled the other way.** The owner asked for
+ANGLE to be evaluated early as the fallback if iOS's stock OpenGL ES proved unusable. Google ships ANGLE as
+the default GLES implementation of its own Android emulator, which establishes it as production
+infrastructure rather than an experiment. But the live iOS spike
+(`2026-08-24-h-ios-gles-context-spike.md`) obtained a real `OpenGL ES 3.0` context from the stock
+Kotlin/Native `platform.EAGL` klib on three iOS 26 runtimes, with the conformance and model readback suites
+passing unmodified — **so no pivot is needed and ANGLE is not on Cycle H's critical path.** What remains
+true is that RenG will meet ANGLE on Android whatever it chooses, because Google intends OpenGL ES on
+Android to be delivered through ANGLE.
 
 Caveat, stated because it would be easy to overclaim: this reading is SurfaceFlinger's own RenderEngine. An
 application's EGL context on the emulator also goes through the emulator's translator, but that this
@@ -76,14 +92,23 @@ Whether it *loads and rasterises* there is still unmeasured, and it is the quest
 
 ## Nothing can be run on a device today, and that is the shape of the Android half
 
-`kmp/src/` contains `androidHostTest` and **no `androidInstrumentedTest`**. `androidConnectedCheck` exists
-as a Gradle task and would execute zero tests. `AndroidGlBinding.kt` has therefore never been executed
+`kmp/src/` contains `androidHostTest` and no device-test source set at all. **The name is
+`androidDeviceTest`, not `androidInstrumentedTest`** — AGP 9.3.1's `KotlinMultiplatformAndroidLibraryExtension`
+declares `withDeviceTest {}` beside the `withHostTest {}` this build already calls, and brings Gradle Managed
+Devices with it (`ManagedVirtualDevice`, with `apiLevel`, `systemImageSource` and `testedAbi`), which is a
+route to running these tests without a manually booted emulator. `androidConnectedCheck` exists as a Gradle
+task and would execute zero tests. `AndroidGlBinding.kt` has therefore never been executed
 anywhere — not on a device, not on an emulator, not in CI — while shipping in every release since `0.2.0`.
 
 So the Android half is: create the source set, get an EGL context inside it, and find out (a) whether the
-91-entry-point roster resolves, (b) whether the conformance suite passes on ANGLE/SwiftShader, (c) whether
-the readback tolerances survive that rasteriser, and (d) whether Skia loads. Four unknowns, each
-measurable, none measured.
+91-entry-point roster resolves, (b) whether the conformance suite passes on ANGLE, (c) whether the readback
+tolerances survive it, and (d) whether Skia loads.
+
+One constraint on (b) that rules out the obvious shortcut: **`EGL_KHR_surfaceless_context` is on neither
+AOSP's mandatory nor its recommended extension list**, so Linux's `SurfacelessEglContext` fixture cannot be
+transliterated. The Android context has to be a **pbuffer**.
+
+Four unknowns, each measurable, none measured.
 
 The tooling is present: Android SDK at `~/Library/Android/sdk`, `adb` on `PATH`, and two AVDs
 (`Pixel_10_Pro_XL`, `Pixel_4_XL_API_29`). CI cannot do any of this — `ci.yml`'s two jobs are Ubuntu and
