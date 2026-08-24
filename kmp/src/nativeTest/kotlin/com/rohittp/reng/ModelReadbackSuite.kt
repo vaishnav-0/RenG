@@ -58,6 +58,13 @@ import kotlinx.coroutines.runBlocking
  * expected colour writable by hand at all. Alpha modes, `doubleSided` culling, vertex colour, and
  * every material property but base colour are untested here.
  *
+ * **Two of the six cases cannot detect absence, and case 1 is why they do not have to.** Measured, by
+ * making `drawModels` a no-op and running the suite: four cases failed and two passed. Case 4 compares
+ * two frames for equality, and two blank frames are equal; case 6 asserts nothing falls *outside* a
+ * bound, and nothing drawn falls nowhere. Both are upper-bound assertions by construction, and case 1
+ * is the lower bound that covers them — which is exactly why "something drew at all" is asserted
+ * separately rather than folded into a case that also checks colour.
+ *
  * **Every tolerance below states the smallest defect it still detects**, because a budget with no
  * stated floor is a number someone tuned until it passed. And no assertion is an exact pixel count:
  * GitHub's hosted macOS runners have no GPU and report `Apple Software Renderer`, whose rasteriser
