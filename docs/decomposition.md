@@ -307,8 +307,10 @@ a `RESIDENT`-provenance route still runs the class gates — measured at about 3
 M3 Max, roughly 18% of a 60 Hz budget for one model. That is the standing argument for a parsed-model
 residency. `decodedCpuBytes` shares `maximumDecodedImageBytes` with rasters rather than taking its own
 public limit. All-zero skin weights collapse a vertex to the origin, which is the specification's formula
-applied literally. And no model has been seen in the harness, because `consumer-smoke` resolves the
-published coordinate and F-2 is unreleased.
+applied literally. The harness can draw one against a
+local publish — `consumer-smoke` defaults `rengRepositoryUrl` to `../build/local-maven`, so no repository
+edit is needed and nothing has to be reverted — but no model has been *watched* yet, and the basemap
+cycle's record is that watching is what finds the defects a green suite does not.
 
 ## H — Android and iOS bring-up
 

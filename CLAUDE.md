@@ -32,16 +32,34 @@ over public HTTP with no credentials. The version was declared explicitly in `6e
 the resolver, which would have advanced to `0.2.1` and understated the release. **Unlike the first two
 releases, its CI and publication run IDs are recorded nowhere in this repository — do not invent them.**
 
-**Cycle F-2 is complete, unreleased, and lives on `feat/f2-models`.** That branch is 50 commits ahead of
-`origin/main` and 40 ahead of local `main`; `main` itself is `9a43b14`, ten ahead of the released
+**Cycle F-2 is complete, unreleased, and lives on `feat/f2-models`.** That branch is 51 commits ahead of
+`origin/main` and 41 ahead of local `main`; `main` itself is `9a43b14`, ten ahead of the released
 `49cc1d5`, carrying ADR 0028's per-role GLB accessor gates, the Rentile `0.5.0` bump, and F-2's spec and
-plan. **Nothing of F-2 is published**, so `consumer-smoke` — which resolves the published coordinate on
-purpose — still gets `0.3.0` and cannot draw a model yet.
+plan. **Nothing of F-2 is published to R2.**
 
-`publish.yml` ignores only `docs/**`, `**/*.md` and `LICENSE`, so **pushing either branch as it stands cuts
-a release**, and the resolver will select `0.3.1` because `0.3.0` has a valid completion record. F-2 grows
-the public ABI by three enum entries, so `0.4.0` is the defensible number rather than `0.3.1`; either way,
-decide it deliberately in the same push by declaring `VERSION_NAME`.
+**`VERSION_NAME` is `0.4.0` on that branch, declared deliberately rather than left to the resolver.** F-2
+grows the public ABI by three enum entries, so a patch bump would understate it — and the resolver would
+have chosen `0.3.1`, since `0.3.0` has a valid completion record. Declaring it explicitly is also what
+keeps a *local* publish honest: `consumer-smoke` resolves `../build/local-maven` by default, so republishing
+under `0.3.0` would have put F-2's bytes behind the released `0.3.0`'s coordinate on this machine — the same
+same-version-different-bytes hazard ADR 0013 exists to prevent, one layer down.
+
+**`publish.yml` ignores only `docs/**`, `**/*.md` and `LICENSE`, so pushing either branch as it stands cuts
+a `0.4.0` release.** That is the intended number when the time comes; it is not intended yet.
+
+**The visual harness runs against a local publish, with no repository edit and nothing to revert.**
+`consumer-smoke/settings.gradle.kts` already defaults `rengRepositoryUrl` to `../build/local-maven` under an
+`exclusiveContent` filter, so:
+
+```bash
+./gradlew --no-configuration-cache :kmp:publishAllPublicationsToLocalTestRepository
+./gradlew -p consumer-smoke runHarness -PstyleUrl=<style url> -PmodelUrl=<glb url>
+```
+
+is the whole loop — verified end to end here, including a fresh Gradle home with `--refresh-dependencies`.
+Both urls stay uncheckable: the style carries an api key and the model points at somebody's server. Add
+`-PrengRepositoryUrl=https://maven.rohittp.com` to run the same harness against the *published* coordinate
+instead.
 
 **`0.3.0` failed closed once before it published, and the cause was the runner's driver rather than
 RenG.** The first attempt failed on the hosted macOS runner with `kotlin.AssertionError at null:-1` as its
