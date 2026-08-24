@@ -54,9 +54,14 @@ it in `macosTest/.../CglCoreProfileContext.kt`, which reaches CGL through the st
 klib with no cinterop. Linux puts it in `linuxTest/.../SurfacelessEglContext.kt`.
 
 iOS needs the same shape and cannot use either: CGL is macOS-only and iOS has no EGL. The equivalent is
-`EAGLContext` with `kEAGLRenderingAPIOpenGLES3`, reached through the stock `platform.OpenGLES` klib. Whether
-that klib exposes what is needed **was not verified** — it is the first thing to check, and the one place
-this document is guessing rather than measuring.
+`EAGLContext` with `kEAGLRenderingAPIOpenGLES3`.
+
+**Corrected 2026-08-24 by the spike that followed** (`2026-08-24-h-ios-gles-context-spike.md`): this
+paragraph originally named `platform.OpenGLES` as the klib and flagged that as the document's one guess. The
+guess was wrong. `EAGLContext` lives in **`platform.EAGL`**; `platform.OpenGLES` is OpenGL ES **1.x** and is
+not what RenG needs. The spike obtained a real `OpenGL ES 3.0` context with no cinterop and no build-file
+change, so the substance of this section holds and only the klib name was wrong — which is exactly the sort
+of thing that is cheap to check and expensive to assume.
 
 Two consequences worth stating before design starts:
 
@@ -87,8 +92,10 @@ and would tell us whether the suites are portable before Android's larger unknow
 
 ## What was not checked
 
-- Whether `platform.OpenGLES` exposes `EAGLContext` usably from Kotlin/Native without cinterop.
-- Whether a headless GLES context is obtainable on the simulator at all, or whether a real device is needed.
+- ~~Whether `platform.OpenGLES` exposes `EAGLContext` usably from Kotlin/Native without cinterop.~~
+  **Settled**: `platform.EAGL` does, without cinterop.
+- ~~Whether a headless GLES context is obtainable on the simulator at all, or whether a real device is
+  needed.~~ **Settled**: it is, framebuffer-only, no layer and no window.
 - Whether Rentile's Skia rasterization works on an Android device or an ARM64 emulator.
 - `iosArm64Test` — a real-device task — was not run, and there is no device attached.
 - Whether the readback suites' tolerances survive a mobile GPU's rasteriser. `0.3.0` failed once on exactly
