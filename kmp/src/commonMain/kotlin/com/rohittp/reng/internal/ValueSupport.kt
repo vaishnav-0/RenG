@@ -105,4 +105,6 @@ internal val ResourceKind.reportOrder: Int
         ResourceKind.INTERNAL_PIPELINE -> 2
         ResourceKind.OFFSCREEN_SURFACE -> 3
         ResourceKind.BASEMAP_TILE -> 4
+        ResourceKind.MODEL_GEOMETRY -> 5
+        ResourceKind.MODEL_IMAGE -> 6
     }

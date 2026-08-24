@@ -56,41 +56,60 @@ class StickerPipelineTest {
         assertNull(cache.program(pipeline.key))
     }
 
-    @Test fun theMapRegimeDrawsDepthTestedBeforeTheScreenRegimeComposites() {
+    /**
+     * This pass owns the map regime and nothing else. It draws depth-tested, and — the half that used
+     * to be here — it neither disables depth testing nor composites a screen stack afterwards, because
+     * `SceneContent.drawScreenStack` owns that now. A `disable(GL_DEPTH_TEST)` left behind here would
+     * turn the test off part-way through a map regime whose stickers need not be its last content.
+     */
+    @Test fun thisPassDrawsTheMapRegimeDepthTestedAndTurnsNothingOffAfterwards() {
         val binding = newBinding()
         val pipeline = createdPipeline(binding)
         val mapTexture = 11
-        val screenTexture = 22
-        val world = StickerWorld(
-            mapAnchored = listOf(resolvedSticker(texture = mapTexture)),
-            screenAnchored = listOf(resolvedSticker(texture = screenTexture, z = 5.0)),
-        )
         binding.log.clear()
-        drawStickers(binding, pipeline, world)
+        drawStickers(binding, pipeline, StickerWorld(mapAnchored = listOf(resolvedSticker(texture = mapTexture))))
 
         val depthEnabled = binding.log.indexOfFirst { it == "enable(0xB71)" } // GL_DEPTH_TEST
-        val depthDisabled = binding.log.indexOfFirst { it == "disable(0xB71)" }
-        val mapDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
-        val screenDraw = binding.log.indexOfLast { it.startsWith("drawArrays") }
-
-        assertTrue(depthEnabled in 0 until mapDraw, "the map regime must be depth-tested")
-        assertTrue(mapDraw < depthDisabled, "depth must stay on until the map regime is finished")
-        assertTrue(depthDisabled < screenDraw, "the screen regime must composite with depth off")
-
-        // The assertions above only check drawArrays call *positions*, so a bug that swaps which of
-        // mapAnchored/screenAnchored feeds the depth-tested loop versus the depth-off loop -- while
-        // keeping the enable/disable/draw call shape intact -- would still pass them. Tie each
-        // sticker's specific texture to the depth state active when its texture bound, so that swap
-        // fails here instead.
         val mapBind = binding.log.indexOfFirst { it == "bindTexture(0xDE1,$mapTexture)" } // GL_TEXTURE_2D
-        val screenBind = binding.log.indexOfFirst { it == "bindTexture(0xDE1,$screenTexture)" }
-        assertTrue(
-            mapBind in depthEnabled until depthDisabled,
-            "the map-anchored sticker's texture must bind while depth testing is on",
+        val mapDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
+
+        assertTrue(depthEnabled in 0 until mapBind, "the map regime must be depth-tested")
+        assertTrue(mapBind in 0 until mapDraw, "the map-anchored sticker's texture must bind before it draws")
+        assertFalse(
+            binding.log.any { it == "disable(0xB71)" },
+            "turning depth testing off is the screen stack's job, not this pass's: ${binding.log}",
         )
-        assertTrue(
-            screenBind > depthDisabled,
-            "the screen-anchored sticker's texture must bind after depth testing is turned off",
+    }
+
+    /**
+     * The second copy this task deleted. `MercatorSpatialPlanner` sorts the screen stack once, and
+     * [drawStickers] used to sort its own screen half a second time by a `screenCompositeZ` threaded
+     * down from a draw-time re-resolution. Nothing here may reorder what it is handed, and the three
+     * textures below are in no sorted order under any key a re-derived sort could reach for.
+     */
+    @Test fun drawStickersNeitherSortsNorSplitsWhatItIsHanded() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        val first = 91
+        val second = 12
+        val third = 53
+        binding.log.clear()
+        drawStickers(
+            binding,
+            pipeline,
+            StickerWorld(
+                mapAnchored = listOf(
+                    resolvedSticker(texture = first),
+                    resolvedSticker(texture = second),
+                    resolvedSticker(texture = third),
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf(first, second, third),
+            boundTexturesInDrawOrder(binding),
+            "the map half draws in exactly the order it is given",
         )
     }
 
@@ -115,48 +134,12 @@ class StickerPipelineTest {
         assertFalse(binding.log.any { it == "depthMask(true)" }, "nothing here re-enables depth writes")
     }
 
-    @Test fun equalZIndexCompositesInStablePlanOrder() {
-        val binding = newBinding()
-        val pipeline = createdPipeline(binding)
-        val firstTexture = 11
-        val secondTexture = 22
-        val world = StickerWorld(
-            screenAnchored = listOf(
-                resolvedSticker(texture = firstTexture, z = 1.0),
-                resolvedSticker(texture = secondTexture, z = 1.0),
-            ),
-        )
-        binding.log.clear()
-        drawStickers(binding, pipeline, world)
-
-        val firstBind = binding.log.indexOfFirst { it == "bindTexture(0xDE1,$firstTexture)" } // GL_TEXTURE_2D
-        val secondBind = binding.log.indexOfFirst { it == "bindTexture(0xDE1,$secondTexture)" }
-        assertTrue(firstBind < secondBind, "later plan entries composite on top, so they draw later")
-    }
-
-    // Equal z-index alone cannot distinguish an ascending sort from a descending one: a stable sort
-    // preserves the relative order of elements the comparator treats as equal no matter which direction
-    // it sorts in, so a bug that reverses the sort direction would slip past
-    // `equalZIndexCompositesInStablePlanOrder` unnoticed. This test uses two DIFFERENT z values instead,
-    // so only the correct (ascending) direction draws the greater one last.
-    @Test fun greaterZIndexComposesOnTopOfLesserZIndex() {
-        val binding = newBinding()
-        val pipeline = createdPipeline(binding)
-        val lowTexture = 11
-        val highTexture = 22
-        val world = StickerWorld(
-            screenAnchored = listOf(
-                resolvedSticker(texture = highTexture, z = 5.0),
-                resolvedSticker(texture = lowTexture, z = 1.0),
-            ),
-        )
-        binding.log.clear()
-        drawStickers(binding, pipeline, world)
-
-        val lowBind = binding.log.indexOfFirst { it == "bindTexture(0xDE1,$lowTexture)" }
-        val highBind = binding.log.indexOfFirst { it == "bindTexture(0xDE1,$highTexture)" }
-        assertTrue(lowBind < highBind, "greater position.z must composite on top, so it draws last")
-    }
+    // `equalZIndexCompositesInStablePlanOrder` and `greaterZIndexComposesOnTopOfLesserZIndex` used to
+    // sit here, asserting the z-sort this function ran over its own screen half. Both the sort and the
+    // half are gone: `MercatorSpatialPlanner`'s `screenCompositingOrder` is the one authority for the
+    // screen stack's order, and `MercatorSpatialPlannerTest.screenEntriesSortByZThenSourceIndex` is
+    // where those two properties are pinned now. `SceneContentTest` pins that the GL layer consumes
+    // that order rather than deriving one of its own.
 
     @Test fun theBlendModeIsPremultipliedNotStraightAlpha() {
         val binding = newBinding()
@@ -226,8 +209,8 @@ class StickerPipelineTest {
         (createStickerPipeline(binding, ShaderDialect.GLES, GlProgramCache()) as StickerPipelineResult.Created)
             .pipeline
 
-    private fun resolvedSticker(texture: Int = 1, z: Double = 0.0): ResolvedSticker =
-        ResolvedSticker(modelViewProjection = FloatArray(16), texture = texture, screenCompositeZ = z)
+    private fun resolvedSticker(texture: Int = 1): ResolvedSticker =
+        ResolvedSticker(modelViewProjection = FloatArray(16), texture = texture)
 
     private fun newBinding(): RecordingGlBinding = RecordingGlBinding().withDeclaredNames(
         STICKER_MODEL_VIEW_PROJECTION_UNIFORM_NAME to MODEL_VIEW_PROJECTION_LOCATION,

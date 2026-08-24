@@ -4,6 +4,7 @@ import com.rohittp.reng.ResourceLimits
 import com.rohittp.reng.internal.glb.GlbScan
 import com.rohittp.reng.internal.glb.GltfFeatureResult
 import com.rohittp.reng.internal.glb.GltfParseResult
+import com.rohittp.reng.internal.glb.MAXIMUM_GLB_NODE_DEPTH
 import com.rohittp.reng.internal.glb.parseGltf
 import com.rohittp.reng.internal.glb.scanGlb
 import com.rohittp.reng.internal.glb.validateGltfFeatures
@@ -91,15 +92,9 @@ internal class RenGClassGateRunner(private val limits: ResourceLimits) : ClassGa
      */
     private fun parseGlbDocument(bytes: ByteArray): GltfParseResult? {
         val admitted = scanGlb(bytes, limits.maximumModelJsonChunkBytes) as? GlbScan.Admitted ?: return null
-        val binChunkLength = admitted.binChunk?.count()?.toLong() ?: 0L
-        return parseGltf(admitted.json, binChunkLength, MAXIMUM_GLB_NODE_DEPTH)
+        return parseGltf(admitted.json, admitted.binChunkLength, MAXIMUM_GLB_NODE_DEPTH)
     }
 }
-
-/** glTF scene-graph node depth bound for `PARSE_GLB`'s [parseGltf] call: generous for anything RenG
- *  draws, finite for a cyclic graph the specification forbids. Matches [parseGltf]'s own test suite
- *  default. */
-private const val MAXIMUM_GLB_NODE_DEPTH = 128
 
 private const val OPAQUE_ALPHA: Byte = -1 // 0xFF unsigned
 

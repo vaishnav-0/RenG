@@ -82,6 +82,29 @@ class FramePlanningCoreTest {
         assertEquals(emptyList(), resolver.calls)
     }
 
+    // ADR 0029, load-bearing at the full FramePlanningCore level: a check that fires after the
+    // private key resolver -- the closest thing to "the transport has already been called" this
+    // pure core exposes -- has already run would honour the letter of "before acquisition or
+    // drawing" and not the decision. planMercatorSpatial's failure short-circuits plan() before
+    // staticResourceTraversal ever runs, so the resolver must see zero calls, exactly like the
+    // sibling GLOBE case above.
+    @Test
+    fun screenPositionedModelIsRefusedBeforeAnyResourceRoute() {
+        val resolver = RecordingPrivateKeyResolver()
+        val planningCore = planningCore(resolver)
+        val screenModel = Model(placement = screenPlacement(), glb = ResourceLocator("screen-model.glb"))
+
+        val outcome = planningCore.plan(
+            request(
+                plan = framePlan(models = listOf(screenModel)),
+                basemapStyle = ResourceLocator("style-document"),
+            ),
+        )
+
+        assertFailure(outcome, RenGErrorCode.UNSUPPORTED_ANCHORING_MODE, "placement.positionMode")
+        assertEquals(emptyList(), resolver.calls)
+    }
+
     @Test
     fun cameraLatitudeIsValidatedBeforeItsUnwrappedLongitudeCopy() {
         val resolver = RecordingPrivateKeyResolver()
@@ -912,8 +935,11 @@ class FramePlanningCoreTest {
 
     private fun sticker(locator: String): Sticker = Sticker(screenPlacement(), ResourceLocator(locator))
 
+    // MAP, not SCREEN: ADR 0029 refuses a SCREEN-positioned Model at frame planning, and this
+    // helper's models are used throughout this file to exercise static resource traversal and
+    // identity/dedup behaviour, none of which is about draw regime.
     private fun model(glb: String, texture: String? = null): Model = Model(
-        placement = screenPlacement(),
+        placement = mapPlacement(),
         glb = ResourceLocator(glb),
         texture = texture?.let(::ResourceLocator),
     )
@@ -938,6 +964,15 @@ class FramePlanningCoreTest {
         rotationMode = AnchoringMode.SCREEN,
         rotation = Vector3(0.0, 0.0, 0.0),
         scaleMode = AnchoringMode.SCREEN,
+        scale = 1.0,
+    )
+
+    private fun mapPlacement(): Placement = Placement(
+        positionMode = AnchoringMode.MAP,
+        position = Vector3(10.0, 20.0, 0.0),
+        rotationMode = AnchoringMode.MAP,
+        rotation = Vector3(0.0, 0.0, 0.0),
+        scaleMode = AnchoringMode.MAP,
         scale = 1.0,
     )
 

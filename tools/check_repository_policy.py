@@ -43,7 +43,12 @@ _REQUIRED_DOCS = (
     ".nojekyll", "index.html", "kmp.html", "style.css", "versions.js",
     "robots.txt", "sitemap.xml", "llms.txt",
 )
-_IGNORED_PATH_PARTS = frozenset({".git", ".gradle", "build", ".superpowers"})
+# `.claude` holds agent scaffolding, including the git worktrees the harness creates for
+# parallel subagents. A worktree is a second checkout of this same repository, so every rule
+# below would otherwise fire once per live worktree -- against files this repository already
+# governs at their real paths. Ignored for the same reason `.superpowers` is: it is working
+# state, never repository content.
+_IGNORED_PATH_PARTS = frozenset({".git", ".gradle", "build", ".superpowers", ".claude"})
 _VERSION_PATTERN = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
 _STABLE_VERSION = re.compile(rf"^{_VERSION_PATTERN}$")
 _SEMANTIC_LITERAL = rf"(?:v?{_VERSION_PATTERN})(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"

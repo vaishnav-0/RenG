@@ -63,7 +63,7 @@ fun main(arguments: Array<String>) {
     var failed = 0
 
     try {
-        framePlans(options.groundless).take(options.frameCount).forEach { plan ->
+        framePlans(options.groundless, options.modelUrl).take(options.frameCount).forEach { plan ->
             if (renderOneFrame(renderer, target, plan, options.outputDirectory)) written += 1 else failed += 1
         }
     } finally {
@@ -163,6 +163,7 @@ private fun describeFrame(pixels: ByteArray): String {
 
 private class HarnessOptions(
     val styleUrl: String,
+    val modelUrl: String?,
     val outputDirectory: String,
     val frameCount: Int,
     val groundless: Boolean,
@@ -171,6 +172,7 @@ private class HarnessOptions(
 
 private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     var styleUrl = ""
+    var modelUrl: String? = null
     var outputDirectory = ""
     var frameCount = FRAME_COUNT
     val groundless = arguments.contains("--no-basemap")
@@ -179,6 +181,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     while (index + 1 < arguments.size) {
         when (arguments[index]) {
             "--style" -> styleUrl = arguments[index + 1]
+            "--model" -> modelUrl = arguments[index + 1].takeIf(String::isNotBlank)
             "--out" -> outputDirectory = arguments[index + 1]
             "--frames" -> frameCount = arguments[index + 1].toIntOrNull() ?: frameCount
         }
@@ -187,7 +190,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     if (styleUrl.isBlank()) {
         println(
             "No style url. The owner's styles carry api keys, so none is checked in.\n" +
-                "  ./gradlew -p consumer-smoke runHarness -PstyleUrl=<style url>\n" +
+                "  ./gradlew -p consumer-smoke runHarness -PstyleUrl=<style url> [-PmodelUrl=<glb url>]\n" +
                 "or set RENG_HARNESS_STYLE_URL in the environment.",
         )
         return null
@@ -196,7 +199,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
         println("No output directory. Pass --out <directory>.")
         return null
     }
-    return HarnessOptions(styleUrl, outputDirectory, frameCount, groundless, verbose)
+    return HarnessOptions(styleUrl, modelUrl, outputDirectory, frameCount, groundless, verbose)
 }
 
 /** Counts diagnostics by code and keeps the first few, so a warning storm prints as one line. */

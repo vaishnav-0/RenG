@@ -180,6 +180,19 @@ internal class GlObjectRegistry(
 
     internal fun handles(key: ResourceKey): List<GlObjectHandle> = ArrayList(live[key].orEmpty())
 
+    /**
+     * Every live handle [key] holds of exactly [type], in registration order.
+     *
+     * A key registered by [register] holds one handle for a sticker or consumer texture, and several
+     * of two different types for a model primitive -- one [GlObjectType.VERTEX_ARRAY] plus one
+     * [GlObjectType.BUFFER] per attribute and one more for the index run. Filtering by type at the
+     * caller is what that used to require, and every caller wrote the same `firstOrNull { it.type == }`
+     * to do it; asking the registry the question directly is what stops a second copy of that filter
+     * from drifting.
+     */
+    internal fun handlesOfType(key: ResourceKey, type: GlObjectType): List<GlObjectHandle> =
+        live[key].orEmpty().filter { it.type == type }
+
     internal fun liveKeys(): List<ResourceKey> = ArrayList(live.keys)
 
     internal fun hasLiveGpuObjects(): Boolean = live.values.any { it.isNotEmpty() }

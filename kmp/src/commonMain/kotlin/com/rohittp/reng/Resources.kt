@@ -56,6 +56,8 @@ public enum class ResourceKind {
     INTERNAL_PIPELINE,
     OFFSCREEN_SURFACE,
     BASEMAP_TILE,
+    MODEL_GEOMETRY,
+    MODEL_IMAGE,
 }
 
 public enum class ResourceAccessMode {

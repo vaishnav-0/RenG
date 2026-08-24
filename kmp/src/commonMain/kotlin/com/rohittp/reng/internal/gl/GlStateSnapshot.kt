@@ -25,6 +25,13 @@ internal data class GlTextureUnitState(
     val sampler: Int,
 )
 
+/**
+ * The uniform-buffer binding point RenG reserves for the joint-matrix uniform buffer skinning
+ * needs. RenG binds exactly one uniform buffer, so exactly one indexed binding point is ever in
+ * use, and the Restore Set below only ever needs to save and restore this one index.
+ */
+internal const val RENG_JOINT_UNIFORM_BINDING_POINT: Int = 0
+
 internal data class GlStateSnapshot(
     val activeTextureUnit: Int,
     val textureUnits: List<GlTextureUnitState>,
@@ -36,6 +43,7 @@ internal data class GlStateSnapshot(
     val arrayBuffer: Int,
     val pixelUnpackBuffer: Int,
     val uniformBuffer: Int,
+    val indexedUniformBuffer: Int,
     val blendEnabled: Boolean,
     val blendSourceRgb: Int,
     val blendDestinationRgb: Int,
@@ -84,6 +92,15 @@ internal data class GlStateSnapshot(
  * The **array** buffer binding is captured explicitly because the VAO does not capture it, while
  * the **element** array buffer binding is deliberately never queried here: it is per-VAO state
  * restored implicitly by restoring the VAO binding.
+ *
+ * The indexed uniform-buffer binding at [RENG_JOINT_UNIFORM_BINDING_POINT] is captured and restored
+ * alongside the generic `GL_UNIFORM_BUFFER_BINDING` above for the same reason every other member of
+ * this set exists: `glBindBufferBase(GL_UNIFORM_BUFFER, n, b)`, which skinning's joint-matrix buffer
+ * needs, writes **both** the generic binding — already captured — and an indexed binding at point
+ * `n` that the generic query never reaches. This is **applying** ADR 0023, not amending it: the
+ * Restore Set is defined as the state RenG writes, and this indexed binding is state RenG has only
+ * now started writing. `glGetIntegeri_v` is the query [GL_UNIFORM_BUFFER_BINDING]'s indexed form
+ * needs, the same way [getIntegerv] answers the plain form.
  */
 internal fun captureGlState(
     binding: GlBinding,
@@ -116,6 +133,7 @@ internal fun captureGlState(
         arrayBuffer = binding.integer(GL_ARRAY_BUFFER_BINDING),
         pixelUnpackBuffer = binding.integer(GL_PIXEL_UNPACK_BUFFER_BINDING),
         uniformBuffer = binding.integer(GL_UNIFORM_BUFFER_BINDING),
+        indexedUniformBuffer = binding.integeri(GL_UNIFORM_BUFFER_BINDING, RENG_JOINT_UNIFORM_BINDING_POINT),
         blendEnabled = binding.isEnabled(GL_BLEND),
         blendSourceRgb = binding.integer(GL_BLEND_SRC_RGB),
         blendDestinationRgb = binding.integer(GL_BLEND_DST_RGB),
@@ -151,6 +169,12 @@ internal fun captureGlState(
 
 private fun GlBinding.integer(pname: Int): Int = integers(pname, 1).single()
 
+private fun GlBinding.integeri(pname: Int, index: Int): Int {
+    val out = IntArray(1)
+    getIntegeri_v(pname, index, out)
+    return out.single()
+}
+
 private fun GlBinding.integers(pname: Int, count: Int): List<Int> {
     val out = IntArray(count)
     getIntegerv(pname, out)
@@ -176,6 +200,17 @@ private fun GlBinding.booleans(pname: Int, count: Int): List<Boolean> {
  * parameters of `glClear`, and RenG clears its offscreen surface every frame. `glBindSampler`
  * takes a texture unit **index**, not the `GL_TEXTUREi` token, which is why the restore subtracts
  * `GL_TEXTURE0`. As in capture, `GL_ACTIVE_TEXTURE` is reinstated last, after every per-unit bind.
+ *
+ * `glBindBufferBase` restores the indexed uniform-buffer binding **before** the plain `glBindBuffer`
+ * restores the generic one, not after: per the GL specification, `glBindBufferBase(target, index,
+ * buffer)` also sets `target`'s generic binding to `buffer`, exactly as if `glBindBuffer` had been
+ * called with it. Restoring `glBindBufferBase` second would silently overwrite a correctly restored
+ * generic `GL_UNIFORM_BUFFER_BINDING` with whatever the indexed snapshot happened to hold — a real
+ * bug the recording fake cannot see (it does not model this side effect) but the real-hardware
+ * conformance suite caught immediately as a byte-inexact round trip. Restoring `glBindBufferBase`
+ * first, with the plain `glBindBuffer` last, makes the plain call authoritative for the generic
+ * binding while leaving the indexed binding — which only `glBindBufferBase`/`glBindBufferRange`
+ * ever write — exactly as `glBindBufferBase` left it.
  */
 internal fun restoreGlState(binding: GlBinding, snapshot: GlStateSnapshot) {
     binding.bindFramebuffer(GL_DRAW_FRAMEBUFFER, snapshot.drawFramebuffer)
@@ -185,6 +220,7 @@ internal fun restoreGlState(binding: GlBinding, snapshot: GlStateSnapshot) {
     binding.bindVertexArray(snapshot.vertexArray)
     binding.bindBuffer(GL_ARRAY_BUFFER, snapshot.arrayBuffer)
     binding.bindBuffer(GL_PIXEL_UNPACK_BUFFER, snapshot.pixelUnpackBuffer)
+    binding.bindBufferBase(GL_UNIFORM_BUFFER, RENG_JOINT_UNIFORM_BINDING_POINT, snapshot.indexedUniformBuffer)
     binding.bindBuffer(GL_UNIFORM_BUFFER, snapshot.uniformBuffer)
 
     binding.setEnabled(GL_BLEND, snapshot.blendEnabled)

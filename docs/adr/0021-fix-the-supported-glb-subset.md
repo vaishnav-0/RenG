@@ -67,3 +67,45 @@ The subset is reasoned from the specification and RenG's own vocabulary rather t
 corpus. Running the container and JSON layers over the Khronos sample models, and counting what the
 subset would reject and why, is the check most likely to move a row from reject to accept, and it is
 owed before the first release that draws a model.
+
+## Erratum, 2026-08-23: Cycle F-2 widened the subset, and this ADR's reject list is now stale
+
+The rejected list above still names "joints and weights, skins", extra `TEXCOORD_n`/`COLOR_n` sets, and
+their accessors. **Cycle F-2 admits all of them**, and until this erratum an implementer reading only this
+ADR would have re-rejected work the tree already supports. The authority for the widening is
+`docs/superpowers/specs/2026-08-23-cycle-f2-models-design.md`; the measurements are in
+`docs/research/2026-08-22-consumer-model-corpus-check.md`, run over the consumer's own 41 models rather
+than over Khronos's samples — which is the corpus check the final paragraph above says is owed.
+
+What changed, and why each is a widening rather than a reversal:
+
+- **`TEXCOORD_n` and `COLOR_n` above set zero are ignored, not rejected.** RenG binds set zero and reads
+  nothing else, so a second set is data no draw call touches. Refusing it rejected **14 of the 41 models,
+  and was the sole reason for 10 of them**. An ignored set is not format-checked either: an attribute RenG
+  never reads cannot have a format RenG cannot bind.
+- **`JOINTS_0`, `WEIGHTS_0` and `node.skin` are supported.** 25 of the 41 declare a skin but only **7 are
+  truly vertex-skinned** — the other 18 carry a `skins` array no node references. This ADR's own framing
+  made that distinction reachable: the check was always written against `node.skin`, never against the
+  array's presence, so those 18 already passed. `GltfDocument` now retains a `skins` catalog, capped at
+  `MAXIMUM_SKIN_JOINTS = 256` — the largest rig in the corpus is 112, and 256 `mat4` is exactly the 16 KB
+  uniform block GLES 3.0 and GL 3.3 both guarantee.
+- **A second influence set (`JOINTS_1`/`WEIGHTS_1` and above) is still rejected**, as is a skinned node
+  whose primitives lack both `JOINTS_0` and `WEIGHTS_0`. Neither occurs in the corpus.
+- **`baseColorTexture.texCoord` must be `0`.** A narrowing, not a widening: RenG binds one coordinate set,
+  so a material naming another has no correct render and sampling set zero instead would be the silent
+  substitution this ADR refuses everywhere else. It is `0` in every material in the corpus.
+- **Sampler filter and wrap enums are validated** against the specification's own enumeration, and a value
+  outside it is refused rather than clamped.
+- **`GltfUnsupported.SKIN` is deleted.** Its check-ordering note — `SKIN` before `ATTRIBUTE_SEMANTIC`, so a
+  skinned mesh is diagnosed by "remove the skin" rather than by "remove these attributes" — described
+  behaviour that no longer exists.
+
+Two rejections were re-decided and **kept**, so that neither reads as unfinished: `MORPH_TARGET`, because
+**zero of the 41 models carry one**; and `IMAGE_MEDIA_TYPE`, because exactly one carries a JPEG texture and
+a decoder RenG does not have is not worth building for a single asset. Those two are why the cycle reaches
+40 of 41 models rather than all 41.
+
+`PARSE_GLB` also gained two malformation rules this ADR's split assigns to it: an animation sampler whose
+`output.count` disagrees with its `input.count` (honouring `CUBICSPLINE`'s three-values-per-keyframe form,
+so a legal cubic-spline asset is still refused as an unsupported *feature* rather than as a corrupt file),
+and two channels in one animation driving the same `(node, path)`, which the specification forbids outright.

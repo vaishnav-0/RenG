@@ -51,8 +51,9 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | J | Golden-image corpus gate | Corpus job wired into `ci.yml` and `publish.yml` |
 
 **Where the sequence stands.** A, B, C, D, F-1 and E-basemap are released: A as `0.1.0`, B/C/D/F-1 together
-as `0.2.0`, and E-basemap as `0.3.0`. Everything from F-2 onward is unstarted, though F-2 and E-labels have
-both been spiked; see `HANDOFF.md` for what those spikes settled and for the five defects F-2 inherits.
+as `0.2.0`, and E-basemap as `0.3.0`. **F-2 is complete and unreleased** — all eighteen tasks landed on
+`feat/f2-models`, gated by a model readback suite that draws a real GLB on a real driver. Everything from
+E-labels onward is unstarted, though E-labels has been spiked; see `HANDOFF.md` for what that spike settled.
 
 **Pixel verification is deferred to Cycle J** by owner decision, recorded at
 `docs/superpowers/specs/2026-08-19-cycle-f1-stickers-and-geometries-design.md:204-205`. The gate rows for
@@ -276,12 +277,40 @@ stack. It also fixes the documented uniform and attribute names a shader pair ma
 basemap, terrain, models, or globe, and defers all pixel verification to Cycle J in favour of call-log
 draw-path assertions. This cycle's release is the internal MVP.
 
-**F-2 — models with textures and animation.** Models with their textures and animation-track time
-sampling, split out so they can ship after the MVP and after the basemap without blocking either — models
-have consumers waiting, unlike terrain. It also inherits five open defects from the basemap cycle, two of
-them folded into its scope by owner decision: the composite's double alpha multiply, and reopening ADR
-0027's no-intra-regime-occlusion ruling, which is correct for flat quads and wrong for anything with
-volume. `HANDOFF.md` enumerates all five with their file and line.
+**F-2 — models with textures and animation. Complete, unreleased.** Its authority is
+`docs/superpowers/specs/2026-08-23-cycle-f2-models-design.md` and its plan is
+`docs/superpowers/plans/2026-08-23-cycle-f2-models.md`.
+
+It shipped accessor and BIN-chunk decoding — until this cycle **no code in RenG had ever read a byte of a
+BIN chunk** — node transform composition, animation resolution and sampling with quaternion slerp, vertex
+skinning with joint matrices in a uniform buffer, embedded texture decode with correct sampler state, and a
+model draw pass with real occlusion. It widened ADR 0021's subset against the consumer's own 41 models
+rather than against glTF's breadth: extra UV and colour sets are ignored rather than rejected (which alone
+unblocked 14 of the 41, and was the sole reason for 10), and skins are admitted (7 of the 41 are genuinely
+vertex-skinned; the other 18 declaring one carry exporter debris no node references).
+
+**It reaches 40 of the 41 models, and the exception is a decision.** Morph targets stay rejected because
+zero of the 41 carry one, and JPEG stays rejected because exactly one does and a decoder RenG does not have
+is not worth building for a single asset.
+
+Both defects folded in by owner decision are closed: the composite's double alpha multiply, and ADR 0027's
+no-intra-regime-occlusion ruling, reopened for models alone by **ADR 0030** — a mesh that writes no depth
+cannot occlude itself, and 109 of the corpus's 111 materials are `doubleSided`, so culling cannot cover for
+it. ADR 0029's refusal of a `SCREEN`-positioned model, which had been a decision with no code behind it,
+is implemented.
+
+**The public ABI grew by exactly three enum entries**: `RenGErrorCode.UNSUPPORTED_ANCHORING_MODE`,
+`ResourceKind.MODEL_GEOMETRY` and `ResourceKind.MODEL_IMAGE`.
+
+**Not done, and owed.** A model pays all three GLB parses on **every frame**, not once per acquisition —
+a `RESIDENT`-provenance route still runs the class gates — measured at about 3 ms per model per frame on an
+M3 Max, roughly 18% of a 60 Hz budget for one model. That is the standing argument for a parsed-model
+residency. `decodedCpuBytes` shares `maximumDecodedImageBytes` with rasters rather than taking its own
+public limit. All-zero skin weights collapse a vertex to the origin, which is the specification's formula
+applied literally. The harness can draw one against a
+local publish — `consumer-smoke` defaults `rengRepositoryUrl` to `../build/local-maven`, so no repository
+edit is needed and nothing has to be reverted — but no model has been *watched* yet, and the basemap
+cycle's record is that watching is what finds the defects a green suite does not.
 
 ## H — Android and iOS bring-up
 

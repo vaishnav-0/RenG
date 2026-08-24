@@ -230,13 +230,19 @@ to every map position and **Geometry** corner; out-of-domain values fail rather 
 accepts any finite value, but planning rejects values that cannot remain finite through camera-relative Double
 and GPU-bound Float conversion. Those failures report `mapPosition.altitude` or `geometry.altitude`; latitude
 and world-copy failures retain their corresponding latitude or unwrapped-longitude field. Map-anchored
-drawing is depth-tested and writes no depth, so map-regime content is occluded by anything that did write
-nearer depth and occludes nothing itself; visibility among map-regime content is decided entirely by draw
-order, which is the **Basemap Tile** ground first, then **Geometry**s in list order, then map-anchored drawn
-things in list order, with later entries on top (ADRs 0025 and 0027). Depth comparison is greater-or-equal,
-so a drawn thing at exactly the depth already drawn there is visible rather than discarded; altitude-0
-content over the ground is the ordinary case of that, and needs no tie-break of its own now that nothing on
-the map plane writes depth to tie with.
+drawing is depth-tested throughout, in **three depth phases** and one draw order (ADRs 0025, 0027 and 0030).
+Flat map-plane content — the **Basemap Tile** ground first, then **Geometry**s in list order — tests depth
+and writes none, so it is occluded by anything that did write nearer depth and occludes nothing itself.
+**Model**s in list order then test **and write**, because a mesh that writes no depth cannot occlude itself:
+its own back faces show through its front ones. Map-anchored **Sticker**s in list order then test and write
+none again, drawing after the models because a map-anchored sticker is a marker and a marker paints over
+the scene it marks. The map regime's draw order is therefore ground, **Geometry**s, **Model**s,
+map-anchored **Sticker**s, with later entries on top of anything that wrote no nearer depth. Depth
+comparison is greater-or-equal, so a drawn thing at exactly the depth already drawn there is visible rather
+than discarded; altitude-0 content over the ground is the ordinary case of that, and needs no tie-break of
+its own now that nothing on the map plane writes depth to tie with. A **Model** is a real occluder, so a
+screen-parallel billboard sharing space with one can still be cut along its own anchor row — the narrower
+form of a defect ADR 0027 closed against the ground, accepted deliberately by ADR 0030.
 _Avoid_: World mode, 3D mode, geo mode
 
 **Draw Regime**:
@@ -332,7 +338,9 @@ _Avoid_: Height map, DEM image, hillshade, terrain texture
 **Scene Light**:
 The single fixed light RenG shades **Models** by. It is world-anchored — its direction is fixed relative
 to the map, not to the camera — at azimuth 335 degrees and elevation 45 degrees, with an ambient term so a
-surface facing away from it stays readable rather than going black against a bright ground. The azimuth is
+surface facing away from it stays readable rather than going black against a bright ground. The ambient and
+diffuse terms are `0.35` and `0.65`, summing to one so a fully lit surface reaches its own colour exactly;
+ADR 0026 committed to "an ambient term" without a value, and those are it. The azimuth is
 the cartographic relief-shading convention, chosen because light from the north-west avoids the inversion
 illusion that makes hills read as valleys; taking it means **Model** shading and terrain hillshading already
 agree when the ground gains relief.

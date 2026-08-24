@@ -1,0 +1,69 @@
+# Let a model write depth inside the map regime
+
+ADR 0027 removed depth writes from every map-regime draw. It was right, and it was right for surfaces: two
+defects shipped past 942 passing tests because flat map-plane content acted as an occluder, and removing the
+occluder is what made a coplanar `Geometry` stop tearing itself apart and a billboard stop being sliced in
+half along its own anchor row. That ADR closes by naming the exception it expected: "a model has volume, and
+a model pipeline that writes depth is a deliberate amendment to this ADR rather than an oversight." This is
+that amendment.
+
+**A mesh that writes no depth cannot occlude itself.** Every triangle passes the test against whatever is
+behind it and paints in submission order, so back faces show through front ones and a near surface is
+overwritten by a far one declared later. Back-face culling hides this for a closed convex mesh and for
+nothing else — and 109 of the 111 materials in the consumer's own corpus are `doubleSided`, which turns
+culling off entirely. The picture is not subtly wrong; a car renders with its far door drawn over its near
+one. Painter's order is a complete rule for a flat quad, whose fragments all carry one depth, and it is not a
+rule at all for a surface that folds over itself.
+
+**So the map regime gets three depth phases rather than one policy.** Flat map-plane content — the ground,
+then each `Geometry` in list order — tests depth and writes none, exactly as ADR 0027 requires. Models then
+test **and write**. Map-anchored stickers then test and write none, again as ADR 0027 requires. The draw
+order becomes **ground, geometries, models, map-anchored stickers**: ADR 0025's order with models inserted
+before the stickers. Every other clause of ADR 0027 stands unchanged, including the reason each pass sets
+`depthMask(false)` for itself rather than inheriting it — `drawFrame` leaves the mask on around its own
+per-frame depth clear, so a pass that assumes it is off is assuming something no caller guarantees.
+
+Models go before map-anchored stickers rather than after because a map-anchored sticker is a marker, and a
+marker paints over the scene it marks. Put the model last and it paints over every pin standing in front of
+it, which is the more common frame and the more obviously wrong one.
+
+The model pass therefore owes a `depthMask(false)` on the way out, and this ADR first claimed that
+forgetting it would reinstate ADR 0027's billboard defect. **That was overstated, and the implementer
+measured it.** `drawStickers` sets `depthMask(false)` for itself, exactly as ADR 0027 requires of every
+map-regime pass, so deleting the model pass's trailing call changes no pixel today. The line is defence in
+depth: it keeps the invariant "a pass leaves the mask as it found it" true of every pass rather than true of
+the regime by luck, and it is what stops the next pass added after models from inheriting a write mask
+nobody set for it. Two consequences worth stating plainly. A test that checks the mask at a *sticker* draw
+is a symmetry point and stays green with the line deleted, so the real assertion has to read the mask in the
+window between the model pass's last draw and the sticker program bind. And `drawStickers`' own
+`depthMask(false)` must not be removed as redundant on the strength of this ADR — it is the call that
+actually holds the billboard fix up.
+
+**The cost is real and is accepted rather than discovered.** A model is now an occluder, so a billboard
+sharing space with one can still be cut along its anchor row: the billboard's quad is screen-parallel and
+carries the anchor's single depth, while the model beside it has depth varying across the screen, so the
+half below the anchor loses. That is the same geometry ADR 0027 diagnosed against the ground, in a narrower
+place — it needs a model, not merely a map. It is accepted because the alternative is worse in a way that is
+easy to compare: a marker clipped by the car it stands on is a wrong picture of one object, and a car
+rendered inside out is a wrong picture of the object the frame is about. Nothing here reopens ADR 0027's
+rejection of `glPolygonOffset` or of a shader depth bias; both fail the billboard for the reasons measured
+there, and both would fail it here too.
+
+The narrower defect is not closed and no fix is designed. Closing it needs a billboard-versus-volume policy
+— which ADR 0027 already observed is owed regardless, since "a screen-parallel billboard intersects *any*
+ground surface it stands on, displaced or flat." Recording it here means the next person to see a clipped pin
+finds the reason rather than rediscovering it.
+
+Nothing about the GL seam or ADR 0023's Restore Set moves. `glDepthMask` is on the seam and
+`GL_DEPTH_WRITEMASK` is in the Restore Set already.
+
+One existing test changes meaning, and it should be read as the amendment landing rather than as a
+regression: `SceneContentTest.noDrawInAWholeSceneRunsWithDepthWritesOn` walks a whole scene's call log
+asserting that nothing enables depth writes. ADR 0027 wrote it that way deliberately, "instead of checking
+three pipelines one at a time", precisely so that a model pass could not slip past it unnoticed. It now
+becomes an assertion that **exactly one** phase writes depth, that the phase is the model pass, and that the
+mask is off again before the stickers draw.
+
+Verification is analytical readback on the two targets that can hold a GL context, matching Cycle E's gate
+and this cycle's spec: a model occludes the ground it stands on, and a model behind another is occluded by
+it. Pixel verification remains Cycle J's.

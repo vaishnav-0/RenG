@@ -1,8 +1,15 @@
 package com.rohittp.reng.internal.math
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
+
+/** Below this determinant magnitude a matrix is treated as singular: [DoubleMatrix3.inverse] and
+ * [DoubleMatrix4.inverseAffine] return `null` rather than divide by something too close to zero to
+ * trust, which would otherwise surface as a matrix of `Infinity`/`NaN` far downstream of the actual
+ * fault. */
+private const val SINGULAR_DETERMINANT_THRESHOLD: Double = 1e-12
 
 internal data class DoubleVector3(val x: Double, val y: Double, val z: Double) {
     operator fun plus(other: DoubleVector3): DoubleVector3 =
@@ -46,6 +53,45 @@ internal class DoubleMatrix3 internal constructor(valuesInColumnMajorOrder: List
             listOf(this[0, 2], this[1, 2], this[2, 2]),
         ),
     )
+
+    /** The matrix inverse, by adjugate over determinant, or `null` when `|det|` is below
+     * [SINGULAR_DETERMINANT_THRESHOLD] -- a caller turns that `null` into a typed failure rather
+     * than uploading a matrix built from a near-zero divisor. */
+    fun inverse(): DoubleMatrix3? {
+        val a = this[0, 0]
+        val b = this[0, 1]
+        val c = this[0, 2]
+        val d = this[1, 0]
+        val e = this[1, 1]
+        val f = this[1, 2]
+        val g = this[2, 0]
+        val h = this[2, 1]
+        val i = this[2, 2]
+
+        val determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+        if (abs(determinant) < SINGULAR_DETERMINANT_THRESHOLD) return null
+
+        val inverseDeterminant = 1.0 / determinant
+        return fromRows(
+            listOf(
+                listOf(
+                    (e * i - f * h) * inverseDeterminant,
+                    (c * h - b * i) * inverseDeterminant,
+                    (b * f - c * e) * inverseDeterminant,
+                ),
+                listOf(
+                    (f * g - d * i) * inverseDeterminant,
+                    (a * i - c * g) * inverseDeterminant,
+                    (c * d - a * f) * inverseDeterminant,
+                ),
+                listOf(
+                    (d * h - e * g) * inverseDeterminant,
+                    (b * g - a * h) * inverseDeterminant,
+                    (a * e - b * d) * inverseDeterminant,
+                ),
+            ),
+        )
+    }
 
     operator fun times(other: DoubleMatrix3): DoubleMatrix3 =
         DoubleMatrix3(List(ELEMENT_COUNT) { index ->
@@ -167,6 +213,34 @@ internal class DoubleMatrix4 internal constructor(valuesInColumnMajorOrder: List
         List(DIMENSION) { row -> List(DIMENSION) { column -> this[column, row] } },
     )
 
+    /** The inverse of an affine transform -- one whose bottom row is `[0, 0, 0, 1]`, true of every
+     * matrix this codebase builds from translation, rotation and scale. Inverts the upper-left 3
+     * by 3 linear block via [DoubleMatrix3.inverse] and folds the translation column through it as
+     * `-inverseLinear * translation`, rather than running general 4 by 4 Gauss-Jordan elimination
+     * a glTF node transform never needs. Returns `null`, exactly when the linear block does,
+     * rather than a matrix built from a near-zero divisor. */
+    fun inverseAffine(): DoubleMatrix4? {
+        val linear = DoubleMatrix3.fromRows(
+            listOf(
+                listOf(this[0, 0], this[0, 1], this[0, 2]),
+                listOf(this[1, 0], this[1, 1], this[1, 2]),
+                listOf(this[2, 0], this[2, 1], this[2, 2]),
+            ),
+        )
+        val inverseLinear = linear.inverse() ?: return null
+        val translation = DoubleVector3(this[0, 3], this[1, 3], this[2, 3])
+        val inverseTranslation = -(inverseLinear * translation)
+
+        return fromRows(
+            listOf(
+                listOf(inverseLinear[0, 0], inverseLinear[0, 1], inverseLinear[0, 2], inverseTranslation.x),
+                listOf(inverseLinear[1, 0], inverseLinear[1, 1], inverseLinear[1, 2], inverseTranslation.y),
+                listOf(inverseLinear[2, 0], inverseLinear[2, 1], inverseLinear[2, 2], inverseTranslation.z),
+                listOf(0.0, 0.0, 0.0, 1.0),
+            ),
+        )
+    }
+
     operator fun times(other: DoubleMatrix4): DoubleMatrix4 =
         DoubleMatrix4(List(ELEMENT_COUNT) { index ->
             val row = index % DIMENSION
@@ -206,6 +280,17 @@ internal class DoubleMatrix4 internal constructor(valuesInColumnMajorOrder: List
                 rows[row][column]
             })
         }
+
+        /** Embeds a 3 by 3 rotation as a 4 by 4 affine transform with zero translation -- the
+         * upper-left block [rotation], the identity elsewhere. */
+        fun fromRotation(rotation: DoubleMatrix3): DoubleMatrix4 = fromRows(
+            listOf(
+                listOf(rotation[0, 0], rotation[0, 1], rotation[0, 2], 0.0),
+                listOf(rotation[1, 0], rotation[1, 1], rotation[1, 2], 0.0),
+                listOf(rotation[2, 0], rotation[2, 1], rotation[2, 2], 0.0),
+                listOf(0.0, 0.0, 0.0, 1.0),
+            ),
+        )
 
         private const val DIMENSION: Int = 4
         private const val ELEMENT_COUNT: Int = DIMENSION * DIMENSION

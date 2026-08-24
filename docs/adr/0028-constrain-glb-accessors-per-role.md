@@ -49,3 +49,38 @@ The Khronos sample corpus was re-run across all of it, the same measurement
 same count is supported before and after, with every rejection landing on the same code as before. That
 is the evidence these rules close holes rather than move the boundary, and it is the check to repeat if
 any of them is revised.
+
+## Erratum, 2026-08-24: five of the seven owed follow-ups are closed, two are not
+
+This ADR left seven named follow-ups. Cycle F-2 closed five of them, and the two that remain are open by
+decision rather than by omission.
+
+**Closed.** An animation sampler whose `output.count` disagrees with its `input.count` is now
+`GltfReject.ANIMATION_SAMPLER_COUNTS` — honouring `CUBICSPLINE`'s three-values-per-keyframe form, so a legal
+cubic-spline asset is still refused as an unsupported *feature* rather than reported as a corrupt file, which
+would have blurred ADR 0021's split. Two channels in one animation driving the same `(node, path)` is
+`GltfReject.DUPLICATE_ANIMATION_CHANNEL_TARGET`. Sampler filter and wrap values outside the specification's
+own enumerations are `GltfUnsupported.SAMPLER_STATE`, refused rather than clamped. A
+`baseColorTexture.texCoord` other than `0` is `GltfUnsupported.TEXTURE_COORDINATE_SET`, because RenG binds
+`TEXCOORD_0` and only `TEXCOORD_0`. And keyframe `input` values that are not strictly increasing are refused
+by the decoder, which is where that check has to live because it needs the BIN chunk's bytes — as does the
+one it grew alongside, a non-finite keyframe time, since `NaN` is caught by the ordering comparison but
+`+Infinity` passes it and turns the interpolation fraction into `inf/inf`.
+
+**Still open, and why.** `min`/`max` *presence* on a `POSITION` accessor is a specification `MUST` that RenG
+does not enforce, because RenG never reads either: requiring them would reject assets that draw perfectly for
+data no draw call touches, which is the same mistake the extra-UV-set rejection turned out to be. And an
+unbounded `buffers[i > 0].byteLength` is moot rather than fixed — `GltfUnsupported.MULTIPLE_BUFFERS` refuses
+any document declaring a second buffer at all, so there is no `i > 0` to bound.
+
+One rule this ADR's own vocabulary gained: a referenced skin's `inverseBindMatrices` accessor takes
+`GltfUnsupported.SKIN_ACCESSOR_FORMAT` rather than `ATTRIBUTE_FORMAT`. An inverse bind matrix is not a vertex
+attribute, and this file's stated principle — written for `COMPONENT_TYPE` against `ACCESSOR_TYPE` — is that
+codes easy to confuse by name may not share one, because conflating them sends a consumer debugging by code
+name to the wrong field.
+
+And one silent repair, found while wiring the model pipeline and closed on the spot: `alphaMode` was an
+unvalidated free-form string, so a misspelt or future value fell through to the `OPAQUE` default and rendered
+a transparent material solid with nothing said. The specification types it as an enumeration of exactly
+three, so a fourth is `GltfReject.ALPHA_MODE` at `PARSE_GLB`. An absent member is untouched: there, `OPAQUE`
+is the specification's own default rather than a guess.

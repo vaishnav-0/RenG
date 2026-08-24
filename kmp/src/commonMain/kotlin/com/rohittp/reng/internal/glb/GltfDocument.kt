@@ -38,11 +38,11 @@ internal data class GltfPrimitive(
 internal data class GltfMesh(val primitives: List<GltfPrimitive>)
 
 /** One node in the scene graph. Exactly one of [matrix] or any of [translation]/[rotation]/
- * [scale] may be present -- [parseGltf] rejects both, per the specification. [skin] is parsed
- * only so a later gate can detect and reject it; [camera] is parsed only so that gate can bound-
- * check it and then ignore it -- ADR 0021 accepts cameras and draws nothing from them.
- * [GltfDocument] retains no top-level `skins` or `cameras` catalog because nothing else in RenG's
- * vocabulary refers to either. */
+ * [scale] may be present -- [parseGltf] rejects both, per the specification. [skin] names an entry
+ * of [GltfDocument.skins] and is what makes this node's mesh vertex-skinned -- the presence of the
+ * `skins` array is not. [camera] is parsed only so this gate can bound-check it and then ignore it
+ * -- ADR 0021 accepts cameras and draws nothing from them. [GltfDocument] retains no `cameras`
+ * catalog because nothing else in RenG's vocabulary refers to one. */
 internal data class GltfNode(
     val children: List<Int>,
     val mesh: Int?,
@@ -53,6 +53,14 @@ internal data class GltfNode(
     val rotation: List<Double>?,
     val scale: List<Double>?,
 )
+
+/** One skin: the joint nodes whose animated transforms deform a mesh, an optional accessor
+ * holding one inverse bind matrix per joint (absent means identity, per the specification), and an
+ * optional [skeleton] root the specification defines as a hint a client may ignore. [joints] is
+ * non-empty and every entry names a node -- [parseGltf] proves both. Whether a skin is *drawn* is
+ * decided by `node.skin` and never by this array's presence: 18 of the consumer's 41 models carry a
+ * `skins` array no node references, and rejecting on the array would refuse all 18 for dead data. */
+internal data class GltfSkin(val inverseBindMatrices: Int?, val joints: List<Int>, val skeleton: Int?)
 
 internal data class GltfScene(val nodes: List<Int>)
 
@@ -126,6 +134,7 @@ internal data class GltfDocument(
     val bufferViews: List<GltfBufferView>,
     val meshes: List<GltfMesh>,
     val nodes: List<GltfNode>,
+    val skins: List<GltfSkin>,
     val scenes: List<GltfScene>,
     val defaultScene: Int?,
     val animations: List<GltfAnimation>,
@@ -190,7 +199,9 @@ internal data class GltfDocument(
  * - [SIZE_FIELD_OUT_OF_RANGE] covers every size-typed integer field whose value falls outside the
  *   range the specification's own schema declares for it: a negative `buffer.byteLength`,
  *   `bufferView.byteOffset`, `bufferView.byteLength`, `bufferView.byteStride` or
- *   `accessor.byteOffset`, and an `accessor.count` below one. Named for the range rather than for
+ *   `accessor.byteOffset`, an `accessor.count` below one, and a `skin.joints` that is empty or
+ *   absent -- the specification's own schema gives it `minItems: 1`, and a skin with no joint
+ *   deforms nothing. Named for the range rather than for
  *   the field, in the same spirit as [NON_INTEGER_FIELD], because the consumer's next action is
  *   identical in every case. This is the memory-safety code of the set: none of the span
  *   comparisons this gate performs is meaningful over a negative operand, since a negative offset
@@ -209,10 +220,31 @@ internal data class GltfDocument(
  *   when it is not indexed, is not a multiple of three. Only `TRIANGLES` is checked: every other
  *   topology has its own arithmetic and is refused by `VALIDATE_GLB_FEATURES`, so applying a
  *   triangle rule to a strip would name the wrong fault.
+ * - [ALPHA_MODE] covers a material's `alphaMode` that is present and is not one of `OPAQUE`, `MASK`
+ *   or `BLEND`. The specification types the field as an enumeration of exactly those three, so a
+ *   fourth value is a schema violation and belongs here rather than in `VALIDATE_GLB_FEATURES`'
+ *   vocabulary -- there is no glTF asset for which it is legal. It is reported at all because the
+ *   alternative is the silent repair this project refuses everywhere else: an unrecognised value
+ *   would otherwise fall through to the `OPAQUE` default and render a transparent material solid,
+ *   with nothing said. A material with no `alphaMode` member at all is untouched: absent genuinely
+ *   means `OPAQUE`, which is the specification's own default rather than a guess.
  * - [ANIMATED_NODE_MATRIX] covers a node carrying `matrix` that some animation channel targets.
  *   Distinct from [NODE_MATRIX_AND_TRS], which is about one node contradicting itself: this is a
  *   contradiction between a node and an animation elsewhere in the document, and a consumer fixes
  *   it by decomposing the matrix into TRS rather than by deleting a member.
+ * - [ANIMATION_SAMPLER_COUNTS] covers an animation sampler whose `output` accessor holds a number
+ *   of values its `input` accessor's keyframe count does not explain: one output per keyframe, or
+ *   three per keyframe for `CUBICSPLINE`, whose in-tangent/value/out-tangent triples the
+ *   specification spells out. Sampling such a sampler is undecidable -- there is no keyframe the
+ *   surplus value belongs to and no value the missing keyframe reads -- so this is malformation
+ *   rather than a feature RenG declines. The `CUBICSPLINE` arm is checked even though
+ *   `VALIDATE_GLB_FEATURES` refuses that interpolation, exactly as ADR 0021 requires: a legal
+ *   cubic-spline asset must be diagnosed by the interpolation it uses, not reported as corrupt.
+ * - [DUPLICATE_ANIMATION_CHANNEL_TARGET] covers two channels of one animation writing the same
+ *   node and the same `target.path`. The specification forbids it because the two channels
+ *   disagree about one value at one time with no rule for which wins; a channel naming no node is
+ *   specified as a no-op and so targets nothing to collide with. Scoped to a single animation:
+ *   two animations driving the same node is the ordinary case, and the caller picks one.
  */
 internal enum class GltfReject {
     ACCESSOR_SPAN_EXCEEDS_BUFFER_VIEW,
@@ -233,6 +265,9 @@ internal enum class GltfReject {
     INDICES_ACCESSOR_FORMAT,
     TRIANGLE_VERTEX_COUNT,
     ANIMATED_NODE_MATRIX,
+    ANIMATION_SAMPLER_COUNTS,
+    DUPLICATE_ANIMATION_CHANNEL_TARGET,
+    ALPHA_MODE,
 }
 
 internal sealed interface GltfParseResult {

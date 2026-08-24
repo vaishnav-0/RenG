@@ -1,7 +1,9 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
+import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -16,7 +18,7 @@ class MacosGlConformanceTest {
 
             val report = runGlConformanceSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
             assertEquals(ShaderDialect.DESKTOP, report.dialect)
-            assertEquals(7, report.checks.size)
+            assertEquals(8, report.checks.size)
             assertTrue(report.rendererName.isNotBlank())
             // A hosted runner reports "Apple Software Renderer"; a developer's machine reports
             // "4.1 Metal - 90.5". Cycle E must key golden baselines by this string and the dialect.
@@ -33,6 +35,25 @@ class MacosGlConformanceTest {
      */
     @Test fun theBasemapReadbackSuitePassesOnARealAppleCoreProfileContext() {
         runReadbackOn(MacosGlRenderer.DEFAULT)
+    }
+
+    /**
+     * Cycle F-2's gate, on the same real Apple core-profile context: a GLB drawn through the public
+     * API, read back, and asserted in pixels. Every other model assertion in the tree is a call log
+     * against a fake, and the basemap cycle is why that is not enough — see `runModelReadbackSuite`
+     * for exactly what this catches and, more importantly, what it does not.
+     */
+    @Test fun theModelReadbackSuitePassesOnARealAppleCoreProfileContext() {
+        val fixture = CglCoreProfileContext.createOrNull(MacosGlRenderer.DEFAULT)
+            ?: throw AssertionError("the default Apple renderer must be available on a developer machine")
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, MODEL_READBACK_PIXELS, MODEL_READBACK_PIXELS)
+            binding.scissor(0, 0, MODEL_READBACK_PIXELS, MODEL_READBACK_PIXELS)
+            runModelReadbackSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
+        } finally {
+            fixture.destroy()
+        }
     }
 
     /**

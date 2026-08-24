@@ -102,3 +102,19 @@ equality rather than an approximation because the camera orbits its ground ancho
 the billboard's model-view-projection matrix is *identical* at every pitch in the sweep and only the ground
 behind it differs. Both fail on the pre-ADR code and both name the defect in their failure text: the first
 reported 184 of 2099 ground-covered pixels deleted at pitch 15, the second reported 512 pixels against 1024.
+
+## Superseded in part, 2026-08-23: ADR 0030 lets a model write depth
+
+This ADR's blanket rule — no map-regime draw writes depth — **no longer holds for the model pass**, which
+tests and writes. ADR 0030 makes that amendment, and this ADR anticipated it in the paragraph above: "a
+model has volume, and a model pipeline that writes depth is a deliberate amendment to this ADR rather than
+an oversight." Everything else here stands unchanged: the ground and each `Geometry` still write no depth,
+map-anchored stickers still write no depth, the comparison is still `GL_GEQUAL`, and each pass still owes
+its own `depthMask(false)` because `drawFrame` leaves the mask on around its depth clear.
+
+The map regime's order gains models between the geometries and the map-anchored stickers, so it reads:
+ground, geometries, models, map-anchored stickers.
+
+The billboard defect this ADR closed returns in a narrower form — a billboard sharing space with a *model*
+can still be cut along its anchor row, because a model is now a real occluder. ADR 0030 accepts that
+explicitly and records why. Read that ADR before concluding this one was wrong.

@@ -28,29 +28,41 @@ import com.rohittp.reng.internal.gl.GroundPipelineResult
 import com.rohittp.reng.internal.gl.OffscreenSurface
 import com.rohittp.reng.internal.gl.OffscreenSurfaceResult
 import com.rohittp.reng.internal.gl.RenderContextProfile
+import com.rohittp.reng.internal.gl.ModelPipeline
+import com.rohittp.reng.internal.gl.ModelPipelineResult
+import com.rohittp.reng.internal.gl.ModelShaderVariant
 import com.rohittp.reng.internal.gl.Scene
 import com.rohittp.reng.internal.gl.SceneContent
 import com.rohittp.reng.internal.gl.SceneGeometry
 import com.rohittp.reng.internal.gl.SceneGroundTile
+import com.rohittp.reng.internal.gl.SceneModel
 import com.rohittp.reng.internal.gl.SceneSticker
 import com.rohittp.reng.internal.gl.StickerPipeline
 import com.rohittp.reng.internal.gl.StickerPipelineResult
 import com.rohittp.reng.internal.gl.TextureContent
 import com.rohittp.reng.internal.gl.TextureLease
+import com.rohittp.reng.internal.gl.TextureSamplerState
+import com.rohittp.reng.internal.gl.UploadedPrimitive
+import com.rohittp.reng.internal.gl.allModelShaderVariants
 import com.rohittp.reng.internal.gl.createCompositePipeline
 import com.rohittp.reng.internal.gl.createGeometryPipeline
 import com.rohittp.reng.internal.gl.createGroundPipeline
+import com.rohittp.reng.internal.gl.createModelPipeline
 import com.rohittp.reng.internal.gl.createOffscreenSurface
 import com.rohittp.reng.internal.gl.createStickerPipeline
+import com.rohittp.reng.internal.gl.defaultSamplerStateFor
 import com.rohittp.reng.internal.gl.deleteCompositePipeline
 import com.rohittp.reng.internal.gl.deleteGeometryPipeline
 import com.rohittp.reng.internal.gl.deleteGlObjects
 import com.rohittp.reng.internal.gl.deleteGroundPipeline
+import com.rohittp.reng.internal.gl.deleteModelPipeline
 import com.rohittp.reng.internal.gl.deleteOffscreenSurface
 import com.rohittp.reng.internal.gl.deleteStickerPipeline
 import com.rohittp.reng.internal.gl.drawFrame
+import com.rohittp.reng.internal.gl.jointMatricesForSkin
 import com.rohittp.reng.internal.gl.offscreenSurfaceDescriptorFor
 import com.rohittp.reng.internal.gl.requireResolvedAtDrawTime
+import com.rohittp.reng.internal.gl.uploadModelPrimitive
 import com.rohittp.reng.internal.gl.uploadTexture
 import com.rohittp.reng.internal.identity.CanonicalIdentityRegistry
 import com.rohittp.reng.internal.identity.EncodedFramePlan
@@ -67,9 +79,18 @@ import com.rohittp.reng.internal.lifecycle.RendererLifecycleOutcome
 import com.rohittp.reng.internal.lifecycle.RendererLifecycleSnapshot
 import com.rohittp.reng.internal.lifecycle.RendererOwnerState
 import com.rohittp.reng.internal.lifecycle.RenderTargetFact
+import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.maximumBytesFor
+import com.rohittp.reng.internal.model.AnimationResolution
+import com.rohittp.reng.internal.model.DecodedModel
+import com.rohittp.reng.internal.model.ModelDecodeResult
+import com.rohittp.reng.internal.model.composeGlobalTransforms
+import com.rohittp.reng.internal.model.decodeModel
+import com.rohittp.reng.internal.model.resolveAnimationSelectors
+import com.rohittp.reng.internal.model.sampleAnimationTracks
 import com.rohittp.reng.internal.planning.BasemapTileInstance
 import com.rohittp.reng.internal.planning.CanonicalBasemapTile
+import com.rohittp.reng.internal.planning.DrawnThingReference
 import com.rohittp.reng.internal.planning.FramePlanningCore
 import com.rohittp.reng.internal.planning.FramePlanningOutcome
 import com.rohittp.reng.internal.planning.FramePlanningRequest
@@ -126,6 +147,40 @@ internal class PreparedGeometry(
 )
 
 /**
+ * One [Model] with every CPU-side derivation this frame needs already done, synchronously, inside
+ * `RenGRenderer.prepare()`: the GLB decoded, its animation selectors resolved, its tracks sampled at
+ * their own `timeSeconds`, its node hierarchy composed against that sampled pose, and one joint
+ * palette per skin any draw item names.
+ *
+ * **Animation is sampled here rather than at draw time, and that is a correctness claim rather than a
+ * scheduling one.** [AnimationTrack.timeSeconds] is part of the [FramePlan], so the sampled pose is a
+ * pure function of the plan the frame's canonical identity already hashed. Sampling at draw would make
+ * a second `draw()` of the same prepared frame able to produce different pixels from the first, which
+ * that identity already promises it cannot — the same guarantee [PreparedGeometry] makes for a
+ * consumer's own live `uniforms`/`textures` maps.
+ *
+ * [glbKey] is the model's `EXTERNAL`/[ResourceClass.MODEL_GLB] key, retained because it is what
+ * `ResourceKeyDeriver.modelGeometry` and `.modelImage` namespace their own derivations by — the draw
+ * path keys every uploaded primitive and every embedded image off it, so two frames over the same GLB
+ * upload each of them exactly once (ADR 0018).
+ *
+ * [overrideTexture] is [Model.texture], already fetched and decoded, reusing [PreparedGeometryTexture]
+ * because a model's base-colour override and a geometry's consumer texture are the same thing: an
+ * external PNG paired with the key it was acquired under. `null` when the model declares none.
+ *
+ * Nothing here is GL-shaped. Uploading the primitives and the images needs a live render context and
+ * therefore happens in [RenGRenderer.performDraw], exactly as it does for a sticker's image.
+ */
+internal class PreparedModel(
+    internal val placement: Placement,
+    internal val glbKey: ResourceKey,
+    internal val model: DecodedModel,
+    internal val overrideTexture: PreparedGeometryTexture?,
+    internal val nodeTransforms: List<DoubleMatrix4?>,
+    internal val jointMatricesBySkin: Map<Int, List<DoubleMatrix4>>,
+)
+
+/**
  * One unwrapped basemap tile draw instance, already paired at `prepare()` time with the
  * [ResourceKey] naming the rendered tile it draws.
  *
@@ -166,6 +221,12 @@ internal class RenGPreparedFrame(
     stickers: List<PreparedSticker>,
     geometries: List<PreparedGeometry>,
     /**
+     * This frame's models, each already decoded, posed and skinned for exactly this frame — see
+     * [PreparedModel] for why every one of those derivations happened during `prepare()` rather than
+     * being deferred to the draw.
+     */
+    models: List<PreparedModel>,
+    /**
      * This frame's ground, already rendered by the Rentile engine and already named by RenG's own
      * canonical identity (ADR 0018) — one entry per **canonical** tile, so N Mercator world copies of one
      * tile share one entry, one engine render and one later texture upload. Empty whenever the frame
@@ -184,16 +245,39 @@ internal class RenGPreparedFrame(
      * when [basemapTiles] is empty.
      */
     groundInstances: List<PreparedGroundInstance> = emptyList(),
+    /**
+     * Which draw regime each of this frame's drawn things is in, and in what order — taken straight
+     * off `MercatorSpatialPlan.mapEntries` / `.screenEntries` at `prepare()` time and carried, never
+     * re-derived at draw time.
+     *
+     * The GL layer used to throw both answers away and rebuild them from a second resolution of every
+     * `Placement` plus a second sort inside `drawStickers`, which made the planner's unit-tested split
+     * and screen-compositing sort decorative. Snapshotting them here is what makes the planner the one
+     * authority: `internal.gl.Scene` consumes these lists and derives neither.
+     *
+     * [mapOrder] is the planner's declaration order (stickers, then models) and is a statement of
+     * regime membership rather than a draw order — ADR 0030's phase order is applied over it by
+     * `SceneContent`. [screenOrder] is already sorted into `CONTEXT.md`'s compositing order and is a
+     * complete draw order.
+     */
+    mapOrder: List<DrawnThingReference> = emptyList(),
+    screenOrder: List<DrawnThingReference> = emptyList(),
 ) : PreparedFrame {
     private val stickerSnapshot: List<PreparedSticker> = ArrayList(stickers)
     private val geometrySnapshot: List<PreparedGeometry> = ArrayList(geometries)
+    private val modelSnapshot: List<PreparedModel> = ArrayList(models)
     private val basemapTileSnapshot: List<RenderedBasemapTile> = ArrayList(basemapTiles)
     private val groundInstanceSnapshot: List<PreparedGroundInstance> = ArrayList(groundInstances)
+    private val mapOrderSnapshot: List<DrawnThingReference> = ArrayList(mapOrder)
+    private val screenOrderSnapshot: List<DrawnThingReference> = ArrayList(screenOrder)
 
     internal val stickers: List<PreparedSticker> get() = ArrayList(stickerSnapshot)
     internal val geometries: List<PreparedGeometry> get() = ArrayList(geometrySnapshot)
+    internal val models: List<PreparedModel> get() = ArrayList(modelSnapshot)
     internal val basemapTiles: List<RenderedBasemapTile> get() = ArrayList(basemapTileSnapshot)
     internal val groundInstances: List<PreparedGroundInstance> get() = ArrayList(groundInstanceSnapshot)
+    internal val mapOrder: List<DrawnThingReference> get() = ArrayList(mapOrderSnapshot)
+    internal val screenOrder: List<DrawnThingReference> get() = ArrayList(screenOrderSnapshot)
 
     internal var closed: Boolean = false
         private set
@@ -347,6 +431,36 @@ internal class RenGRenderer(
     private val geometryPipelines: MutableMap<ResourceKey, GeometryPipeline> = mutableMapOf()
 
     /**
+     * Every model program, compiled together on the first frame that carries a [Model] and never
+     * before, keyed by the variant that selects it.
+     *
+     * **All eight at once, rather than only the variants this frame needs.**
+     * `internal.gl.modelShaderVariantFor` is the one authority on which of the eight draws a primitive,
+     * and its three answers depend on the primitive's *uploaded* attribute set, its joint palette and
+     * its alpha mode. Asking that question here would mean a second copy of that rule outside the file
+     * that owns it — the same duplication `Scene.mapOrder` exists to have removed — so this pays for
+     * eight programs instead. **Not at setup**, though: a renderer that never draws a model must not
+     * pay sixteen shader compilations for one, and `createModelPipeline` refuses a context whose
+     * `GL_MAX_UNIFORM_BLOCK_SIZE` is below the guaranteed 16384, which would otherwise turn a context
+     * that can draw everything else into a renderer that cannot be constructed at all.
+     */
+    private val modelPipelines: MutableMap<ModelShaderVariant, ModelPipeline> = mutableMapOf()
+
+    /**
+     * Every glTF primitive whose vertex and index buffers are already on the GPU, keyed by
+     * `ResourceKeyDeriver.modelGeometry` — the identity that namespaces `(meshIndex, primitiveIndex)`
+     * by the model's own GLB key (ADR 0018), so two frames over one GLB upload each primitive once and
+     * two GLBs that happen to declare an identical mesh at the same index still do not collide.
+     *
+     * The map is here rather than in [glObjectRegistry] because an [UploadedPrimitive] is more than its
+     * handles: it also carries the index count, the index type and which attributes the primitive
+     * actually has, none of which a `GlObjectHandle` can express. Its handles are registered in the
+     * registry as well, so [close] deletes them and `notifyGpuObjectsGone()` forgets them exactly as it
+     * does a texture's.
+     */
+    private val uploadedPrimitives: MutableMap<ResourceKey, UploadedPrimitive> = mutableMapOf()
+
+    /**
      * Reproduces Rentile's actual `sha256Hex(withRedactedAuthenticationQuery(url))` key for the seven
      * classes Rentile itself fetches and keys, and RenG's own canonical identity for the four it does
      * not (basemap task 16). This is a pure, stateless function of `(locator, resourceClass)`, so one
@@ -413,6 +527,12 @@ internal class RenGRenderer(
                 is FramePlanningOutcome.Failure -> throw planningOutcome.failure.toException()
             }
 
+            // Read once. `FramePlan.models` hands back a fresh copy of its own snapshot on every
+            // access, so re-reading it below would be three copies of one immutable list rather than
+            // three chances to observe a different one -- but naming it once is also what keeps the
+            // traversal check below comparing against the same list the models are built from.
+            val planModels = plan.models
+
             // FramePlanningCore.staticResourceTraversal() walks plan.stickersForCore() in order,
             // emitting exactly one External reference per sticker, so zipping the two lists back
             // together by position is safe.
@@ -422,6 +542,23 @@ internal class RenGRenderer(
             check(stickerImageReferences.size == plan.stickers.size) {
                 "sticker image traversal must have exactly one entry per sticker"
             }
+
+            // FramePlanningCore.staticResourceTraversal() emits exactly one MODEL_GLB entry per
+            // plan model, in plan order, and nothing else in the traversal carries that class -- so
+            // unlike a MODEL_TEXTURE (which a Geometry's own consumer textures reuse) these can be
+            // read straight back out of the traversal by position, exactly as the sticker images
+            // above are.
+            val modelGlbReferences = planned.staticResourceTraversal
+                .filterIsInstance<StaticResourceReference.External>()
+                .filter { it.resourceClass == ResourceClass.MODEL_GLB }
+            check(modelGlbReferences.size == planModels.size) {
+                "model GLB traversal must have exactly one entry per model"
+            }
+            // A Model.texture, on the other hand, traverses under the same reused MODEL_TEXTURE class
+            // a Geometry's consumer textures do, so it is derived independently here for exactly the
+            // reason `geometryTextureReference` documents rather than parsed back out by position.
+            val modelTextureReferences: List<StaticResourceReference.External?> =
+                planModels.map { model -> model.texture?.let { externalImageReference(it) } }
 
             // Task 9b item 4: a Geometry's consumer textures are fetched and decoded here too, one
             // geometry at a time, sorted by sampler name -- the exact same order
@@ -433,7 +570,7 @@ internal class RenGRenderer(
             val geometryTextureReferencesByGeometry: List<List<Pair<String, StaticResourceReference.External>>> =
                 plan.geometries.map { geometry ->
                     geometry.textures.entries.sortedBy { it.key }.map { (name, locator) ->
-                        name to geometryTextureReference(locator)
+                        name to externalImageReference(locator)
                     }
                 }
 
@@ -444,15 +581,22 @@ internal class RenGRenderer(
                 .filterIsInstance<StaticResourceReference.External>()
                 .singleOrNull { it.resourceClass == ResourceClass.BASEMAP_STYLE }
 
-            val imageReferences =
-                stickerImageReferences + geometryTextureReferencesByGeometry.flatten().map { it.second }
+            val imageReferences = stickerImageReferences +
+                modelTextureReferences.filterNotNull() +
+                geometryTextureReferencesByGeometry.flatten().map { it.second }
             // Post-world-copy-dedup by construction: `canonicalResources` is what BasemapTileSelector
             // emits separately from `instances` precisely so N visible copies of one tile are one
             // acquisition, one engine render and one identity. It is non-null exactly when the plan draws
             // a basemap and a style is configured (planMercatorSpatial), which is also exactly when
             // `styleReference` is non-null.
             val canonicalTiles = planned.spatialPlan.tileSelection?.canonicalResources.orEmpty()
-            val acquired = acquireFrameResources(styleReference, imageReferences, canonicalTiles, accessMode)
+            val acquired = acquireFrameResources(
+                styleReference = styleReference,
+                imageReferences = imageReferences,
+                modelGlbReferences = modelGlbReferences,
+                canonicalTiles = canonicalTiles,
+                accessMode = accessMode,
+            )
             val decodedByKey = acquired.decodedImagesByKey
 
             val stickers = plan.stickers.zip(stickerImageReferences) { sticker, reference ->
@@ -486,6 +630,14 @@ internal class RenGRenderer(
                 )
             }
 
+            // Every model-shaped derivation happens right here, synchronously, before this suspend
+            // function returns: decode, selector resolution, sampling, node composition and the joint
+            // palettes. See [PreparedModel] for why the animation pose in particular cannot be left
+            // to the draw.
+            val models = planModels.mapIndexed { index, model ->
+                prepareModel(model, modelGlbReferences[index], modelTextureReferences[index], decodedByKey)
+            }
+
             previousEncodedPlan = planned.encodedPlan
             previousSelectedLod = planned.spatialPlan.lodObservation.selectedLod
 
@@ -496,12 +648,15 @@ internal class RenGRenderer(
                 drawBasemap = plan.drawBasemap,
                 stickers = stickers,
                 geometries = geometries,
+                models = models,
                 basemapTiles = acquired.basemapTiles,
                 groundInstances = groundInstances(
                     instances = planned.spatialPlan.tileSelection?.instances.orEmpty(),
                     renderedTiles = acquired.basemapTiles,
                     styleDigest = acquired.basemapStyleDigest,
                 ),
+                mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
+                screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
             )
         } finally {
             preparationMutex.unlock()
@@ -551,13 +706,17 @@ internal class RenGRenderer(
     /**
      * Derives the same [StaticResourceReference.External] shape
      * `FramePlanningCore.staticResourceTraversal()`'s own `external(...)` helper produces for a
-     * geometry consumer texture, independently — both are the same pure function of
+     * [ResourceClass.MODEL_TEXTURE], independently — both are the same pure function of
      * `(ResourceClass.MODEL_TEXTURE, locator)`, so they always agree without this function needing
-     * to parse the traversal list back apart by position (which — unlike a sticker, where exactly one
-     * traversal entry exists per plan sticker — would require distinguishing a geometry's own texture
-     * entries from a [Model]'s, since both traverse under the same reused [ResourceClass.MODEL_TEXTURE]).
+     * to parse the traversal list back apart by position.
+     *
+     * That position-parse is unavailable here specifically, and only here: exactly one traversal entry
+     * exists per plan sticker and exactly one per plan model's GLB, so both of those *are* read back by
+     * position — but a geometry's own consumer textures and a [Model.texture] override traverse under
+     * the same reused [ResourceClass.MODEL_TEXTURE], so telling one from the other by position would
+     * mean re-deriving the traversal's own interleaving here. Recomputing the key cannot drift.
      */
-    private fun geometryTextureReference(locator: ResourceLocator): StaticResourceReference.External {
+    private fun externalImageReference(locator: ResourceLocator): StaticResourceReference.External {
         val derived = geometryKeyDeriver.external(ResourceClass.MODEL_TEXTURE, locator)
         return StaticResourceReference.External(
             resourceClass = ResourceClass.MODEL_TEXTURE,
@@ -567,6 +726,91 @@ internal class RenGRenderer(
             rawKey = requireNotNull(derived.rawKey),
             privateRentileKey = rentilePrivateKeyResolver.resolve(locator, ResourceClass.MODEL_TEXTURE),
             canonicalIdentity = derived.identity,
+        )
+    }
+
+    /**
+     * One [Model] turned into the [PreparedModel] the draw path consumes: the acquired GLB decoded,
+     * its [AnimationTrack]s resolved and sampled, its node hierarchy composed against that pose, and
+     * one joint palette per skin a draw item names.
+     *
+     * **This is the third parse of the same bytes in this prepared frame, and that is recorded rather
+     * than fixed.** `PARSE_GLB` and `VALIDATE_GLB_FEATURES` each independently re-scan and re-parse the
+     * container inside the resource driver, and [decodeModel] parses it once more here. `decodeModel`'s
+     * own KDoc carries the measurement — 0.85 ms of a 3.6 ms total, 24%, over a real 133 KB model — and
+     * the reason not to fix it in this cycle: the fix is a parsed-model residency belonging beside
+     * `ResidentGeneration.decoded`, which is `null` in production for images too, and half of that fix
+     * is worse than none of it.
+     *
+     * **Every failure below is typed and names the GLB it is about.** A [ModelDecodeResult] failure
+     * separates into the three codes those classes already mean: a structural or BIN-chunk fault is
+     * `RESOURCE_PARSE_FAILED`, a feature outside ADR 0021's subset is `UNSUPPORTED_RESOURCE_FEATURE`,
+     * and an expanded form that will not fit `ResourceLimits.maximumDecodedImageBytes` is
+     * `RESOURCE_DECODE_FAILED` — the same code, at the same stage, this class's own PNG path already
+     * reports for an image that overruns the identical budget.
+     *
+     * A missing, out-of-range or duplicated [AnimationSelector] reports `RESOURCE_PARSE_FAILED` at
+     * [PipelineStage.RESOURCE_PARSING] with `fieldName = animationSelector`. That field is allowlisted
+     * at `RESOURCE_PARSING` and deliberately **not** at `FRAME_PLANNING`, which is a real ordering
+     * constraint rather than a stylistic one: resolving a selector needs the GLB's own animation
+     * catalogue, which does not exist until the bytes have been acquired, so the check cannot live in
+     * `FramePlanningCore` at all.
+     *
+     * A `null` from [jointMatricesForSkin] is a failure here rather than a static draw. Its three
+     * `null`s are a singular skinned-node transform, a joint node the default scene never reaches, and
+     * a skin over [com.rohittp.reng.internal.gl.MAXIMUM_MODEL_JOINTS] joints; each could only be
+     * papered over by inventing a pose, and posing a rig arbitrarily is a silently wrong picture.
+     * [SceneModel]'s "a skin absent from the map draws its mesh statically" covers the *other* case —
+     * a mesh instanced at a node that names no skin at all — which never enters this loop.
+     */
+    private fun prepareModel(
+        model: Model,
+        glbReference: StaticResourceReference.External,
+        textureReference: StaticResourceReference.External?,
+        decodedByKey: Map<ResourceKey, DecodedImage>,
+    ): PreparedModel {
+        val glbKey = glbReference.resourceKey
+        val bytes = residentCache.current(glbKey)?.stored?.bytes
+            ?: error("a successful resource operation must leave its content resident")
+        val decoded = when (val result = decodeModel(bytes, configuration.resourceLimits)) {
+            is ModelDecodeResult.Success -> result.model
+            ModelDecodeResult.Malformed -> throw modelParseFailure(glbKey)
+            ModelDecodeResult.Unsupported -> throw modelUnsupportedFailure(glbKey)
+            ModelDecodeResult.TooLarge -> throw modelDecodeBudgetFailure(glbKey)
+        }
+
+        val tracks = model.animationTracks
+        val resolution = when (val resolved = resolveAnimationSelectors(decoded.document, tracks)) {
+            is AnimationResolution.Resolved -> resolved
+            AnimationResolution.Missing, AnimationResolution.Duplicate -> throw animationSelectorFailure(glbKey)
+        }
+        val sampled = sampleAnimationTracks(decoded.document, decoded.bin, tracks, resolution)
+            ?: throw modelParseFailure(glbKey)
+        val nodeTransforms = composeGlobalTransforms(decoded.document, sampled)
+
+        val jointMatricesBySkin = LinkedHashMap<Int, List<DoubleMatrix4>>()
+        for (item in decoded.drawItems) {
+            val skinIndex = item.skinIndex ?: continue
+            if (skinIndex in jointMatricesBySkin) continue
+            val skin = decoded.skins.getOrNull(skinIndex) ?: throw modelParseFailure(glbKey)
+            jointMatricesBySkin[skinIndex] = jointMatricesForSkin(skin, nodeTransforms, item.nodeIndex)
+                ?: throw modelParseFailure(glbKey)
+        }
+
+        return PreparedModel(
+            placement = model.placement,
+            glbKey = glbKey,
+            model = decoded,
+            overrideTexture = textureReference?.let { reference ->
+                PreparedGeometryTexture(
+                    resourceKey = reference.resourceKey,
+                    image = requireNotNull(decodedByKey[reference.resourceKey]) {
+                        "a successful model-texture acquisition must decode every traversed image"
+                    },
+                )
+            },
+            nodeTransforms = nodeTransforms,
+            jointMatricesBySkin = jointMatricesBySkin,
         )
     }
 
@@ -591,13 +835,19 @@ internal class RenGRenderer(
     /**
      * Acquires everything one frame plan asked for that is not already in hand: the configured basemap
      * style ([styleReference], when the plan draws one), every traversed external image
-     * ([imageReferences] — a sticker's, or a geometry consumer texture's), and the ground itself
-     * ([canonicalTiles]). Returns the decoded images by key plus the rendered ground; the style is not
-     * among the images, because a style is not an image.
+     * ([imageReferences] — a sticker's, a model's base-colour override, or a geometry consumer
+     * texture's), every model GLB ([modelGlbReferences]), and the ground itself ([canonicalTiles]).
+     * Returns the decoded images by key plus the rendered ground.
+     *
+     * **Two of those are acquired and not decoded here, for two different reasons.** A style is not an
+     * image at all: it is validated, compiled through the engine, written and installed by the resource
+     * driver's own basemap-style commit verbs. A GLB is not an image either, and its decode needs the
+     * `ResourceLimits` and the failure vocabulary [prepareModel] owns — so this function's job for a
+     * model ends at leaving its bytes resident, which is exactly what [prepareModel] then reads.
      *
      * Returns nothing and performs no adapter call at all when there is nothing to acquire, which is
-     * what keeps `prepare()` on a plan with no stickers, no geometry consumer textures, and no
-     * configured basemap honestly free of consumer exchange.
+     * what keeps `prepare()` on a plan with no stickers, no models, no geometry consumer textures, and
+     * no configured basemap honestly free of consumer exchange.
      *
      * **One owner for the whole frame.** The occurrence set comes from [buildResourceOperationDefinition],
      * which assigns one [ResourceOwnerId] per preparation item rather than one per reference. That is
@@ -623,10 +873,11 @@ internal class RenGRenderer(
     private suspend fun acquireFrameResources(
         styleReference: StaticResourceReference.External?,
         imageReferences: List<StaticResourceReference.External>,
+        modelGlbReferences: List<StaticResourceReference.External>,
         canonicalTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
     ): FrameAcquisition {
-        val references = listOfNotNull(styleReference) + imageReferences
+        val references = listOfNotNull(styleReference) + imageReferences + modelGlbReferences
         if (references.isEmpty()) {
             preparedBasemapStyle = null
             return FrameAcquisition(emptyMap(), emptyList(), basemapStyleDigest = null)
@@ -850,6 +1101,13 @@ internal class RenGRenderer(
         stickerPipeline = null
         groundPipeline = null
         geometryPipelines.clear()
+        // The model pipelines and every uploaded primitive are forgotten on exactly the same terms and
+        // in exactly the same place as the geometry pipelines above: the joint uniform buffers, the
+        // vertex arrays and the vertex/index buffers all died with the context, so there is nothing
+        // valid left to delete -- while the DecodedModel every one of them was uploaded from is CPU-side
+        // and survives untouched, so the next draw re-uploads without re-fetching or re-parsing.
+        modelPipelines.clear()
+        uploadedPrimitives.clear()
     }
 
     override fun adoptCurrentRenderContext() {
@@ -1011,14 +1269,35 @@ internal class RenGRenderer(
             )
         }
 
+        val preparedModels = frame.models
+        if (preparedModels.isNotEmpty() && modelPipelines.isEmpty()) {
+            allModelShaderVariants().forEach { variant ->
+                when (val result = createModelPipeline(binding, profile.dialect, programs, variant)) {
+                    is ModelPipelineResult.Created -> modelPipelines[variant] = result.pipeline
+                    is ModelPipelineResult.Failed -> return result.failure
+                }
+            }
+        }
+        val sceneModels = ArrayList<SceneModel>(preparedModels.size)
+        for (preparedModel in preparedModels) {
+            sceneModels += sceneModel(preparedModel)
+        }
+
+        // The planner's own lists are handed to the Scene whole. Two `filterIsInstance` calls used to
+        // stand here, dropping every ModelAt reference so a FramePlan carrying a Model would render
+        // nothing rather than fail Scene's bijection check -- correct for exactly as long as no
+        // SceneModel reached the Scene, and a silent un-drawing of every model the moment one did.
         val scene = Scene(
             outputPixelSize = configuration.outputPixelSize,
             frameIndex = frame.frameIndex,
             stickers = sceneStickers,
             geometries = sceneGeometries,
             groundTiles = sceneGroundTiles,
+            models = sceneModels,
+            mapOrder = frame.mapOrder,
+            screenOrder = frame.screenOrder,
         )
-        val content = SceneContent(resolvedCamera, scene, sticker, ground)
+        val content = SceneContent(resolvedCamera, scene, sticker, ground, modelPipelines)
 
         return drawFrame(
             binding = binding,
@@ -1027,6 +1306,81 @@ internal class RenGRenderer(
             composite = composite,
             targetFramebuffer = framebufferName,
             content = content,
+        )
+    }
+
+    /**
+     * One [PreparedModel] with everything GL-shaped in hand: its primitives uploaded, its embedded
+     * images uploaded, and its override — if it has one — uploaded too.
+     *
+     * **Uploaded once, by key, exactly as a sticker's image is.** A primitive is keyed by
+     * `ResourceKeyDeriver.modelGeometry` and an embedded image by `.modelImage`, both namespaced by the
+     * model's own GLB key, so a second draw of the same prepared frame — or a later frame over the same
+     * GLB — reuses what is already on the GPU rather than uploading it again. Two draw items instancing
+     * one mesh derive one key and therefore share one [UploadedPrimitive], which is what
+     * [SceneModel.uploaded]'s `(meshIndex, primitiveIndex)` key means.
+     *
+     * **[SceneModel.imageTextures] stays index-parallel with `model.images`, including the entries an
+     * override makes unreachable.** Uploading only the images some material names — or none at all when
+     * an override replaces every one of them — would be cheaper and would break that contract, and the
+     * draw path indexes this list by a material's own `baseColourImageIndex`. A GLB's embedded images
+     * are already decoded in CPU memory by the time this runs; the residency saved is not worth a list
+     * whose indices mean something different from what its type says.
+     *
+     * Each image takes the sampler of the first material that names it, and glTF's own default
+     * otherwise. One image sampled by two textures with two different samplers therefore gets the first
+     * — a real ambiguity in keying a GPU texture by image index rather than by texture index, and the
+     * one `ResourceKeyDeriver.modelImage` is defined in terms of.
+     *
+     * The override uploads as [TextureContent.IMAGE], not `DATA`, and so do the embedded images: the
+     * textured model fragment shader un-premultiplies the texel it samples, so a texture uploaded
+     * without premultiplication renders every partially transparent surface too dark.
+     */
+    private fun sceneModel(preparedModel: PreparedModel): SceneModel {
+        val decoded = preparedModel.model
+        val uploaded = HashMap<Pair<Int, Int>, UploadedPrimitive>(decoded.drawItems.size)
+        for (item in decoded.drawItems) {
+            val meshPrimitive = item.meshIndex to item.primitiveIndex
+            if (meshPrimitive in uploaded) continue
+            val key = geometryKeyDeriver
+                .modelGeometry(preparedModel.glbKey, item.meshIndex, item.primitiveIndex)
+                .key
+            uploaded[meshPrimitive] = uploadedPrimitives.getOrPut(key) {
+                uploadModelPrimitive(binding, decoded.primitiveFor(item)).also { primitive ->
+                    glObjectRegistry.register(key, primitiveHandles(primitive))
+                }
+            }
+        }
+
+        val samplersByImage = HashMap<Int, TextureSamplerState>()
+        for (primitive in decoded.primitives) {
+            val imageIndex = primitive.material.baseColourImageIndex ?: continue
+            samplersByImage.getOrPut(imageIndex) { primitive.material.baseColourSampler }
+        }
+        val imageTextures = decoded.images.mapIndexed { imageIndex, image ->
+            val key = geometryKeyDeriver.modelImage(preparedModel.glbKey, imageIndex).key
+            cachedTexture(key) {
+                uploadTexture(
+                    binding = binding,
+                    image = image,
+                    content = TextureContent.IMAGE,
+                    sampler = samplersByImage[imageIndex] ?: defaultSamplerStateFor(TextureContent.IMAGE),
+                )
+            }
+        }
+
+        return SceneModel(
+            placement = preparedModel.placement,
+            model = decoded,
+            nodeTransforms = preparedModel.nodeTransforms,
+            jointMatricesBySkin = preparedModel.jointMatricesBySkin,
+            uploaded = uploaded,
+            imageTextures = imageTextures,
+            overrideTexture = preparedModel.overrideTexture?.let { override ->
+                cachedTexture(override.resourceKey) {
+                    uploadTexture(binding, override.image, TextureContent.IMAGE)
+                }
+            },
         )
     }
 
@@ -1123,7 +1477,7 @@ internal class RenGRenderer(
      * cached by [ResourceKey] and deleted only in [close] / forgotten only in [notifyGpuObjectsGone].
      */
     private fun cachedTexture(key: ResourceKey, upload: () -> Int): Int {
-        val existing = glObjectRegistry.handles(key).firstOrNull { it.type == GlObjectType.TEXTURE }
+        val existing = glObjectRegistry.handlesOfType(key, GlObjectType.TEXTURE).firstOrNull()
         if (existing != null) return existing.name
         val name = upload()
         glObjectRegistry.register(key, listOf(GlObjectHandle(GlObjectType.TEXTURE, name)))
@@ -1172,6 +1526,15 @@ internal class RenGRenderer(
                 groundPipeline?.let { deleteGroundPipeline(binding, programs, it) }
                 geometryPipelines.values.forEach { deleteGeometryPipeline(binding, programs, it) }
                 geometryPipelines.clear()
+                // The model pipelines are deleted here and the uploaded primitives are not, and the
+                // asymmetry is deliberate: `deleteModelPipeline` owns a joint uniform buffer that is
+                // registered nowhere, whereas every vertex array and buffer an uploaded primitive holds
+                // IS registered under its own `modelGeometry` key, so the registry sweep below deletes
+                // it exactly once. Calling `deleteUploadedPrimitive` here as well would delete each of
+                // them twice.
+                modelPipelines.values.forEach { deleteModelPipeline(binding, programs, it) }
+                modelPipelines.clear()
+                uploadedPrimitives.clear()
                 // Task 9b item 1: every sticker/geometry-consumer texture cachedTexture() has ever
                 // registered gets deleted here, exactly once, on close -- the same ADR 0007/0015
                 // "close() deletes" half geometryPipelines already establishes above. The registry's
@@ -1199,6 +1562,105 @@ internal class RenGRenderer(
 
 /** RGBA8, the one decoded form Cycle C produces and the one GL upload format RenG uses. */
 private const val RGBA_BYTES_PER_PIXEL: Long = 4L
+
+/**
+ * Every GL object one [UploadedPrimitive] holds, as registry handles: its vertex array, one buffer per
+ * attribute the primitive actually carries, and its index buffer.
+ *
+ * The index buffer is listed separately and deliberately, for the reason `deleteUploadedPrimitive`
+ * gives: deleting a vertex array frees the vertex array object alone and never the buffers it recorded
+ * bindings to, so an index buffer left off this list is a permanent leak with no GL error to find it by.
+ */
+private fun primitiveHandles(primitive: UploadedPrimitive): List<GlObjectHandle> =
+    buildList(primitive.buffers.size + 2) {
+        add(GlObjectHandle(GlObjectType.VERTEX_ARRAY, primitive.vertexArray))
+        primitive.buffers.forEach { add(GlObjectHandle(GlObjectType.BUFFER, it)) }
+        add(GlObjectHandle(GlObjectType.BUFFER, primitive.indexBuffer))
+    }
+
+/**
+ * A GLB whose bytes are not the glTF 2.0 binary RenG can draw, named by the model it is about.
+ *
+ * Reachable for two disjoint reasons. `PARSE_GLB` and `VALIDATE_GLB_FEATURES` already refused a
+ * container or structural fault during acquisition, so what survives to `decodeModel` and still reports
+ * [ModelDecodeResult.Malformed] is precisely the class of fault those gates cannot see — `parseGltf`
+ * receives the BIN chunk's *length* and never its bytes, so an accessor overrunning the chunk actually
+ * delivered, an index naming no vertex, or an attribute disagreeing with `POSITION`'s count all arrive
+ * here. Unreadable animation data and an unposeable rig report the same way, and for the same reason:
+ * both are only knowable from those same bytes.
+ */
+private fun modelParseFailure(key: ResourceKey): RenGException = RenGException(
+    code = RenGErrorCode.RESOURCE_PARSE_FAILED,
+    stage = PipelineStage.RESOURCE_PARSING,
+    diagnostics = listOf(
+        failureContextDiagnostic(
+            stage = PipelineStage.RESOURCE_PARSING,
+            fieldName = DiagnosticField.RESOURCE,
+            resourceClass = ResourceClass.MODEL_GLB,
+            resourceKey = key,
+        ),
+    ),
+)
+
+/**
+ * A well-formed GLB asking for something outside ADR 0021's supported subset. Distinct from
+ * [modelParseFailure] because the two send a consumer to two different fixes — re-export the asset
+ * against RenG's subset, rather than repair a broken file.
+ */
+private fun modelUnsupportedFailure(key: ResourceKey): RenGException = RenGException(
+    code = RenGErrorCode.UNSUPPORTED_RESOURCE_FEATURE,
+    stage = PipelineStage.RESOURCE_PARSING,
+    diagnostics = listOf(
+        failureContextDiagnostic(
+            stage = PipelineStage.RESOURCE_PARSING,
+            fieldName = DiagnosticField.RESOURCE,
+            resourceClass = ResourceClass.MODEL_GLB,
+            resourceKey = key,
+        ),
+    ),
+)
+
+/**
+ * A drawable GLB whose expanded CPU form does not fit `ResourceLimits.maximumDecodedImageBytes`.
+ * `RESOURCE_DECODE_FAILED` at `RESOURCE_DECODING`, the same code at the same stage a sticker PNG
+ * overrunning that identical budget already reports — the fault is in the caller's own limit or in the
+ * asset's size, and reporting it as a parse failure would send them to look at the file's structure.
+ */
+private fun modelDecodeBudgetFailure(key: ResourceKey): RenGException = RenGException(
+    code = RenGErrorCode.RESOURCE_DECODE_FAILED,
+    stage = PipelineStage.RESOURCE_DECODING,
+    diagnostics = listOf(
+        failureContextDiagnostic(
+            stage = PipelineStage.RESOURCE_DECODING,
+            fieldName = DiagnosticField.RESOURCE,
+            resourceClass = ResourceClass.MODEL_GLB,
+            resourceKey = key,
+        ),
+    ),
+)
+
+/**
+ * `CONTEXT.md`'s two selector rules, reported as one code with its own field: "Preparation rejects a
+ * missing or out-of-range selector, or different selectors that resolve to the same animation."
+ *
+ * `fieldName = animationSelector` rather than `resource` because the fault is in the [FramePlan]'s own
+ * [AnimationSelector] and not in the GLB — the model is perfectly good, and it is named here only so a
+ * consumer with several models knows which one's catalogue the selector missed. The field is
+ * allowlisted at [PipelineStage.RESOURCE_PARSING] and nowhere earlier, which is the allowlist recording
+ * an ordering fact: nothing can resolve a selector before the catalogue it resolves against exists.
+ */
+private fun animationSelectorFailure(key: ResourceKey): RenGException = RenGException(
+    code = RenGErrorCode.RESOURCE_PARSE_FAILED,
+    stage = PipelineStage.RESOURCE_PARSING,
+    diagnostics = listOf(
+        failureContextDiagnostic(
+            stage = PipelineStage.RESOURCE_PARSING,
+            fieldName = DiagnosticField.ANIMATION_SELECTOR,
+            resourceClass = ResourceClass.MODEL_GLB,
+            resourceKey = key,
+        ),
+    ),
+)
 
 /**
  * A rendered basemap tile that will not decode, named by the tile it is about.

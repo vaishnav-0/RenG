@@ -42,6 +42,20 @@ private const val VERTICES_PER_TRIANGLE = 3L
 /** The two accessor members the specification types as a per-component bound array. */
 private val ACCESSOR_BOUND_FIELDS = listOf("min", "max")
 
+/** The one interpolation whose sampler stores three output values per keyframe -- an in-tangent, a
+ * value and an out-tangent. `VALIDATE_GLB_FEATURES` refuses it, but this gate must still read a
+ * legal cubic-spline asset by its own arithmetic rather than report it as corrupt (ADR 0021). */
+private const val CUBIC_SPLINE_INTERPOLATION = "CUBICSPLINE"
+
+/**
+ * The glTF scene-graph node depth every caller of [parseGltf] outside this file's own tests passes:
+ * generous for anything RenG draws, finite for a cyclic graph the specification forbids. Shared
+ * rather than restated per call site because the two `PARSE_GLB`/`VALIDATE_GLB_FEATURES` gates and
+ * [com.rohittp.reng.internal.model.decodeModel] must agree on it exactly -- a decoder with a
+ * shallower bound than the gate that admitted a document would refuse a model the gate passed.
+ */
+internal const val MAXIMUM_GLB_NODE_DEPTH: Int = 128
+
 /**
  * Parses [json] -- already scanned as a well-formed GLB JSON chunk by [scanGlb] -- into a fully
  * parsed, internally consistent [GltfDocument], or reports the first structural fault found.
@@ -88,6 +102,27 @@ private fun majorMinor(text: String): Pair<Int, Int>? {
     val major = majorText.toIntOrNull() ?: return null
     val minor = minorText.toIntOrNull() ?: return null
     return major to minor
+}
+
+/** The three values the specification's `alphaMode` enumeration defines. A fourth is a schema
+ * violation, not an unsupported feature: there is no glTF asset for which it is legal. */
+private val ALPHA_MODES = setOf("OPAQUE", "MASK", "BLEND")
+
+/**
+ * A material's `alphaMode`, defaulting to the specification's own `OPAQUE` when the member is
+ * absent and rejecting any present value outside [ALPHA_MODES].
+ *
+ * The rejection is the point. Reading this as `(value as? JsonValue.Text)?.value ?: "OPAQUE"` --
+ * which is what it used to be -- silently folded a misspelt or future `alphaMode`, and a
+ * non-string one, into `OPAQUE`, rendering a transparent material solid with nothing said. That is
+ * the quiet repair ADR 0021 refuses everywhere else. Absent is different from wrong: absent
+ * genuinely means `OPAQUE` because the specification says so.
+ */
+private fun alphaMode(value: JsonValue?): String {
+    if (value == null) return "OPAQUE"
+    val text = (value as? JsonValue.Text)?.value ?: reject(GltfReject.ALPHA_MODE)
+    if (text !in ALPHA_MODES) reject(GltfReject.ALPHA_MODE)
+    return text
 }
 
 private fun numberValue(value: JsonValue?): Double? = when (value) {
@@ -170,9 +205,10 @@ private class GltfParser(
         val camerasCount = arrOf(json.members["cameras"]).size
         val nodes = parseNodes(meshes.size, skinsCount, camerasCount)
         validateNodeGraph(nodes)
+        val skins = parseSkins(nodes.size, accessors.size)
         val scenes = parseScenes(nodes.size)
         val defaultScene = optionalIndex(json.members, "scene", scenes.size)
-        val animations = parseAnimations(nodes.size, accessors.size)
+        val animations = parseAnimations(nodes.size, accessors)
         validateAnimatedNodeTransforms(nodes, animations)
 
         return GltfDocument(
@@ -180,6 +216,7 @@ private class GltfParser(
             bufferViews = bufferViews,
             meshes = meshes,
             nodes = nodes,
+            skins = skins,
             scenes = scenes,
             defaultScene = defaultScene,
             animations = animations,
@@ -378,7 +415,7 @@ private class GltfParser(
                 occlusionTexture = textureRef(members, "occlusionTexture", texturesCount),
                 emissiveTexture = textureRef(members, "emissiveTexture", texturesCount),
                 emissiveFactor = numberList(members["emissiveFactor"]),
-                alphaMode = (members["alphaMode"] as? JsonValue.Text)?.value ?: "OPAQUE",
+                alphaMode = alphaMode(members["alphaMode"]),
                 alphaCutoff = numberValue(members["alphaCutoff"]) ?: 0.5,
                 doubleSided = (members["doubleSided"] as? JsonValue.Bool)?.value ?: false,
             )
@@ -484,6 +521,29 @@ private class GltfParser(
         }
     }
 
+    /** Every skin, read after [parseNodes] so a joint can be bound-checked against the real node
+     * count. A joint is a node reference like any other, so an unresolvable one is
+     * [GltfReject.INDEX_OUT_OF_RANGE]; an empty or absent `joints` is
+     * [GltfReject.SIZE_FIELD_OUT_OF_RANGE], since the specification's own schema gives that array
+     * `minItems: 1` and a skin with no joint deforms nothing. Whether the skin is *drawn* is not
+     * decided here at all -- a `skins` array no node references is exporter debris, which 18 of the
+     * consumer's 41 models carry, and nothing about it is malformed. */
+    private fun parseSkins(nodesCount: Int, accessorsCount: Int): List<GltfSkin> =
+        arrOf(json.members["skins"]).map { element ->
+            val members = membersOf(element)
+            val joints = arrOf(members["joints"]).map { value ->
+                val index = (value as? JsonValue.Integer)?.value ?: reject(GltfReject.NON_INTEGER_FIELD)
+                if (index < 0 || index >= nodesCount) reject(GltfReject.INDEX_OUT_OF_RANGE)
+                index.toInt()
+            }
+            if (joints.isEmpty()) reject(GltfReject.SIZE_FIELD_OUT_OF_RANGE)
+            GltfSkin(
+                inverseBindMatrices = optionalIndex(members, "inverseBindMatrices", accessorsCount),
+                joints = joints,
+                skeleton = optionalIndex(members, "skeleton", nodesCount),
+            )
+        }
+
     /** The specification requires the node hierarchy to be a set of disjoint strict trees: every
      * node has at most one parent, and no cycle exists. A node referenced as a child more than
      * once -- by one parent twice, or by two different parents -- is rejected immediately. The
@@ -534,7 +594,7 @@ private class GltfParser(
             GltfScene(nodeIndices)
         }
 
-    private fun parseAnimations(nodesCount: Int, accessorsCount: Int): List<GltfAnimation> {
+    private fun parseAnimations(nodesCount: Int, accessors: List<GltfAccessor>): List<GltfAnimation> {
         val seenNames = mutableSetOf<String>()
         return arrOf(json.members["animations"]).map { element ->
             val members = membersOf(element)
@@ -544,8 +604,8 @@ private class GltfParser(
             val samplers = arrOf(members["samplers"]).map { samplerElement ->
                 val samplerMembers = membersOf(samplerElement)
                 GltfAnimationSampler(
-                    input = requiredIndex(samplerMembers, "input", accessorsCount),
-                    output = requiredIndex(samplerMembers, "output", accessorsCount),
+                    input = requiredIndex(samplerMembers, "input", accessors.size),
+                    output = requiredIndex(samplerMembers, "output", accessors.size),
                     interpolation = (samplerMembers["interpolation"] as? JsonValue.Text)?.value ?: "LINEAR",
                 )
             }
@@ -558,7 +618,43 @@ private class GltfParser(
                     targetPath = (targetMembers["path"] as? JsonValue.Text)?.value ?: "",
                 )
             }
+            validateSamplerCounts(samplers, accessors)
+            validateDistinctChannelTargets(channels)
+
             GltfAnimation(name, channels, samplers)
+        }
+    }
+
+    /** The specification fixes the ratio between a sampler's two accessor counts: one output value
+     * per keyframe time, or three for [CUBIC_SPLINE_INTERPOLATION]. A sampler that breaks it is
+     * undecidable rather than unsupported -- there is no keyframe the surplus value belongs to and
+     * no value the missing keyframe reads -- so it belongs to this gate. Stated as a division and
+     * a remainder rather than as `keyframes * valuesPerKeyframe`, which overflows `Long` for a
+     * large declared count and wraps negative, passing the comparison it exists to fail. Every
+     * sampler is checked, referenced or not, exactly as every accessor's span already is. */
+    private fun validateSamplerCounts(samplers: List<GltfAnimationSampler>, accessors: List<GltfAccessor>) {
+        for (sampler in samplers) {
+            val keyframes = accessors[sampler.input].count
+            val values = accessors[sampler.output].count
+            val valuesPerKeyframe = if (sampler.interpolation == CUBIC_SPLINE_INTERPOLATION) 3L else 1L
+            if (values % valuesPerKeyframe != 0L || values / valuesPerKeyframe != keyframes) {
+                reject(GltfReject.ANIMATION_SAMPLER_COUNTS)
+            }
+        }
+    }
+
+    /** The specification forbids two channels of one animation writing the same node and the same
+     * `target.path`: the two disagree about one value at one time, with no rule for which wins. A
+     * channel naming no node is specified as a no-op, so it targets nothing to collide with. Scoped
+     * to one animation because two *animations* driving the same node is the ordinary case -- the
+     * caller chooses which to play. */
+    private fun validateDistinctChannelTargets(channels: List<GltfAnimationChannel>) {
+        val targets = mutableSetOf<Pair<Int, String>>()
+        for (channel in channels) {
+            val node = channel.targetNode ?: continue
+            if (!targets.add(node to channel.targetPath)) {
+                reject(GltfReject.DUPLICATE_ANIMATION_CHANNEL_TARGET)
+            }
         }
     }
 }

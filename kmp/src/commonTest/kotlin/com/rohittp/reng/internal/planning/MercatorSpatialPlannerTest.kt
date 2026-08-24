@@ -166,9 +166,12 @@ class MercatorSpatialPlannerTest {
         )
         val mapSticker = sticker(mapStickerPlacement, "map-sticker")
         val screenSticker = sticker(screenStickerPlacement, "screen-sticker")
-        val screenModelPlacement = Placement(
-            positionMode = AnchoringMode.SCREEN,
-            position = Vector3(300.0, 400.0, 2.0),
+        // ADR 0029: a SCREEN-positioned Model is refused, so both fixture models here are
+        // MAP-positioned -- distinguished by rotation/scale mode instead, which is enough on its
+        // own to keep demonstrating that regime selection follows positionMode alone.
+        val anotherMapModelPlacement = Placement(
+            positionMode = AnchoringMode.MAP,
+            position = Vector3(30.0, 40.0, 2.0),
             rotationMode = AnchoringMode.MAP,
             rotation = Vector3(-8.0, -9.0, -10.0),
             scaleMode = AnchoringMode.MAP,
@@ -186,7 +189,7 @@ class MercatorSpatialPlannerTest {
             plan = framePlan(
                 stickers = listOf(mapSticker, screenSticker, mapSticker),
                 models = listOf(
-                    model(screenModelPlacement, "screen-model"),
+                    model(anotherMapModelPlacement, "another-map-model"),
                     model(mapModelPlacement, "map-model"),
                     model(mapModelPlacement, "map-model-duplicate"),
                 ),
@@ -201,16 +204,14 @@ class MercatorSpatialPlannerTest {
             listOf(
                 DrawnThingReference.StickerAt(0),
                 DrawnThingReference.StickerAt(2),
+                DrawnThingReference.ModelAt(0),
                 DrawnThingReference.ModelAt(1),
                 DrawnThingReference.ModelAt(2),
             ),
             spatialPlan.mapEntries.map(ResolvedDrawnThing::reference),
         )
         assertEquals(
-            listOf(
-                DrawnThingReference.ModelAt(0),
-                DrawnThingReference.StickerAt(1),
-            ),
+            listOf(DrawnThingReference.StickerAt(1)),
             spatialPlan.screenEntries.map(ResolvedDrawnThing::reference),
         )
         assertEquals(
@@ -219,16 +220,19 @@ class MercatorSpatialPlannerTest {
         )
         assertEquals(
             resolvePlacement(screenStickerPlacement, spatialPlan.camera).successValue(),
-            spatialPlan.screenEntries[1].placement,
+            spatialPlan.screenEntries[0].placement,
         )
         assertEquals(DrawRegime.MAP_OCCLUDED, spatialPlan.mapEntries[0].placement.drawRegime)
         assertEquals(DrawRegime.SCREEN_COMPOSITED, spatialPlan.screenEntries[0].placement.drawRegime)
     }
 
+    // ADR 0029 leaves only Stickers reachable in the screen-composited regime through the real
+    // planning pipeline, so this no longer demonstrates a sticker-before-model tiebreak (that
+    // property of screenCompositingOrder is still covered directly, via construction, by
+    // spatialPlanConstructorRejectsScreenEntriesOutsideDocumentedCompositingOrder below).
     @Test
-    fun screenEntriesSortByZThenStickerBeforeModelThenSourceIndex() {
+    fun screenEntriesSortByZThenSourceIndex() {
         val duplicateZeroSticker = sticker(screenPlacement(-0.0), "zero-sticker")
-        val duplicateZeroModel = model(screenPlacement(0.0), "zero-model")
         val spatialPlan = planSuccess(
             plan = framePlan(
                 drawBasemap = false,
@@ -237,12 +241,7 @@ class MercatorSpatialPlannerTest {
                     duplicateZeroSticker,
                     sticker(screenPlacement(1.0), "middle-sticker"),
                     duplicateZeroSticker,
-                ),
-                models = listOf(
-                    duplicateZeroModel,
-                    model(screenPlacement(-1.0), "bottom-model"),
-                    model(screenPlacement(2.0), "top-model"),
-                    duplicateZeroModel,
+                    sticker(screenPlacement(-1.0), "bottom-sticker"),
                 ),
             ),
             maximumBasemapTileInstances = 1,
@@ -251,22 +250,19 @@ class MercatorSpatialPlannerTest {
 
         assertEquals(
             listOf(
-                DrawnThingReference.ModelAt(1),
+                DrawnThingReference.StickerAt(4),
                 DrawnThingReference.StickerAt(1),
                 DrawnThingReference.StickerAt(3),
-                DrawnThingReference.ModelAt(0),
-                DrawnThingReference.ModelAt(3),
                 DrawnThingReference.StickerAt(2),
                 DrawnThingReference.StickerAt(0),
-                DrawnThingReference.ModelAt(2),
             ),
             spatialPlan.screenEntries.map(ResolvedDrawnThing::reference),
         )
         assertEquals(
-            listOf(-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0),
+            listOf(-1.0, 0.0, 0.0, 1.0, 2.0),
             spatialPlan.screenEntries.map { requireNotNull(it.placement.screenCompositeZ) },
         )
-        for (entry in spatialPlan.screenEntries.drop(1).take(4)) {
+        for (entry in spatialPlan.screenEntries.drop(1).take(2)) {
             assertEquals(0.0.toBits(), requireNotNull(entry.placement.screenCompositeZ).toBits())
         }
     }
@@ -318,8 +314,11 @@ class MercatorSpatialPlannerTest {
     @Test
     fun cameraBudgetAndDrawnThingFailuresUseDeterministicPlanningPrecedence() {
         val invalidScreenX = screenPlacement(z = 0.0, x = Double.MAX_VALUE)
+        // positionMode = MAP so this fixture still exercises INVALID_VALUE/"placement.scale" (the
+        // concern this test predates ADR 0029) rather than tripping the newer
+        // UNSUPPORTED_ANCHORING_MODE check when reused on a Model below.
         val invalidScale = Placement(
-            positionMode = AnchoringMode.SCREEN,
+            positionMode = AnchoringMode.MAP,
             position = Vector3(0.0, 0.0, 0.0),
             rotationMode = AnchoringMode.SCREEN,
             rotation = Vector3(0.0, 0.0, 0.0),
@@ -381,6 +380,106 @@ class MercatorSpatialPlannerTest {
             basemapStyleConfigured = false,
         )
         assertFailure(modelFirst, RenGErrorCode.INVALID_VALUE, "placement.scale")
+    }
+
+    // ADR 0029: a SCREEN-positioned Model is refused at frame planning, before acquisition or
+    // drawing, never substituted -- the screen projection has no z row at all, so a volumetric mesh
+    // drawn there would show its back faces through its front ones.
+    @Test
+    fun aScreenPositionedModelIsRefusedAtFramePlanning() {
+        val outcome = planMercatorSpatial(
+            plan = framePlan(
+                drawBasemap = false,
+                models = listOf(model(screenPlacement(0.0), "screen-model")),
+            ),
+            outputPixelSize = OutputPixelSize(100, 100),
+            previousSelectedLod = null,
+            maximumBasemapTileInstances = 1,
+            basemapStyleConfigured = false,
+        )
+
+        assertFailure(outcome, RenGErrorCode.UNSUPPORTED_ANCHORING_MODE, "placement.positionMode")
+    }
+
+    // Only a Model's SCREEN *position* is refused -- a Sticker is flat and has no interior to
+    // occlude, so it keeps working in the screen-composited regime exactly as before. This is the
+    // test that stops the check being written one level too high (on Placement rather than Model).
+    @Test
+    fun aScreenPositionedStickerIsStillAccepted() {
+        val spatialPlan = planSuccess(
+            plan = framePlan(
+                drawBasemap = false,
+                stickers = listOf(sticker(screenPlacement(0.0), "screen-sticker")),
+            ),
+            maximumBasemapTileInstances = 1,
+            basemapStyleConfigured = false,
+        )
+
+        assertEquals(
+            listOf(DrawnThingReference.StickerAt(0)),
+            spatialPlan.screenEntries.map(ResolvedDrawnThing::reference),
+        )
+    }
+
+    // The billboard case CONTEXT.md and ADR 0029 both explicitly keep supported: a MAP position with
+    // SCREEN rotation/scale falls out of composeMapModelViewProjection naturally, so it must not be
+    // caught by a check that only looks at positionMode.
+    @Test
+    fun aScreenRotationOrScaleOverAMapPositionedModelIsStillAccepted() {
+        val billboardPlacement = Placement(
+            positionMode = AnchoringMode.MAP,
+            position = Vector3(10.0, 20.0, 30.0),
+            rotationMode = AnchoringMode.SCREEN,
+            rotation = Vector3(1.0, 2.0, 3.0),
+            scaleMode = AnchoringMode.SCREEN,
+            scale = 4.0,
+        )
+        val spatialPlan = planSuccess(
+            plan = framePlan(
+                drawBasemap = false,
+                models = listOf(model(billboardPlacement, "billboard-model")),
+            ),
+            maximumBasemapTileInstances = 1,
+            basemapStyleConfigured = false,
+        )
+
+        assertEquals(
+            listOf(DrawnThingReference.ModelAt(0)),
+            spatialPlan.mapEntries.map(ResolvedDrawnThing::reference),
+        )
+    }
+
+    // ADR 0029: "before acquisition or drawing, never substituting." planMercatorSpatial has no
+    // transport of its own -- real acquisition only happens later, in
+    // FramePlanningCore.staticResourceTraversal, which runs only once planMercatorSpatial succeeds.
+    // So proving this check preempts resolveDrawnThing/resolvePlacement -- the only per-model work
+    // this loop performs, and the exact site an invalid placement.scale would otherwise be caught at
+    // -- proves the refusal happens before FramePlanningCore could ever reach acquisition for this
+    // frame. If the check instead ran after resolveDrawnThing, this would surface
+    // INVALID_VALUE/"placement.scale" (resolvePlacement's own validation) rather than
+    // UNSUPPORTED_ANCHORING_MODE.
+    @Test
+    fun theRefusalHappensBeforeAnyAcquisition() {
+        val screenModelWithAnOtherwiseInvalidScale = Placement(
+            positionMode = AnchoringMode.SCREEN,
+            position = Vector3(0.0, 0.0, 0.0),
+            rotationMode = AnchoringMode.SCREEN,
+            rotation = Vector3(0.0, 0.0, 0.0),
+            scaleMode = AnchoringMode.SCREEN,
+            scale = Double.MAX_VALUE,
+        )
+        val outcome = planMercatorSpatial(
+            plan = framePlan(
+                drawBasemap = false,
+                models = listOf(model(screenModelWithAnOtherwiseInvalidScale, "poison-model")),
+            ),
+            outputPixelSize = OutputPixelSize(100, 100),
+            previousSelectedLod = null,
+            maximumBasemapTileInstances = 1,
+            basemapStyleConfigured = false,
+        )
+
+        assertFailure(outcome, RenGErrorCode.UNSUPPORTED_ANCHORING_MODE, "placement.positionMode")
     }
 
     @Test

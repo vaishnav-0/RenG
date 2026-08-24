@@ -10,9 +10,11 @@ import com.rohittp.reng.internal.failureContextDiagnostic
 import com.rohittp.reng.internal.math.DoubleMatrix3
 import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.math.DoubleVector3
+import com.rohittp.reng.internal.model.DecodedModel
 import com.rohittp.reng.internal.planning.BasemapTileInstance
 import com.rohittp.reng.internal.planning.BasemapTileQuad
 import com.rohittp.reng.internal.planning.DrawRegime
+import com.rohittp.reng.internal.planning.DrawnThingReference
 import com.rohittp.reng.internal.planning.ResolvedGeometry
 import com.rohittp.reng.internal.planning.ResolvedPlacement
 import com.rohittp.reng.internal.planning.SpatialOutcome
@@ -97,12 +99,74 @@ internal class SceneGroundTile(
 )
 
 /**
+ * One model still carrying its raw, unresolved [Placement], plus everything the layer above already
+ * derived for it once per frame: the decoded GLB, its node hierarchy composed for this frame's
+ * animation state, its joint palettes, its uploaded GPU geometry, and its textures.
+ *
+ * [SceneContent] resolves [placement] against the frame's camera at draw time, exactly as it does
+ * for a [SceneSticker] and for the same reason (see the class KDoc): the resolution is a pure
+ * function of [placement] and the camera. Everything else here is *not* pure — decoding, node
+ * composition, skinning, uploading and texture residency all belong to whoever assembles a
+ * [SceneContent] (Task 16's renderer), which is why they arrive already done.
+ *
+ * [nodeTransforms] is index-parallel with `model.document.nodes`, as
+ * [com.rohittp.reng.internal.model.composeGlobalTransforms] returns it, and is `null` at a node the
+ * default scene never reaches. A draw item at such a node has no place in the world and is dropped
+ * rather than drawn at the origin.
+ *
+ * [jointMatricesBySkin] is keyed by the skin index a [com.rohittp.reng.internal.model.ModelDrawItem]
+ * names. A skin absent from the map draws its mesh statically — legal glTF, and the same fallback
+ * [modelShaderVariantFor] already makes for joints and weights present with no palette.
+ *
+ * [uploaded] is keyed by `(meshIndex, primitiveIndex)`, the same key
+ * [com.rohittp.reng.internal.model.DecodedModel.primitiveFor] resolves, so two draw items
+ * instancing one mesh share one [UploadedPrimitive] rather than uploading it twice.
+ *
+ * [imageTextures] is index-parallel with `model.images`, and [overrideTexture] is `Model.texture`'s
+ * already-uploaded name. `CONTEXT.md` states the override as replacing "every rendered primitive's
+ * base-colour texture while preserving other material properties", so it wins over the authored
+ * image wherever it is present — including on a primitive whose material names no texture at all.
+ */
+internal class SceneModel(
+    val placement: Placement,
+    val model: DecodedModel,
+    val nodeTransforms: List<DoubleMatrix4?>,
+    val jointMatricesBySkin: Map<Int, List<DoubleMatrix4>>,
+    val uploaded: Map<Pair<Int, Int>, UploadedPrimitive>,
+    val imageTextures: List<Int>,
+    val overrideTexture: Int?,
+)
+
+/**
  * Everything one frame needs [SceneContent] to draw. [outputPixelSize] and [frameIndex] feed the
  * documented `uResolution` / `uFrameIndex` uniforms directly; they play no part in placement
  * resolution itself, since [camera] already folded the output size into its projection matrix.
  *
  * [groundTiles] is empty whenever the frame draws no basemap, no style is configured, or the frame
  * selected no tile.
+ *
+ * **[mapOrder] and [screenOrder] are the planner's answer, carried rather than re-derived.**
+ * `MercatorSpatialPlanner` splits every drawn thing into its draw regime (from `Placement`'s
+ * `positionMode`, `CONTEXT.md`) and sorts the screen stack by `screenCompositeZ`, then
+ * sticker-before-model, then source index — once, at `FRAME_PLANNING`, where it is unit-tested.
+ * [SceneContent] used to discard both answers and re-derive them from a second resolution of each
+ * [Placement] plus a second sort inside `drawStickers`. Two copies of one documented rule is one
+ * too many, and the copy in the GL layer was the untested one, so these two lists are now the only
+ * authority: [stickers] and [models] say *what* there is to draw, and these say *where each one
+ * goes and in what order*.
+ *
+ * [mapOrder] is **not** a draw order on its own. It is the planner's `mapEntries` order, which is
+ * stickers-then-models by declaration; ADR 0030 fixes the map regime's phase order as ground,
+ * geometries, models, map-anchored stickers, and consuming this list verbatim would paint a car
+ * over the pin standing in front of it. [SceneContent] takes each type's relative order from here
+ * and applies ADR 0030's phase order over it. [screenOrder] *is* a draw order, complete — ADR 0024
+ * makes the screen regime one ordered stack across every drawn-thing type.
+ *
+ * The two lists are required to be a **bijection** onto [stickers] and [models]: every reference in
+ * range, no reference twice, and every sticker and every model named exactly once. A drawn thing is
+ * in exactly one regime, so anything else is a caller that built the two halves inconsistently —
+ * including a caller that simply forgot to pass an order at all, which would otherwise draw a
+ * frame's stickers and models silently missing rather than reporting anything.
  */
 internal class Scene(
     val outputPixelSize: OutputPixelSize,
@@ -110,30 +174,88 @@ internal class Scene(
     val stickers: List<SceneSticker> = emptyList(),
     val geometries: List<SceneGeometry> = emptyList(),
     val groundTiles: List<SceneGroundTile> = emptyList(),
-)
+    val models: List<SceneModel> = emptyList(),
+    mapOrder: List<DrawnThingReference> = emptyList(),
+    screenOrder: List<DrawnThingReference> = emptyList(),
+) {
+    val mapOrder: List<DrawnThingReference> = mapOrder.toList()
+    val screenOrder: List<DrawnThingReference> = screenOrder.toList()
+
+    init {
+        val referenced = HashSet<DrawnThingReference>()
+        for (reference in this.mapOrder) {
+            require(referenced.add(reference)) { "each drawn thing may appear in exactly one draw order" }
+        }
+        for (reference in this.screenOrder) {
+            require(referenced.add(reference)) { "each drawn thing may appear in exactly one draw order" }
+        }
+        for (reference in referenced) {
+            val available = when (reference) {
+                is DrawnThingReference.StickerAt -> stickers.size
+                is DrawnThingReference.ModelAt -> models.size
+            }
+            val index = when (reference) {
+                is DrawnThingReference.StickerAt -> reference.index
+                is DrawnThingReference.ModelAt -> reference.index
+            }
+            require(index in 0 until available) { "a draw order may only reference a drawn thing the scene carries" }
+        }
+        require(referenced.size == stickers.size + models.size) {
+            "every sticker and every model must appear in exactly one of mapOrder and screenOrder"
+        }
+    }
+}
 
 /**
  * The [GlFrameContent] Cycle D always left a seam for: its own KDoc says "Cycle D draws no frame
  * content of its own; Cycle E replaces this with the real scene draw." This is that replacement.
  *
- * **Ordering (ADRs 0024, 0025 and 0027).** The map regime draws first, depth-tested; the screen regime
- * then composites on top with depth testing off. Within the map regime the order is fixed by ADR
- * 0025 as: the **ground** first, then every [Geometry] (map-anchored by definition — `CONTEXT.md`
- * says "A Geometry carries no Placement") in `FramePlan.geometries` order, then every map-anchored
- * sticker in `FramePlan.stickers` order. [drawStickers] already runs both sticker halves of that
- * order in one call, so [draw] only has to draw the ground and then every geometry *before* calling
- * it — the ambient depth-test-enabled state that leaves behind for the map-anchored stickers is
- * exactly the state the ground and the geometries drew under too.
+ * **Ordering (ADRs 0024, 0025, 0027 and 0030).** The map regime draws first, depth-tested; the screen
+ * regime then composites on top with depth testing off. Within the map regime the order is fixed as:
+ * the **ground** first, then every [Geometry] (map-anchored by definition — `CONTEXT.md` says "A
+ * Geometry carries no Placement") in `FramePlan.geometries` order, then every **model**, then every
+ * map-anchored sticker. That is ADR 0025's order with ADR 0030's models inserted before the stickers,
+ * because a map-anchored sticker is a marker and a marker paints over the scene it marks.
+ *
+ * **Which regime each drawn thing is in, and its order within its own type, is
+ * [Scene.mapOrder]/[Scene.screenOrder] — never re-derived here.** `MercatorSpatialPlanner` computes
+ * both at `FRAME_PLANNING`; this class used to compute them a second time, from a second resolution
+ * of every [Placement] plus a second sort inside `drawStickers`, and the second copy was the untested
+ * one. [draw] now splits [Scene.mapOrder] by type — preserving each type's own relative order — and
+ * applies ADR 0030's phase order over that, because [Scene.mapOrder] is stickers-then-models by
+ * declaration and is a regime membership answer rather than a draw order. [drawScreenStack] walks
+ * [Scene.screenOrder] straight through, because that one *is* a complete draw order.
+ *
+ * Each [Placement] is still re-resolved here for its **matrices**, which is a different claim and
+ * still a sound one — see [requireResolvedAtDrawTime]. What no longer happens is reading
+ * `ResolvedPlacement.drawRegime` or `.screenCompositeZ` back out of that resolution to decide regime
+ * or order. The `require`s inside [composeMapCameraSpaceModel] and [composeScreenModelViewProjection]
+ * stay, and change meaning slightly: they are now the cross-check that the planner's regime and the
+ * placement's own resolution agree, and they fail loudly rather than letting the two silently diverge.
  *
  * That order used to be arbitrary and is now load-bearing. `drawFrame` tests `GL_GEQUAL`, not
- * `GL_GREATER` (ADR 0025), and **no map-regime draw writes depth** (ADR 0027), so the order above is
- * the whole rule: later declared wins, full stop, not merely on an exact tie. ADR 0025's tie-break
- * closed only the bit-identical case, and the two defects that actually shipped were near-ties — a
- * coplanar `Geometry` tearing itself apart frame to frame as the epsilon between two different
- * matrix products changed sign, and a billboard bisected along its anchor row by a ground plane
- * whose depth varies down the screen. The map regime still *tests* depth, so content that genuinely
- * wrote nearer depth still occludes it. The ground goes first because it is the backdrop everything
- * else paints onto.
+ * `GL_GREATER` (ADR 0025), and the map regime has **three depth phases** rather than one policy:
+ *
+ * - **The ground and each [Geometry] test depth and write none** (ADR 0027). ADR 0025's tie-break
+ *   closed only the bit-identical case, and the two defects that actually shipped were near-ties — a
+ *   coplanar `Geometry` tearing itself apart frame to frame as the epsilon between two different
+ *   matrix products changed sign, and a billboard bisected along its anchor row by a ground plane
+ *   whose depth varies down the screen. Flat map-plane content acting as an occluder was the single
+ *   cause of both. Among these, later declared wins, full stop, not merely on an exact tie.
+ * - **Models test *and* write** (ADR 0030, which supersedes ADR 0027 for this pass alone). A mesh
+ *   that writes no depth cannot occlude itself: every triangle passes the test against whatever is
+ *   behind it and paints in submission order, so back faces show through front ones. Back-face
+ *   culling hides that for a closed convex mesh and for nothing else, and 109 of the 111 materials in
+ *   the consumer's own corpus are `doubleSided`. [drawModels] owns both halves of this phase — writes
+ *   on for the opaque primitives, off again for the blended ones — and leaves the mask **off** behind
+ *   it unconditionally, which is what the sticker pass after it depends on.
+ * - **Map-anchored stickers test and write none** (ADR 0027 again, unchanged).
+ *
+ * The map regime still *tests* depth throughout, so content that genuinely wrote nearer depth — which,
+ * from ADR 0030 onward, means a model — occludes what is drawn after it. The ground goes first because
+ * it is the backdrop everything else paints onto. ADR 0030 records the cost it accepts: a billboard
+ * sharing space with a model can still be cut along its own anchor row, exactly as ADR 0027 describes
+ * against the ground, because a model is a real occluder again.
  *
  * **Why resolving [Placement]/[Geometry] here does not put spatial-failure handling inside a GL
  * draw call.** Cycle F-1 Tasks 5 and 6 pushed placement and geometry resolution out of
@@ -157,16 +279,31 @@ internal class Scene(
  * [ResolvedGeometry.cornersClockwiseFromTopLeft] untouched but for that same last-step narrowing:
  * this class never derives a vertex position from [Geometry.topLeft] / [Geometry.bottomRight]
  * degrees directly, which is what would discard Cycle B's sub-0.001px camera-relative precision.
+ *
+ * **Why [modelPipelines] may default to an empty map where [SceneGeometry.consumerUniforms] may not.**
+ * That field has no default because omitting it would silently draw a geometry with none of its
+ * consumer's uniforms — a wrong picture reported as a correct one. Omitting a model pipeline cannot
+ * be silent: [drawModels] resolves each primitive's variant through `requireNotNull`, so a frame with
+ * models and no pipelines fails loudly at the first primitive rather than drawing anything at all. A
+ * frame with no models needs no pipelines, and making every such caller pass an empty map buys
+ * nothing.
  */
 internal class SceneContent(
     private val camera: ResolvedMercatorCamera,
     private val scene: Scene,
     private val stickerPipeline: StickerPipeline,
     private val groundPipeline: GroundPipeline,
+    private val modelPipelines: Map<ModelShaderVariant, ModelPipeline> = emptyMap(),
 ) : GlFrameContent {
 
     override fun draw(binding: GlBinding) {
-        if (scene.groundTiles.isEmpty() && scene.geometries.isEmpty() && scene.stickers.isEmpty()) return
+        if (scene.groundTiles.isEmpty() &&
+            scene.geometries.isEmpty() &&
+            scene.models.isEmpty() &&
+            scene.stickers.isEmpty()
+        ) {
+            return
+        }
 
         if (scene.groundTiles.isNotEmpty()) {
             binding.enable(GL_DEPTH_TEST)
@@ -211,38 +348,186 @@ internal class SceneContent(
             }
         }
 
-        val mapAnchored = ArrayList<ResolvedSticker>()
-        val screenAnchored = ArrayList<ResolvedSticker>()
-        for (sticker in scene.stickers) {
-            val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
-            // CONTEXT.md: a Sticker draws "as a centred local XY quad whose width and height are
-            // the image's pixel dimensions" -- so the image's own dimensions scale the unit quad
-            // BEFORE the placement's own (map-metres-per-unit or screen-pixels-per-unit) scale is
-            // applied, exactly the way `affineModelMatrix`'s per-axis scale composes below.
-            val localDimensions = DoubleVector3(
-                sticker.imageWidthPixels.toDouble(),
-                sticker.imageHeightPixels.toDouble(),
-                1.0,
-            )
-            val modelViewProjection = when (resolved.drawRegime) {
-                DrawRegime.MAP_OCCLUDED -> composeMapModelViewProjection(camera, resolved, localDimensions)
-                DrawRegime.SCREEN_COMPOSITED ->
-                    composeScreenModelViewProjection(scene.outputPixelSize, resolved, localDimensions)
-            }
-            val entry = ResolvedSticker(
-                modelViewProjection = modelViewProjection,
-                texture = sticker.texture,
-                screenCompositeZ = resolved.screenCompositeZ ?: 0.0,
-            )
-            when (resolved.drawRegime) {
-                DrawRegime.MAP_OCCLUDED -> mapAnchored += entry
-                DrawRegime.SCREEN_COMPOSITED -> screenAnchored += entry
+        // ADR 0030's phase order over the planner's per-type order. `Scene.mapOrder` is
+        // stickers-then-models by declaration and is deliberately NOT consumed as a draw order:
+        // drawing it verbatim would paint a car over the pin standing in front of it. What is taken
+        // from it is which stickers and models are map-anchored at all, and the relative order of
+        // each type among its own kind.
+        val mapModels = ArrayList<SceneModel>()
+        val mapStickers = ArrayList<SceneSticker>()
+        for (reference in scene.mapOrder) {
+            when (reference) {
+                is DrawnThingReference.StickerAt -> mapStickers += scene.stickers[reference.index]
+                is DrawnThingReference.ModelAt -> mapModels += scene.models[reference.index]
             }
         }
 
-        drawStickers(binding, stickerPipeline, StickerWorld(mapAnchored, screenAnchored))
+        if (mapModels.isNotEmpty()) {
+            // ADR 0030: models are the one map-regime pass that tests AND writes depth, because a
+            // mesh has to occlude itself. `drawModels` owns the whole phase -- the depth enable, the
+            // mask on for its opaque primitives, and the mask off again on the way out -- so nothing
+            // here sets depth state of its own. That exit mask matters: it is what keeps ADR 0027's
+            // billboard fix working for the map-anchored stickers drawn immediately after.
+            drawModels(
+                binding = binding,
+                pipelines = modelPipelines,
+                models = mapModels.map { resolveModel(it, camera) },
+                lightDirectionCameraSpace = sceneLightDirectionCameraSpace(camera),
+            )
+        }
+
+        if (mapStickers.isNotEmpty()) {
+            drawStickers(
+                binding,
+                stickerPipeline,
+                StickerWorld(mapStickers.map { mapAnchoredSticker(it) }),
+            )
+        }
+
+        drawScreenStack(binding)
+    }
+
+    /**
+     * ADR 0024's screen regime: one ordered stack across every drawn-thing type, composited on top
+     * of the whole map regime with depth testing off. The order is [Scene.screenOrder] exactly —
+     * `MercatorSpatialPlanner` already applied `CONTEXT.md`'s rule (greater `position.z` composites
+     * on top, ties keep stable plan order with stickers before models), and re-sorting it here is
+     * the duplicate this method exists instead of.
+     *
+     * **It walks the merged order rather than a sticker list, even though the stack is stickers-only
+     * today.** ADR 0029 refuses a `SCREEN`-positioned [com.rohittp.reng.Model] at frame planning, so
+     * no model can legitimately reach here — but building the stack out of `Scene.stickers` would
+     * hard-code that refusal into the loop's *shape*, and the day ADR 0029 is revisited the merge
+     * would have to be reinvented. A model reaching here is a contract violation and is reported as
+     * one, exactly as [resolveModel] reports the same violation from the map side.
+     *
+     * The program is bound per **element** rather than once per type, so interleaving two types in
+     * one stack costs a program switch and nothing else. With one type it binds once.
+     */
+    private fun drawScreenStack(binding: GlBinding) {
+        if (scene.screenOrder.isEmpty()) return
+
+        binding.disable(GL_DEPTH_TEST)
+        var boundProgram: Int? = null
+        for (reference in scene.screenOrder) {
+            when (reference) {
+                is DrawnThingReference.StickerAt -> {
+                    if (boundProgram != stickerPipeline.program) {
+                        beginStickerPass(binding, stickerPipeline)
+                        boundProgram = stickerPipeline.program
+                    }
+                    drawOneSticker(binding, stickerPipeline, screenCompositedSticker(scene.stickers[reference.index]))
+                }
+                is DrawnThingReference.ModelAt -> throw IllegalArgumentException(
+                    "ADR 0029 refuses a SCREEN-positioned Model before drawing; one reached the screen stack",
+                )
+            }
+        }
+    }
+
+    /**
+     * One map-anchored sticker's draw instance. [composeMapCameraSpaceModel]'s own `require` is what
+     * catches a planner regime that contradicts the placement's resolution, which is the only way
+     * these two can now disagree.
+     */
+    private fun mapAnchoredSticker(sticker: SceneSticker): ResolvedSticker {
+        val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
+        return ResolvedSticker(
+            modelViewProjection = composeMapModelViewProjection(camera, resolved, sticker.localDimensions()),
+            texture = sticker.texture,
+        )
+    }
+
+    /** One screen-composited sticker's draw instance; see [mapAnchoredSticker] for the regime cross-check. */
+    private fun screenCompositedSticker(sticker: SceneSticker): ResolvedSticker {
+        val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
+        return ResolvedSticker(
+            modelViewProjection = composeScreenModelViewProjection(
+                scene.outputPixelSize,
+                resolved,
+                sticker.localDimensions(),
+            ),
+            texture = sticker.texture,
+        )
     }
 }
+
+/**
+ * `CONTEXT.md`: a Sticker draws "as a centred local XY quad whose width and height are the image's
+ * pixel dimensions" — so the image's own dimensions scale the unit quad BEFORE the placement's own
+ * (map-metres-per-unit or screen-pixels-per-unit) scale is applied, exactly the way
+ * `affineModelMatrix`'s per-axis scale composes.
+ */
+private fun SceneSticker.localDimensions(): DoubleVector3 =
+    DoubleVector3(imageWidthPixels.toDouble(), imageHeightPixels.toDouble(), 1.0)
+
+/**
+ * Turns one [SceneModel] into the flat list of primitive instances [drawModels] draws, resolving
+ * [SceneModel.placement] against [camera] exactly as the sticker path does.
+ *
+ * **The node transform goes between the placement and the vertex.** A model's placement produces a
+ * single camera-space model matrix for the whole asset ([composeMapCameraSpaceModel], with the
+ * `(1, 1, 1)` local dimensions `CONTEXT.md` prescribes — "Model local dimensions are GLB
+ * coordinates", so there is no per-asset pixel size to pre-scale by the way a sticker's image has).
+ * Each draw item's own node then contributes its already-composed global transform on the right, so
+ * a vertex travels `projection * placement * node`. That product stays `Double` end to end and
+ * narrows once, in [toColumnMajorFloatArray] — composing the node transform onto an already-narrowed
+ * placement matrix would throw away the precision the rest of this file exists to preserve.
+ *
+ * **Three draw items are dropped rather than drawn wrong**, each for a reason the types already
+ * state. A node the default scene never reaches has no global transform, and inventing one would put
+ * the mesh at the origin. A `(mesh, primitive)` pair with no uploaded geometry has nothing to draw.
+ * And a singular camera-space model matrix has no normal matrix ([modelNormalMatrix] returns `null`
+ * rather than substituting the identity), which is exactly the case a zero [Placement.scale]
+ * produces — `CONTEXT.md` calls zero scale valid, and a zero-volume model correctly paints nothing.
+ *
+ * [ResolvedModelPrimitive.reverseWinding] is taken from the *node's* global transform rather than
+ * from the full camera-space product, which is glTF's own rule and is equivalent here: a placement
+ * contributes a proper rotation and a non-negative scalar scale, so it can never flip handedness.
+ */
+private fun resolveModel(sceneModel: SceneModel, camera: ResolvedMercatorCamera): ResolvedModel {
+    val resolved = resolvePlacement(sceneModel.placement, camera).requireResolvedAtDrawTime()
+    // ADR 0029 refuses a SCREEN-positioned Model at frame planning -- `planMercatorSpatial` returns
+    // `screenPositionedModelFailure()` before acquisition -- so one cannot legitimately reach a draw.
+    require(resolved.drawRegime == DrawRegime.MAP_OCCLUDED) {
+        "ADR 0029 refuses a SCREEN-positioned Model before drawing; one reached SceneContent"
+    }
+    val placementModel = composeMapCameraSpaceModel(camera, resolved)
+    val model = sceneModel.model
+
+    val primitives = ArrayList<ResolvedModelPrimitive>(model.drawItems.size)
+    for (item in model.drawItems) {
+        val nodeTransform = sceneModel.nodeTransforms.getOrNull(item.nodeIndex) ?: continue
+        val uploaded = sceneModel.uploaded[item.meshIndex to item.primitiveIndex] ?: continue
+        val cameraSpaceModel = placementModel * nodeTransform
+        val normalMatrix = modelNormalMatrix(cameraSpaceModel) ?: continue
+        val material = model.primitiveFor(item).material
+        primitives += ResolvedModelPrimitive(
+            uploaded = uploaded,
+            modelViewProjection = (camera.projectionMatrix * cameraSpaceModel).toColumnMajorFloatArray(),
+            normalMatrix = normalMatrix,
+            material = material,
+            baseColourTexture = sceneModel.overrideTexture
+                ?: material.baseColourImageIndex?.let { sceneModel.imageTextures.getOrNull(it) },
+            jointMatrices = item.skinIndex
+                ?.let { sceneModel.jointMatricesBySkin[it] }
+                ?.let { packJointMatrices(it) },
+            reverseWinding = nodeTransform.linearDeterminant() < 0.0,
+        )
+    }
+    return ResolvedModel(primitives)
+}
+
+/**
+ * The determinant of this affine matrix's upper-left 3x3 linear block, which is the only part of it
+ * that can reverse a triangle's winding. Its *sign* is all any caller reads; the magnitude is never
+ * compared against a tolerance, because a near-zero determinant is a degeneracy
+ * [modelNormalMatrix] already refuses on its own terms.
+ */
+private fun DoubleMatrix4.linearDeterminant(): Double =
+    this[0, 0] * (this[1, 1] * this[2, 2] - this[1, 2] * this[2, 1]) -
+        this[0, 1] * (this[1, 0] * this[2, 2] - this[1, 2] * this[2, 0]) +
+        this[0, 2] * (this[1, 0] * this[2, 1] - this[1, 1] * this[2, 0])
 
 /**
  * Unwraps a draw-time re-resolution (of a [Placement], [Geometry], or [com.rohittp.reng.Camera])
@@ -377,18 +662,37 @@ internal fun composeMapModelViewProjection(
     camera: ResolvedMercatorCamera,
     placement: ResolvedPlacement,
     localDimensions: DoubleVector3 = DoubleVector3(1.0, 1.0, 1.0),
-): FloatArray {
+): FloatArray = (camera.projectionMatrix * composeMapCameraSpaceModel(camera, placement, localDimensions))
+    .toColumnMajorFloatArray()
+
+/**
+ * The camera-space model matrix half of [composeMapModelViewProjection], kept `Double` and separate
+ * because two callers need it at different points in the chain.
+ *
+ * A sticker wants the whole product straight away and [composeMapModelViewProjection] gives it that.
+ * A model needs the matrix itself, twice over: each of its nodes composes its own global transform
+ * onto the right of it before the projection applies ([resolveModel]), and [modelNormalMatrix]
+ * documents its argument as the **camera-space** model matrix specifically, because
+ * [sceneLightDirectionCameraSpace] delivers the light there and a diffuse term computed between two
+ * different spaces is wrong in a way no assertion about either space alone would notice.
+ *
+ * See [composeMapModelViewProjection] for what each term means and why the rotation and scale are
+ * applied in camera space rather than re-multiplied against the view matrix.
+ */
+internal fun composeMapCameraSpaceModel(
+    camera: ResolvedMercatorCamera,
+    placement: ResolvedPlacement,
+    localDimensions: DoubleVector3 = DoubleVector3(1.0, 1.0, 1.0),
+): DoubleMatrix4 {
     require(placement.drawRegime == DrawRegime.MAP_OCCLUDED) {
-        "composeMapModelViewProjection requires a map-occluded placement"
+        "composeMapCameraSpaceModel requires a map-occluded placement"
     }
     val viewSpaceAnchor = camera.viewMatrix.transformAffinePoint(placement.logicalPosition)
-    val cameraSpaceModel = affineModelMatrix(
+    return affineModelMatrix(
         rotation = placement.directionTransform,
         scale = localDimensions * placement.logicalScale,
         translation = viewSpaceAnchor,
     )
-    val modelViewProjection = camera.projectionMatrix * cameraSpaceModel
-    return modelViewProjection.toColumnMajorFloatArray()
 }
 
 /**

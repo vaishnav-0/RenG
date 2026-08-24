@@ -12,6 +12,12 @@ package com.rohittp.reng.internal.gl
  * exactly what was passed, not merely that something of a given size was passed. Query results are driven
  * by the public mutable fields below, which tests set up before exercising a binding
  * consumer. This class lives only in `commonTest` and is never part of production source.
+ *
+ * [indexedUniformBuffer] models exactly the one indexed target RenG's Restore Set captures —
+ * `GL_UNIFORM_BUFFER_BINDING` at `RENG_JOINT_UNIFORM_BINDING_POINT` — keyed by binding index alone
+ * rather than by `(pname, index)`, since that is the only indexed query this fake is ever asked to
+ * answer. [getIntegeri_v] reads it and [bindBufferBase] writes it, the same way [integers] backs
+ * [getIntegerv] and the various bind calls above it.
  */
 internal class RecordingGlBinding : GlBinding {
     val log: MutableList<String> = mutableListOf()
@@ -52,6 +58,7 @@ internal class RecordingGlBinding : GlBinding {
     val bufferSubDataPayloads: MutableMap<Int, ByteArray> = mutableMapOf()
     val uniformMatrix4fvValues: MutableMap<Int, FloatArray> = mutableMapOf()
     val pixels: MutableMap<Int, ByteArray> = mutableMapOf()
+    val indexedUniformBuffer: MutableMap<Int, Int> = mutableMapOf()
     private var lastTexImage2DPixels: ByteArray? = null
 
     private fun hex(value: Int): String = "0x${value.toString(16).uppercase()}"
@@ -89,6 +96,12 @@ internal class RecordingGlBinding : GlBinding {
     override fun isEnabled(cap: Int): Boolean {
         log += "isEnabled(${hex(cap)})"
         return enabled[cap] ?: false
+    }
+
+    override fun getIntegeri_v(pname: Int, index: Int, out: IntArray) {
+        require(out.isNotEmpty()) { "an indexed integer query needs a destination" }
+        log += "getIntegeri_v(${hex(pname)},$index)"
+        out[0] = indexedUniformBuffer[index] ?: 0
     }
 
     override fun genFramebuffers(count: Int, out: IntArray) = generate("genFramebuffers", count, out)
@@ -225,6 +238,11 @@ internal class RecordingGlBinding : GlBinding {
 
     override fun bindBuffer(target: Int, buffer: Int) {
         log += "bindBuffer(${hex(target)},$buffer)"
+    }
+
+    override fun bindBufferBase(target: Int, index: Int, buffer: Int) {
+        log += "bindBufferBase(${hex(target)},$index,$buffer)"
+        indexedUniformBuffer[index] = buffer
     }
 
     override fun bufferData(target: Int, size: Int, data: ByteArray?, usage: Int) {
@@ -364,6 +382,15 @@ internal class RecordingGlBinding : GlBinding {
         uniformMatrix4fvValues[location] = value
     }
 
+    override fun getUniformBlockIndex(program: Int, name: String): Int {
+        log += "getUniformBlockIndex($program,$name)"
+        return declaredNames[name] ?: -1
+    }
+
+    override fun uniformBlockBinding(program: Int, blockIndex: Int, bindingPoint: Int) {
+        log += "uniformBlockBinding($program,$blockIndex,$bindingPoint)"
+    }
+
     override fun enable(cap: Int) {
         log += "enable(${hex(cap)})"
     }
@@ -449,3 +476,15 @@ internal class RecordingGlBinding : GlBinding {
         }
     }
 }
+
+/**
+ * Every GL texture name [binding] bound to `GL_TEXTURE_2D`, in the order it was bound.
+ *
+ * A draw-order assertion written as `indexOf(a) < indexOf(b)` states only a relative position, and
+ * stays green when a third unexpected draw slips between them — or when one of the two never happens
+ * at all, since `indexOf` answers `-1` and `-1 < anything`. Comparing the whole bound sequence against
+ * an expected list states the order, the membership and the count in one assertion.
+ */
+internal fun boundTexturesInDrawOrder(binding: RecordingGlBinding): List<Int> = binding.log
+    .filter { it.startsWith("bindTexture(0xDE1,") }
+    .map { it.removePrefix("bindTexture(0xDE1,").removeSuffix(")").toInt() }

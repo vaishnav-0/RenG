@@ -1,7 +1,9 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
+import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -39,6 +41,26 @@ class LinuxGlConformanceTest {
      * both here would double a Skia rasterization the suite already performs and prove nothing the
      * pair does not.
      */
+    /**
+     * Cycle F-2's gate on a real ES context — the GLES half of the pair whose desktop half runs on
+     * macOS. See `runModelReadbackSuite` for what this catches and what it does not.
+     */
+    @Test fun theModelReadbackSuitePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, MODEL_READBACK_PIXELS, MODEL_READBACK_PIXELS)
+            binding.scissor(0, 0, MODEL_READBACK_PIXELS, MODEL_READBACK_PIXELS)
+            runModelReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
     @Test fun theBasemapReadbackSuitePassesOnARealEsContext() {
         val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
         try {
@@ -77,7 +99,7 @@ class LinuxGlConformanceTest {
                 dialect,
                 crossDialectLinkPolicy = CrossDialectLinkPolicy.SKIP_ON_LINUX_MESA_LINK_SEGFAULT,
             )
-            assertEquals(7, report.checks.size)
+            assertEquals(8, report.checks.size)
             return assertions(report)
         } finally {
             fixture.destroy()
