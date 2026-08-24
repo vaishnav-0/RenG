@@ -1,9 +1,12 @@
 package com.rohittp.reng.smoke.harness
 
 import com.rohittp.reng.AnchoringMode
+import com.rohittp.reng.AnimationSelector
+import com.rohittp.reng.AnimationTrack
 import com.rohittp.reng.Camera
 import com.rohittp.reng.FramePlan
 import com.rohittp.reng.Geometry
+import com.rohittp.reng.Model
 import com.rohittp.reng.Placement
 import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.ResourceLocator
@@ -39,10 +42,10 @@ internal const val STICKER_PIN_URL: String = "reng-harness:sticker-pin.png"
  * switch that lets the overlay content be watched across the whole camera path when the ground
  * itself will not draw.
  */
-internal fun framePlans(groundless: Boolean = false): List<FramePlan> =
-    (0 until FRAME_COUNT).map { framePlan(it, groundless) }
+internal fun framePlans(groundless: Boolean = false, modelUrl: String? = null): List<FramePlan> =
+    (0 until FRAME_COUNT).map { framePlan(it, groundless, modelUrl) }
 
-private fun framePlan(index: Int, groundless: Boolean): FramePlan {
+private fun framePlan(index: Int, groundless: Boolean, modelUrl: String?): FramePlan {
     val t = index.toDouble() / (FRAME_COUNT - 1).toDouble()
     return FramePlan(
         frameIndex = index.toLong(),
@@ -61,9 +64,51 @@ private fun framePlan(index: Int, groundless: Boolean): FramePlan {
         projectionMode = ProjectionMode.MERCATOR,
         drawBasemap = !groundless && index !in NEGATIVE_FRAMES,
         stickers = listOf(mapAnchoredPin(), screenAnchoredF()),
+        models = modelUrl?.let { listOf(animatedModel(it, t)) }.orEmpty(),
         geometries = listOf(groundGrid()),
     )
 }
+
+/**
+ * The Cycle F-2 model, when the harness was given one to fetch.
+ *
+ * **`MAP` rotation with `SCREEN` scale**, which is the pairing that makes a moving camera worth
+ * watching. Map-anchored rotation resolves against the anchor's own east/north/up basis, so the model
+ * turns with the world as the storyboard's three-quarter bearing sweep goes past — and that is also
+ * the only way to see ADR 0026's light doing its job, since a world-anchored light keeps one side of
+ * the model bright while the camera orbits. Screen-anchored scale keeps it a constant number of
+ * pixels across two and a half levels of detail; map-anchored scale is metres per local unit, and a
+ * car-sized asset at zoom 11.5 is comfortably smaller than one pixel.
+ *
+ * **No `SCREEN`-positioned negative frame.** ADR 0029 refuses one at frame planning, so a frame
+ * carrying it would fail, and this harness exits non-zero when any frame fails. A storyboard with a
+ * guaranteed failure in it teaches whoever runs it to ignore the exit code, which costs more than the
+ * case is worth here — the refusal is pinned by `FramePlanningCoreTest` and `MercatorSpatialPlannerTest`
+ * instead, where a deliberate failure is the assertion rather than noise.
+ *
+ * The animation time advances with the sequence rather than with the frame index, so a rig that
+ * ignores `timeSeconds` and counts frames looks identical for the first cycle and then drifts.
+ * `AnimationSelector.Index(0)` rather than a name, because the harness cannot know what any
+ * particular consumer asset calls its animations.
+ */
+private fun animatedModel(modelUrl: String, t: Double): Model = Model(
+    placement = Placement(
+        positionMode = AnchoringMode.MAP,
+        position = Vector3(ANCHOR_LATITUDE + 0.0045, ANCHOR_LONGITUDE + 0.0070, 0.0),
+        rotationMode = AnchoringMode.MAP,
+        rotation = Vector3(0.0, 0.0, 0.0),
+        scaleMode = AnchoringMode.SCREEN,
+        scale = MODEL_SCREEN_PIXELS_PER_UNIT,
+    ),
+    glb = ResourceLocator(modelUrl),
+    animationTracks = listOf(AnimationTrack(AnimationSelector.Index(0L), t * MODEL_ANIMATION_SECONDS)),
+)
+
+/** Output pixels per model-local unit; a few-unit asset then covers a useful part of a 960x540 frame. */
+private const val MODEL_SCREEN_PIXELS_PER_UNIT: Double = 60.0
+
+/** How many seconds of animation the whole sequence plays through. */
+private const val MODEL_ANIMATION_SECONDS: Double = 4.0
 
 private fun smoothStep(t: Double): Double = t * t * (3.0 - 2.0 * t)
 
