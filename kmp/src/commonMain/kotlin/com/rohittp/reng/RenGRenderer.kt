@@ -6,6 +6,7 @@ import com.rohittp.reng.internal.basemap.BasemapStyleManifestOutcome
 import com.rohittp.reng.internal.basemap.completeBasemapStyleManifest
 import com.rohittp.reng.internal.basemap.tileTimeRoutes
 import com.rohittp.reng.internal.basemapNotConfiguredDiagnostic
+import com.rohittp.reng.internal.cache.Lease
 import com.rohittp.reng.internal.cache.ResidentCache
 import com.rohittp.reng.internal.driver.PreparationDriver
 import com.rohittp.reng.internal.failure.FailureDescriptor
@@ -539,6 +540,17 @@ internal class RenGPreparedFrame(
      */
     mapOrder: List<DrawnThingReference> = emptyList(),
     screenOrder: List<DrawnThingReference> = emptyList(),
+    /**
+     * Every resident-cache lease this frame's own preparation took, which `close()` releases exactly once.
+     *
+     * `CONTEXT.md` defines a lease as held "by a **Prepared Frame** for every distinct resource its plan
+     * needs", and this is where that ownership actually lives: the preparation driver collects the leases
+     * it takes into the list handed here. Without it every lease a preparation took stayed outstanding for
+     * the renderer's whole life, so `freeResources()` could only ever report a matched key deferred and a
+     * superseded generation was never reclaimed -- an unbounded leak for a consumer that prepares many
+     * frames.
+     */
+    leases: List<Lease> = emptyList(),
 ) : PreparedFrame {
     private val stickerSnapshot: List<PreparedSticker> = ArrayList(stickers)
     private val geometrySnapshot: List<PreparedGeometry> = ArrayList(geometries)
@@ -547,6 +559,7 @@ internal class RenGPreparedFrame(
     private val groundInstanceSnapshot: List<PreparedGroundInstance> = ArrayList(groundInstances)
     private val mapOrderSnapshot: List<DrawnThingReference> = ArrayList(mapOrder)
     private val screenOrderSnapshot: List<DrawnThingReference> = ArrayList(screenOrder)
+    private val leaseSnapshot: MutableList<Lease> = ArrayList(leases)
 
     internal val stickers: List<PreparedSticker> get() = ArrayList(stickerSnapshot)
     internal val geometries: List<PreparedGeometry> get() = ArrayList(geometrySnapshot)
@@ -572,6 +585,16 @@ internal class RenGPreparedFrame(
 
     internal var closed: Boolean = false
         private set
+
+    /**
+     * Hands the leases over, once. A second call returns nothing, which is what keeps `close()` idempotent
+     * as `CONTEXT.md` requires: releasing one lease twice is a caller error [Lease] rejects outright.
+     */
+    internal fun takeLeases(): List<Lease> {
+        val taken = ArrayList(leaseSnapshot)
+        leaseSnapshot.clear()
+        return taken
+    }
 
     internal fun markClosed() {
         closed = true
@@ -1009,6 +1032,14 @@ internal class RenGRenderer(
         if (!preparationMutex.tryLock()) {
             throw renGFailure(RenGErrorCode.PREPARATION_IN_PROGRESS, PipelineStage.FRAME_PREPARATION)
         }
+        // Every lease this preparation takes is recorded here and handed to the frame it produces, which
+        // releases them on close(). A preparation that never reaches a frame -- a driver failure, a
+        // cancellation, a decode fault, a planning check -- holds leases no frame will ever close, so the
+        // `finally` below releases exactly those rather than leaving them outstanding for the renderer's
+        // whole life. Anchored here, at the one place that knows whether a frame took ownership, rather
+        // than at each of the throw sites between the driver run and the frame.
+        val leases = mutableListOf<Lease>()
+        var prepared: RenGPreparedFrame? = null
         try {
             val beginOutcome = driver.run(RendererLifecycleOperation.BeginPreparation) { null }
             if (beginOutcome is RendererLifecycleOutcome.Failed) throw beginOutcome.failure.toException()
@@ -1122,6 +1153,7 @@ internal class RenGRenderer(
                 canonicalTiles = groundCanonicalTiles,
                 labelTiles = labelCanonicalTiles,
                 accessMode = accessMode,
+                leaseSink = leases,
             )
             val decodedByKey = acquired.decodedImagesByKey
 
@@ -1275,7 +1307,9 @@ internal class RenGRenderer(
             previousSelectedLod = planned.spatialPlan.lodObservation.selectedLod
             previousLabelFade = labelFade.nextState
 
-            val prepared = RenGPreparedFrame(
+            // Bound to a local as well as to `prepared`, so the two statements below read the frame
+            // without depending on a smart cast of a `var` the `finally` also reads (ADR 0045).
+            val frame = RenGPreparedFrame(
                 owner = this,
                 frameIndex = plan.frameIndex,
                 camera = plan.camera,
@@ -1292,13 +1326,17 @@ internal class RenGRenderer(
                 labels = labels,
                 mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
                 screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
+                leases = leases,
             )
+            prepared = frame
             // Counted once the frame exists, never at the render call: a preparation that threw
             // after rendering its tiles leaves nothing outstanding for a close that never comes
-            // (ADR 0044).
-            outstandingRawTileBytes += prepared.rawTileBytes
-            return prepared
+            // (ADR 0044). The same condition governs the lease release in the `finally` below, which
+            // is why both hang off `prepared` being non-null rather than off the driver's outcome.
+            outstandingRawTileBytes += frame.rawTileBytes
+            return frame
         } finally {
+            if (prepared == null) releaseLeases(leases)
             preparationMutex.unlock()
         }
     }
@@ -1524,6 +1562,16 @@ internal class RenGRenderer(
     }
 
     /**
+     * Releases leases no [RenGPreparedFrame] will ever own, tolerating a cache that has already dropped
+     * the generation they name -- [ResidentCache.closeAll] clears its own bookkeeping without consulting
+     * any outstanding lease, so a release arriving after the renderer closed is a real, harmless ordering
+     * rather than a fault to propagate out of a `finally`.
+     */
+    private fun releaseLeases(leases: List<Lease>) {
+        leases.forEach { lease -> runCatching { residentCache.releaseLease(lease) } }
+    }
+
+    /**
      * Pairs every unwrapped draw [instances] entry with the rendered tile it draws, by deriving RenG's
      * own [BasemapEngineHost.renderedTileKey] for it (ADR 0018) rather than by matching its
      * `(lod, tileY, canonicalX)` triple against [renderedTiles] structurally. The two agree by
@@ -1738,6 +1786,12 @@ internal class RenGRenderer(
         canonicalTiles: List<CanonicalBasemapTile>,
         labelTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
+        /**
+         * Collects the lease of every generation this acquisition installs or re-observes, so the frame
+         * this preparation is building can release them on `close()`. Owned by [prepare], which is also
+         * what releases them when no frame ends up owning them.
+         */
+        leaseSink: MutableList<Lease>,
     ): FrameAcquisition {
         val references = listOfNotNull(styleReference) + imageReferences + modelGlbReferences
         if (references.isEmpty()) {
@@ -1764,7 +1818,7 @@ internal class RenGRenderer(
         // frame's own style declared, and the only way an icon's `imageName` becomes atlas geometry.
         var spriteAtlas: SpriteAtlasManifest? = null
         val outcome = basemapEngineHost.withOperation(accessMode) {
-            val driven = preparationDriver.run(definition)
+            val driven = preparationDriver.run(definition, leaseSink)
             if (driven is ResourceOperationOutcome.Success) {
                 // Read back rather than taken from the compile action: on a RESIDENT-provenance frame
                 // the pure core emits no CompileBasemapStyle at all, so there is no action to take it
@@ -2848,6 +2902,12 @@ internal class RenGRenderer(
 
     // ---- Prepared-frame lifecycle -----------------------------------------------------------------
 
+    /**
+     * [RenGPreparedFrame.takeLeases] hands the frame's leases over once, so a second `close()` releases
+     * nothing -- which is what keeps this idempotent, as `CONTEXT.md` requires, given that a [Lease]
+     * rejects a double release outright. Releasing after `markClosed()` keeps the order honest: the frame
+     * stops being drawable before its content stops being pinned.
+     */
     internal fun closePreparedFrame(frame: RenGPreparedFrame) {
         val fact = if (frame.closed) PreparedFrameFact.OwnedClosed else PreparedFrameFact.OwnedOpen
         val outcome = driver.run(RendererLifecycleOperation.ClosePreparedFrame(fact)) { operation ->
@@ -2865,6 +2925,7 @@ internal class RenGRenderer(
             }
         }
         if (outcome is RendererLifecycleOutcome.Failed) throw outcome.failure.toException()
+        releaseLeases(frame.takeLeases())
     }
 
     // ---- Close --------------------------------------------------------------------------------

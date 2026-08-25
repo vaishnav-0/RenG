@@ -4,6 +4,7 @@ import com.rohittp.reng.ResourceClass
 import com.rohittp.reng.ResourceLimits
 import com.rohittp.reng.Store
 import com.rohittp.reng.Transport
+import com.rohittp.reng.internal.cache.Lease
 import com.rohittp.reng.internal.cache.ResidentCache
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
 import com.rohittp.reng.internal.resource.AdvancePendingClassGates
@@ -123,7 +124,17 @@ internal class PreparationDriver(
 ) {
     private val activeRunJob = MutableStateFlow<Job?>(null)
 
-    suspend fun run(definition: ResourceOperationDefinition): ResourceOperationOutcome = coroutineScope {
+    /**
+     * [leaseSink], when supplied, collects every resident-cache lease this run takes, so the owner that
+     * asked for the operation can release them once it is done with the content -- which is what
+     * [com.rohittp.reng.PreparedFrame.close] does with the ones its own preparation took. Omitting it
+     * leaves the leases outstanding for the cache's lifetime, which is what every caller did before
+     * owner-lease bookkeeping existed and what every test driving this class directly still expects.
+     */
+    suspend fun run(
+        definition: ResourceOperationDefinition,
+        leaseSink: MutableList<Lease>? = null,
+    ): ResourceOperationOutcome = coroutineScope {
         activeRunJob.value = coroutineContext[Job]
         try {
             val executor = ResourceActionExecutor(
@@ -134,6 +145,7 @@ internal class PreparationDriver(
                 basemapEngineHost = basemapEngineHost,
                 resourceLimits = resourceLimits,
                 clock = clock,
+                leaseSink = leaseSink,
             )
             val semaphore = Semaphore(maximumConcurrentOperations)
             val events = Channel<ResourceOperationEvent>(Channel.UNLIMITED)

@@ -1011,6 +1011,76 @@ class RendererFactoryTest {
         fragmentSource = "#version 300 es\nprecision highp float;\nout vec4 rengOut;\nvoid main() {\n    rengOut = vec4(1.0);\n}\n",
     )
 
+    // ---- Prepared-frame lease lifetime ---------------------------------------------------------------
+
+    /**
+     * `CONTEXT.md` defines a lease as held "by a **Prepared Frame** for every distinct resource its plan
+     * needs", so closing the frame is what releases it. `closePreparedFrame` used to only mark the frame
+     * closed and release nothing at all: every lease a preparation took stayed outstanding for the
+     * renderer's whole life, `queryResources()` reported a permanently non-zero lease count, and
+     * `freeResources()` could only ever report the key deferred -- an unbounded leak for a consumer that
+     * prepares many frames.
+     *
+     * Two frames over one locator rather than one, because a single outstanding lease is indistinguishable
+     * from a legitimately pinned generation: it is two closed frames still holding two leases that makes
+     * the leak unbounded rather than merely present.
+     */
+    @Test
+    fun closingAPreparedFrameReleasesTheLeasesItsPreparationTook() = runTest {
+        val renderer = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val first = renderer.prepare(oneStickerPlan(frameIndex = 0L))
+        val second = renderer.prepare(oneStickerPlan(frameIndex = 1L))
+
+        assertEquals(2, outstandingLeases(renderer), "each open prepared frame must hold its own lease")
+
+        first.close()
+        second.close()
+
+        assertEquals(
+            0,
+            outstandingLeases(renderer),
+            "closing a prepared frame must release every lease its own preparation took",
+        )
+
+        val freed = renderer.freeResources()
+        assertEquals(1, freed.matchedKeys)
+        assertEquals(1, freed.fullyFreedKeys, "an unleased key must be fully freed, never merely deferred")
+        assertEquals(0, freed.deferredKeys)
+    }
+
+    /**
+     * `close()` is idempotent, and a [com.rohittp.reng.internal.cache.Lease] rejects a double release
+     * outright, so the two claims are one claim: the frame hands its leases over exactly once and a second
+     * `close()` releases nothing rather than throwing.
+     */
+    @Test
+    fun closingAPreparedFrameTwiceReleasesItsLeasesOnlyOnce() = runTest {
+        val renderer = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val frame = renderer.prepare(oneStickerPlan(frameIndex = 0L))
+
+        frame.close()
+        frame.close()
+
+        assertEquals(0, outstandingLeases(renderer))
+    }
+
+    private fun oneStickerPlan(frameIndex: Long): FramePlan = FramePlan(
+        frameIndex = frameIndex,
+        camera = testCamera(),
+        stickers = listOf(Sticker(testPlacement(), ResourceLocator("https://example.invalid/a.png"))),
+    )
+
+    private fun outstandingLeases(renderer: Renderer): Int =
+        renderer.queryResources().entries.sumOf { it.leaseCount }
+
     // ---- Test doubles and fixtures -----------------------------------------------------------------
 
     private fun fixedProbe(): RenderContextProbe = RenderContextProbe { RenderContextIdentity(1L) }
