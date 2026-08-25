@@ -46,6 +46,32 @@ published ABI is untouched.
 That third change is a real behaviour change and is stated as one: a condition that used to be an
 internal programmer-error assertion is now a typed failure a consumer can observe and handle.
 
+## The filter narrows the rasterisation and never the route registration
+
+**This is the constraint that decides whether the change is correct, and it was found by the readback
+suites rather than by reasoning.**
+
+`tileTimeRoutes` walks `tiles × manifest.sources`, and a `raster-dem` source expands each tile through
+`demNeighbourhoodOrSelf` — so a frame's entire DEM neighbourhood is derived from the same tile list
+the colour rasterisation uses. A resident colour texture says nothing about whether the DEM beneath it
+is acquired: the two are tracked in different places, colour in `GlObjectRegistry` and terrain in
+`PreparedTerrain`. **Narrowing the route registration to the missing tiles therefore starves terrain,
+and on a camera whose colour tiles are all resident it registers no DEM routes at all.**
+
+The first version of this change here did exactly that, and the cost was unmistakable: eight of nine
+terrain frame readback cases and four of five ground anchor cases failed, every one of them reporting
+the ground displacing by **exactly zero pixels** — "a build that displaces nothing measures zero
+twice".
+
+The upstream commit this derives from could not have caught it. It was written against a base that had
+no terrain at all; ADR 0041 came afterwards. Its own reasoning — that registering routes for tiles a
+frame will not fetch "would widen that surface for no reason" — was true then and is false now,
+because those routes are exactly what a *different* consumer of the same list still asks for.
+
+So routes are registered for every visible tile, and only the rasterisation is filtered. The
+preregistration is cheap and the firewall still fetches only what is asked for; what it buys is that
+the terrain path keeps finding the routes it has always depended on.
+
 ## How this composes with ADR 0044
 
 ADR 0044 bounded raw tile pixels by refusing `renderRaw` once outstanding raw bytes would exceed

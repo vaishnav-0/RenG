@@ -121,6 +121,45 @@ class RendererBasemapTileTest {
     }
 
     /**
+     * A camera that has not moved since its tiles were drawn rasterises nothing (ADR 0046).
+     *
+     * The draw between the two preparations is the whole point and not scaffolding: a tile becomes
+     * resident when its texture is uploaded, which is a draw-time act, so a second `prepare()` with
+     * no draw in between would legitimately still rasterise. This is what makes the assertion about
+     * residency rather than about repeating a call.
+     *
+     * It asserts the ground is still placed as well as that nothing was rendered, because those two
+     * used to be the same condition — `groundInstances` returned empty whenever nothing was rendered.
+     * Separating them is what lets a frame draw ground it did not rasterise, and a test that checked
+     * only the first half would pass on a build that drew no ground at all.
+     */
+    @Test
+    fun aCameraWhoseTilesAreAlreadyDrawnRasterisesNothingAndStillPlacesItsGround() = runTest {
+        val transport = TileTransport()
+        val renderer = styleRenderer(transport) as RenGRenderer
+        val target = renderer.mintRenderTarget(FramebufferName(0u))
+
+        val first = renderer.prepare(basemapPlan(frameIndex = 0L)) as RenGPreparedFrame
+        assertEquals(4, first.basemapTiles.size, "the first frame rasterises every tile it selected")
+        renderer.draw(first, target)
+        first.close()
+
+        val second = renderer.prepare(basemapPlan(frameIndex = 1L)) as RenGPreparedFrame
+
+        assertEquals(
+            emptyList(),
+            second.basemapTiles,
+            "every tile's texture is resident, so the engine is asked for none of them",
+        )
+        assertEquals(
+            first.groundInstances.size,
+            second.groundInstances.size,
+            "the same ground is still placed from the textures already on the GPU",
+        )
+        second.close()
+    }
+
+    /**
      * The exact four urls Rentile composes for `{z}/{x}/{y}` at the frame's own LOD, pinned as strings.
      * `min(z, maxZoom)`, the template hash, and the `{y}`/`{-y}` distinction are all silent-failure
      * traps: get one wrong and the firewall refuses every tile, which reads as a dead basemap rather

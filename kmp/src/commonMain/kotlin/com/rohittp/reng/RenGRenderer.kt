@@ -1584,15 +1584,21 @@ internal class RenGRenderer(
      * frame at the 512-instance budget would otherwise pay 512 SHA-256 hashes for at most a few dozen
      * distinct answers.
      *
-     * Returns empty whenever no tile was rendered, which is also exactly when [styleDigest] is `null`:
-     * a frame that drew no basemap, had no style configured, or selected no tile.
+     * Returns empty whenever there is no basemap to place: no style configured, or no tile selected.
+     *
+     * **It used to return empty whenever no tile was *rendered*, and that is no longer the same
+     * condition.** `renderBasemapTiles` now asks the engine only for tiles whose texture is not already
+     * resident, so a frame that pans back over ground it has drawn before legitimately renders nothing
+     * and still has ground to place. Keying this on the rendered list dropped the ground entirely on
+     * exactly those frames — caught by `MacosGlConformanceTest`'s coplanar-geometry case, which found
+     * a quad with no ground beneath it and called itself vacuous rather than passing.
      */
     private fun groundInstances(
         instances: List<BasemapTileInstance>,
         renderedTiles: List<RenderedBasemapTile>,
         styleDigest: String?,
     ): List<PreparedGroundInstance> {
-        if (renderedTiles.isEmpty() || styleDigest == null) return emptyList()
+        if (instances.isEmpty() || styleDigest == null) return emptyList()
         val renderedKeys = renderedTiles.mapTo(HashSet()) { it.key }
         val keyByCanonicalTile = HashMap<CanonicalBasemapTile, ResourceKey>(renderedTiles.size)
         return instances.map { instance ->
@@ -1604,8 +1610,10 @@ internal class RenGRenderer(
             val key = keyByCanonicalTile.getOrPut(canonical) {
                 basemapEngineHost.renderedTileKey(styleDigest, instance)
             }
-            check(key in renderedKeys) {
-                "every selected tile instance must name a tile this frame rendered"
+            // Rendered this frame, or already on the GPU from an earlier one. Both are ways for the
+            // draw to have pixels; only naming neither is a defect.
+            check(key in renderedKeys || glObjectRegistry.resident(key) != null) {
+                "every selected tile instance must name a tile this frame rendered or one already resident"
             }
             PreparedGroundInstance(instance = instance, resourceKey = key)
         }
@@ -1988,6 +1996,45 @@ internal class RenGRenderer(
         canonicalTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
     ): List<RenderedBasemapTile> {
+        // Only the tiles whose rendered texture is not already resident are sent to the engine.
+        //
+        // This completes an intent the rest of this class already states rather than introducing a new
+        // one. `RenGPreparedFrame.basemapTiles` says a tile's bytes are decoded and uploaded at draw
+        // "because a tile whose GL texture is still resident from an earlier frame must cost neither",
+        // and `GlObjectRegistry` says an unleased budget-tracked texture survives losing its lease "so
+        // a pan back over the same tile costs nothing". Both were true of the decode and the upload and
+        // neither was true of the *rasterisation*: every frame asked the engine for every visible tile,
+        // rendered it to PNG, and then threw the PNG away at draw for any tile already on the GPU.
+        //
+        // Measured on an Apple M2 release build through a consumer harness, one camera prepared three
+        // times over a one-source production style: 703, 714, 740 ms, with 11 vector tiles re-fetched
+        // per prepare. On a Snapdragon 8 Gen 3 a frame cost 895-2256 ms of which 863-2105 ms was this
+        // call, against 17-151 ms to draw and read back the result — so a four-and-a-half second
+        // timeline played about four frames.
+        //
+        // The identity is asked of the host rather than derived here, because `tileOutputSize` is an
+        // engine render option and `renderedTileKey`'s own KDoc says a caller that guessed it would
+        // name a tile the engine never rendered.
+        //
+        // One assumption, stated because it is the first cross-phase read of the registry: this runs
+        // during preparation and the registry is otherwise touched only under a draw, so a consumer
+        // that draws one frame while preparing another would be racing a LinkedHashMap. Every RenG
+        // consumer today prepares and draws in sequence on the thread owning the GL context, which is
+        // what `prepare() has no render context` already implies about how these phases interleave.
+        // Routes for EVERY visible tile, never only the missing ones, and this is the one place the
+        // residency filter must not reach.
+        //
+        // `tileTimeRoutes` walks `tiles x manifest.sources`, and a `raster-dem` source expands each
+        // tile through `demNeighbourhoodOrSelf` — so this frame's whole DEM neighbourhood is derived
+        // from the same list. A resident *colour* texture says nothing about whether the DEM beneath
+        // it is acquired: the two are tracked separately, colour in `GlObjectRegistry` and terrain in
+        // `PreparedTerrain`. Narrowing this to `missing` starves terrain of its routes, and on a
+        // camera whose colour tiles are all resident it registers none at all.
+        //
+        // That is not hypothetical. It is what the terrain and ground-anchor readback suites caught
+        // when this filter first landed here: eight of nine terrain cases failed with the ground
+        // displacing by exactly zero pixels. The upstream commit could not have seen it — it was
+        // written against a base with no terrain at all (ADR 0041 came later).
         basemapEngineHost.registerRoutes(
             tileTimeRoutes(
                 manifest = manifest,
@@ -1996,9 +2043,17 @@ internal class RenGRenderer(
                 limits = configuration.resourceLimits,
             ),
         )
+
+        val missing = canonicalTiles.filter { tile ->
+            glObjectRegistry.resident(basemapEngineHost.renderedTileKey(style, tile)) == null
+        }
+        if (missing.isEmpty()) return emptyList()
         // The batch owns engine-side resources and is closed as soon as the pixels are in hand: nothing
         // downstream of here reads it, because rendering is where a PreparedBatch's whole purpose ends.
-        return basemapEngineHost.prepareTiles(style, canonicalTiles).use { prepared ->
+        // `missing`, not `canonicalTiles`, on both halves: ADR 0044's raw budget is charged for the
+        // tiles this frame actually rasterises rather than every tile it draws, which is where that
+        // budget belongs now that a resident tile is never asked for (ADR 0046).
+        return basemapEngineHost.prepareTiles(style, missing).use { prepared ->
             basemapEngineHost.renderTiles(prepared, asRawPixels = rawTilesFit(prepared.tiles.size))
         }
     }
@@ -2741,9 +2796,15 @@ internal class RenGRenderer(
                 groundLeases += reused.lease
                 reused.handle.name
             } else {
-                val rendered = requireNotNull(renderedByKey[key]) {
-                    "prepare() already proved every ground instance names a rendered tile"
-                }
+                // Not `requireNotNull` any more. Preparation now skips the engine for a tile whose
+                // texture was already resident, so a ground instance names *either* a rendered tile
+                // or a resident texture — and the `leaseResident` above is what distinguishes them.
+                // The one path that reaches here with neither is a texture evicted between this
+                // frame's preparation and its draw, which the byte budget can do to an unleased
+                // entry. That is a frame this renderer cannot honour, and refusing it is right;
+                // crashing the consumer for a cache decision it never made is not (ADR 0046).
+                val rendered = renderedByKey[key]
+                    ?: return GroundTilesResult.Failed(basemapTileEvictedFailure(key))
                 // Exhaustive, with no `else`: a third pixel form must fail to compile here rather
                 // than reach a driver as an unhandled tile (ADR 0044).
                 val uploaded = when (val pixels = rendered.pixels) {
@@ -3100,6 +3161,25 @@ private fun animationSelectorFailure(key: ResourceKey): RenGException = RenGExce
  * with `RESOURCE_DECODE_FAILED` rather than `GPU_OPERATION_FAILED` because the fault is in the bytes or
  * in `ResourceLimits.maximumDecodedImageBytes`, not in the caller's GL state.
  */
+/**
+ * A ground tile that was resident when the frame was prepared and gone by the time it was drawn.
+ *
+ * Distinct from a decode failure on purpose: nothing failed to decode, and reporting it as a decode
+ * would send whoever reads the diagnostic looking at the bytes, which are fine and simply gone.
+ * `RESOURCE_UNAVAILABLE` is the existing code that says what is true: the resource this frame needs is
+ * not there. No new enum value, so the published ABI is untouched — a capacity condition pointing at
+ * `maximumResidentGpuTextureBytes` does not warrant widening a public enum.
+ */
+private fun basemapTileEvictedFailure(key: ResourceKey): FailureDescriptor = FailureDescriptor(
+    code = RenGErrorCode.RESOURCE_UNAVAILABLE,
+    stage = PipelineStage.DRAW,
+    diagnostic = failureContextDiagnostic(
+        stage = PipelineStage.DRAW,
+        fieldName = DiagnosticField.RESOURCE,
+        resourceKey = key,
+    ),
+)
+
 private fun basemapTileDecodeFailure(key: ResourceKey): FailureDescriptor = FailureDescriptor(
     code = RenGErrorCode.RESOURCE_DECODE_FAILED,
     stage = PipelineStage.DRAW,
