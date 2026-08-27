@@ -111,8 +111,10 @@ all — until the ground-draw task threaded it from the caller's configuration a
 A public field with no wiring is the failure mode worth remembering here.
 
 **Basemap rendering is verified on `macosArm64Test` and `linuxX64Test` only, and that is a measured limit,
-not a scheduling one.** Those are the only two test tasks that can hold a GL context. Android's host tests
-are doubly excluded: no GL, and they cannot execute Rentile's Skia rasterization. All six targets still
+not a scheduling one.** Those are the only two test tasks that hold a GL context **today** — not the only
+ones that can: Cycle H's preflight held a real context on an iOS simulator, an iPhone 12 and a OnePlus, and
+ran RenG's conformance suite unmodified on all three. Android's host tests remain doubly excluded: no GL,
+and they cannot execute Rentile's Skia rasterization. All six targets still
 publish at every release; which of them anyone has actually executed belongs in release notes rather than
 being discovered by an Android consumer.
 
