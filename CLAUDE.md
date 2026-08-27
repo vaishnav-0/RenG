@@ -157,10 +157,40 @@ All six targets still publish at every release; which of them anyone has actuall
 release notes rather than being discovered by an Android consumer, and **ADR 0033 is where that promise now
 lives**.
 
-**Measured on this checkout at Cycle H's close:** `testAndroidHostTest` **1,123**, `macosArm64Test`
-**1,159**, `iosSimulatorArm64Test` **1,145** — 0 failures, 0 errors and 0 skips on each, summed from
-Gradle's own JUnit XML rather than from scrollback. 138 Python tests pass, and
-`check_repository_policy.py` passes.
+**Measured on this checkout:** `testAndroidHostTest` **1,134**, `macosArm64Test` **1,174**,
+`iosSimulatorArm64Test` **1,160** — 0 failures, 0 errors and 0 skips on each, summed from Gradle's own
+JUnit XML rather than from scrollback. 138 Python tests pass, and `check_repository_policy.py` passes.
+(Cycle H closed at 1,123 / 1,159 / 1,145; the X2 fix below added 11 `commonTest` cases everywhere plus 4
+that need a real GL context.)
+
+**GPU residency is observable, and its two defaults no longer disagree — the X2 fix, landed between
+Cycle H and E-labels.** Three things were wrong at once and none of them was about either cycle.
+`RendererConfiguration.maximumBasemapTileInstances` defaulted to 512 while
+`ResourceLimits.maximumResidentGpuTextureBytes` defaulted to 128 MiB, and a 512×512 RGBA8 tile is exactly
+1,048,576 bytes — so residency was exactly 128 tiles against a ceiling declaring 512 legal. A **3840×2160
+display at pitch 0** reaches **167 tiles**, measured, so the band was reachable with the camera level, and
+LOD hysteresis is what put it there: the same viewport peaks at 93 tiles with no LOD history and 167 with
+one frame of it, so the budget sat between RenG's own two worst cases. Nothing could observe it —
+`evictOverBudget` emitted nothing, and `ResidentCache.toReportEntry` hardcoded
+`knownGpuBytes = 0L, hasUnknownGpuBytes = false`, so `queryResources` **affirmatively reported zero GPU
+bytes** while textures were resident. `ResourceUsage`'s own `init` had required the honest form all along
+(`knownGpuBytes != null || hasUnknownGpuBytes`); the implementation asserted positive knowledge of zero,
+which passes that check and is false.
+
+Now: the default budget is **512 MiB**, sized to the default tile ceiling by owner decision — the fields
+stay deliberately independent and that KDoc sentence stands, only the *default* was reconciled, and a
+budget is an eviction threshold rather than a reservation, so it allocates nothing until frames need it.
+`gpuByteAccount` answers a three-way rule (measured / unmeasurable / no GL objects), and
+**`DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET`** — the one ABI line this fix adds, taking that enum
+from three constants to four — warns once per draw when the leased working set cannot fit.
+
+**Two limits of that fix, both deliberate.** `queryResources` still cannot see the 167 MiB: the report
+iterates `ResidentCache` entries and a *rendered* basemap tile is never installed there, so the
+measured-bytes row is unreachable in a production report today. What changed for consumers is that sticker,
+geometry-texture and model-texture entries now say *unknown* instead of *zero* — the falsehood is gone,
+the coverage gap is not, and closing it means reporting over the union of cache and registry keys. And the
+diagnostic fires on the *leased* working set, so a frame exactly one tile over evicts that tile and stays
+silent; a quiet log is not proof of no eviction.
 
 **A visual harness exists, it found four defects the passing suite did not, and it is the reason `0.3.0`
 draws.** It lives in `consumer-smoke/src/macosArm64Main/kotlin/com/rohittp/reng/smoke/harness/`, is invoked

@@ -28,18 +28,22 @@ current code instead asserts positive knowledge of zero, which passes the `requi
 
 ## Scope
 
-**In:** tasks 1, 2, 4, 5 below.
+**In:** tasks 1, 2, 3, 4, 5 below.
 
-**Deliberately out — this stays the owner's call.** *Which number* the defaults should be reconciled to is a
-memory-posture trade-off, not a bug. Raising `maximumResidentGpuTextureBytes` to 512 MiB makes the pair
-consistent; lowering `maximumBasemapTileInstances` to 128 would make a 4K pitch-0 camera **fail closed on a
-frame it currently draws**, which is worse than thrashing. Note the budget is an *eviction threshold*, not
-a reservation — a higher ceiling costs nothing until frames genuinely need it. Tasks 1 and 2 are what turn
-this from a guess into an informed decision, which is why they go first.
+**Task 3 was initially deferred to the owner and then decided by them mid-execution: raise
+`maximumResidentGpuTextureBytes` to 512 MiB to match.** The pair now agrees at 512 tiles instead of
+disagreeing by 4×. Lowering `maximumBasemapTileInstances` to 128 instead was rejected because a 4K pitch-0
+camera reaches 167 tiles and would then **fail closed on a frame it currently draws**, which is worse than
+thrashing. The change is low-risk because the budget is an *eviction threshold, not a reservation* — a
+higher ceiling allocates nothing until frames genuinely need it.
 
-A construction-time consistency check was considered and **rejected**: the shipped defaults are themselves
-inconsistent, so it would fire for every consumer on every startup until the defaults move — noise, not
-signal. The runtime diagnostic in task 2 fires only when it actually matters.
+The field's KDoc argues the two limits are "deliberately independent … deriving one from the other would
+hide the real cost from whoever configures it". That reasoning survives and the sentence stays: the
+*fields* remain independent, and only the *default* is sized so the *default* tile ceiling cannot thrash.
+
+A construction-time consistency check was considered and **rejected** even after the defaults were
+reconciled: it would fire for any consumer who raises the tile ceiling without raising the budget, which is
+a legitimate configuration, and the runtime diagnostic in task 2 already covers the case that matters.
 
 ---
 
