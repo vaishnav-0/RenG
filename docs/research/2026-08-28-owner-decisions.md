@@ -64,6 +64,42 @@ differences sit inside interior-column noise. Any globe seam would be RenG's def
 
 **Rentile has no globe notion at all**, discarding a style's `projection` key outright.
 
+**The glyph closure holds exactly — measured end to end, not read.** A spike drove one real handover
+through RenG's own firewall at the pinned version: `plan.glyphUrls(template)` returned 3 URLs (2 font
+stacks × 2 codepoint blocks, deliberately asymmetric), the consumer's `Transport` was then asked for
+exactly those 3, each exactly once, and `planLabelCandidates` fetched **zero** glyph bytes. The
+second, mid-invocation `registerRoutes` round is all the firewall needs. This was the cycle's central
+claim and it is now measured rather than inferred.
+
+**The fixture problem is not a problem.** The renderer-gap strand called it "the finding most likely to
+change the cycle's task list — the fixture may cost more than the renderer", reasoning that RenG owns no
+MVT or protobuf encoder and that `ModelFixtureBuilder`'s 400+ lines were the precedent. Measured: **115
+lines and 91 bytes** for a hand-rolled protobuf writer plus one MVT layer and one glyph range. And there is
+a **zero-cost route nobody had noticed** — Rentile's Wire-generated `Tile`, `Glyphs` and `Glyph` types are
+public in its published KLIB ABI despite their `internal` package names, so RenG's test sources compile and
+run against them on both macOS and the Android host with **no build-file change and no added dependency**.
+The spike used it to cross-validate the hand-encoded bytes.
+
+**A label suite can gate most of itself on `commonTest`.** Measured: `macosArm64Test` 4/4,
+`iosSimulatorArm64Test` 4/4, `testAndroidHostTest` **3/4** — and the single Android host failure is the
+atlas case on Skia's missing host library, which fails *after* every glyph range is fetched. So the
+routing half — closure exactness, refusal, URL composition — gates across all four context-holding targets;
+only candidate geometry and atlas pixels need `nativeTest`. Better than the strand feared, which assumed
+the whole suite might be excluded.
+
+**Adding the `ResourceClass` constant costs 8 lines across 6 files and moves exactly one ABI line**, needs
+no `ResourceLimits` field, and breaks 6 existing tests — one of which is a *gain*, flipping an engine glyph
+failure from opaque `BASEMAP_RENDER_FAILED` to `RESOURCE_UNAVAILABLE`.
+
+**Two defects the cycle must fix, found by running it rather than reading it.** An unpreregistered glyph
+URL is refused by the **store** index rather than the transport index — Rentile's glyph acquirer reads its
+raw store first — so the refusal is complete (no byte reaches the consumer) but surfaces as opaque
+`BASEMAP_RENDER_FAILED`, not the `AMBIGUOUS_RESOURCE_ROUTE` the preflight predicted. And
+`GlyphTemplateMismatchException` and `LabelCandidatePlanClosedException` **escape RenG unwrapped**, because
+`glyphUrls` is a plan method rather than a call through `engineCall` — which is a direct breach of RenG's
+sanitized-failure contract, since an engine exception type crosses the public boundary. Both are forced
+work, not decisions.
+
 ---
 
 # Part 2 — Decisions
@@ -199,12 +235,9 @@ diagnostics at all, so *any* future engine-side degradation is invisible to a co
 
 **Recommended: defer.** Not this cycle's problem once the pin moves.
 
-### E10. Fixture strategy for the label test suite
+### E10. Fixture strategy for the label test suite — **settled, no decision needed**
 
-**Pending** — a spike is still measuring whether a label handover can be driven at all, what the fixture
-costs, and critically whether the label path can live in `commonTest` (reachable from all four
-context-holding targets) or must sit in `nativeTest` as `BasemapEngineRenderTest` does because Rentile's
-Skia will not load in the Android host JVM. Will be appended.
+Resolved by running it. See Part 1's "The fixture problem is not a problem". Nothing here needs the owner.
 
 ## G — globe
 
@@ -325,8 +358,12 @@ explicit approval.
 - **Whether mercator reaches 129 tiles today** (**X2**). **Settles it:** instrument
   `selectBasemapTiles` across a pitched, large-viewport camera sweep.
 - **Mali** (**G5**). No device.
-- **What a real label handover contains** — candidate counts, glyph range counts, atlas size for a real
-  viewport. A spike is running; if it cannot get a handover to run, this stays open.
+- **What a *real-viewport* label handover contains** — candidate counts, glyph range counts and atlas size
+  for an actual style at an actual camera. The spike measured a synthetic fixture (3 ranges, 2 font stacks),
+  which proves the mechanism but says nothing about scale. Rentile's own migration document records a worst
+  case of 159 ranges in one plan, whose 8192×4357 atlas is 136 MiB decoded, so the scale question is real.
+  **Settles it:** a harness run against one style, printing the plan's closure size and atlas dimensions.
+  Needs a style URL.
 - **Whether glyph-sized quads survive `Apple Software Renderer`.** Ground tiles measurably do not, which
   cost `0.3.0` a failed publication. Glyph quads are small so they *should* — that is a prediction.
   **Settles it:** extend `measureLargeQuadRasterisation`'s shape to the label pass's own footprints before
