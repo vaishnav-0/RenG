@@ -128,6 +128,20 @@ class ResourcesTest {
         }
     }
 
+    /**
+     * The table below is a hand-written expectation iterated in its own right, so without the size
+     * assertion a twelfth [ResourceClass] would get **no** byte-ceiling, accept-header or
+     * report-order coverage from the one test that exists to provide exactly that.
+     *
+     * The gap that guard closes is narrower than it first looks, and saying which half is covered
+     * matters: `BasemapEngineHostTest`, `RentileKeyDerivationTest` and
+     * `ResourceOperationOrdinaryCommitTest` all partition `ResourceClass.entries`, and
+     * [resourceEnumsContainEveryClosedMemberInContractOrder] compares the whole list, so a new
+     * constant's *existence* is already caught structurally in four places. What nothing caught is
+     * its **mapping** — the three production `when`s in `internal/ValueSupport.kt` are exhaustive, so
+     * a new constant must be given a ceiling, an accept header and a report order to compile at all,
+     * and every one of those three answers could be wrong with no test disagreeing.
+     */
     @Test
     fun resourceClassesMapToTheirLimitAcceptValuesAndReportOrder() {
         val limits = ResourceLimits()
@@ -143,6 +157,14 @@ class ResourcesTest {
             ResourceClass.STICKER_IMAGE to Pair(32L * mib, "image/png"),
             ResourceClass.MODEL_GLB to Pair(256L * mib, "model/gltf-binary"),
             ResourceClass.MODEL_TEXTURE to Pair(32L * mib, "image/png"),
+        )
+
+        assertEquals(
+            ResourceClass.entries.size,
+            expected.size,
+            "this table is every ResourceClass's only byte-ceiling, accept-header and report-order " +
+                "coverage; a constant absent from it is silently unmapped here even though four " +
+                "other tests would still catch its existence",
         )
 
         expected.forEachIndexed { index, (resourceClass, expectation) ->
