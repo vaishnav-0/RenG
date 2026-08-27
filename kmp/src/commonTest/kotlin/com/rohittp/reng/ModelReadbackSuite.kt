@@ -42,6 +42,10 @@ import kotlinx.coroutines.runBlocking
  *   differ **in the band the moving joint governs** while leaving the static band bit-identical;
  * - animation bound to frame count rather than to time — two frames at one `timeSeconds` with
  *   different `frameIndex` values must be bit-identical;
+ * - a draw that changes the history it drew from — `CONTEXT.md` says a Prepared Frame "may be drawn
+ *   repeatedly" and "Drawing never changes history", and until X2 nothing executable said so: case
+ *   4 above looks like that guard and is not, because its `render()` helper prepares afresh each
+ *   time and therefore compares two separately *prepared* frames rather than one frame drawn twice;
  * - a model that does not occlude, and one that is not occluded — ADR 0030's own verification
  *   obligation, which Task 12 landed with call-log evidence only;
  * - a runaway transform or an exploded joint matrix — every non-clear pixel must fall inside bounds
@@ -58,12 +62,26 @@ import kotlinx.coroutines.runBlocking
  * expected colour writable by hand at all. Alpha modes, `doubleSided` culling, vertex colour, and
  * every material property but base colour are untested here.
  *
- * **Two of the six cases cannot detect absence, and case 1 is why they do not have to.** Measured, by
- * making `drawModels` a no-op and running the suite: four cases failed and two passed. Case 4 compares
- * two frames for equality, and two blank frames are equal; case 6 asserts nothing falls *outside* a
- * bound, and nothing drawn falls nowhere. Both are upper-bound assertions by construction, and case 1
- * is the lower bound that covers them — which is exactly why "something drew at all" is asserted
- * separately rather than folded into a case that also checks colour.
+ * **Two of the seven cases cannot detect absence, and case 1 is why they do not have to.** Measured,
+ * by making `drawModels` a no-op and running the suite: four of the original six cases failed and two
+ * passed. Case 4 compares two frames for equality, and two blank frames are equal; case 6 asserts
+ * nothing falls *outside* a bound, and nothing drawn falls nowhere. Both are upper-bound assertions by
+ * construction, and case 1 is the lower bound that covers them — which is exactly why "something drew
+ * at all" is asserted separately rather than folded into a case that also checks colour.
+ *
+ * **Case 7 is a bit-identity assertion and is therefore the shape most at risk of becoming a third
+ * such, so it carries its own lower bound rather than borrowing case 1's.** Two blank frames are
+ * bit-identical, and so are two frames whose draw silently did nothing; sampling a known texel in
+ * *both* frames is what makes "it drew, twice, the same" two claims instead of one. Re-measured against
+ * the same no-op: five of seven fail, and case 7 is one of them — on the lower bound rather than on
+ * identity, which is the reading that says it is not a third blank-frame case.
+ *
+ * **The identity half was measured failing too, separately, and only case 7 caught it.** With
+ * `SceneContent.resolveModel` made to remember the exact `DecodedModel` instance it drew and nudge that
+ * model's clip-space x by 0.05 on any later draw of the *same* instance — a leak a second `prepare()`
+ * erases, because nothing in RenG holds a parsed model resident — **1 of 7** cases failed: case 7, on
+ * identity, over 3 differing pixels of 25,600. Case 4 stayed green through it, which is the whole
+ * reason this case exists beside it.
  *
  * **Every tolerance below states the smallest defect it still detects**, because a budget with no
  * stated floor is a number someone tuned until it passed. And no assertion is an exact pixel count:
@@ -99,6 +117,7 @@ internal fun runModelReadbackSuite(
         failures.run("timeNotFrameCount") { assertAnimationIsBoundToTime(world) }
         failures.run("occlusionIsReal") { assertOcclusionIsReal(world) }
         failures.run("coverageIsBounded") { assertCoverageIsBounded(world) }
+        failures.run("drawingRepeats") { assertOnePreparedFrameDrawsTheSameTwice(world) }
     } finally {
         renderer.close()
     }
@@ -108,7 +127,7 @@ internal fun runModelReadbackSuite(
 /** The readback target's edge, in pixels. Square, so a transposed index cannot pass by shape. */
 internal const val MODEL_READBACK_PIXELS: Int = 160
 
-private const val MODEL_READBACK_CASE_COUNT: Int = 6
+private const val MODEL_READBACK_CASE_COUNT: Int = 7
 
 /**
  * Collects each case's failure instead of throwing at the first, for the reason
@@ -399,6 +418,86 @@ private fun assertCoverageIsBounded(world: ModelReadbackWorld) {
     )
 }
 
+/**
+ * Case 7. One Prepared Frame drawn twice paints the same bytes, and painted something both times.
+ *
+ * `CONTEXT.md` states two things about a Prepared Frame — it "may be drawn repeatedly", and "Drawing
+ * never changes history" — and until X2 nothing executable held either. Case 4 above is the case that
+ * looks like it does: its `render()` helper calls `prepare()` afresh every time, so it compares two
+ * separately *prepared* frames and would stay green through any defect that mutates a prepared frame
+ * while drawing it. This case prepares **once** and draws that same instance twice, which is the only
+ * arrangement in which "drawing changed history" is observable at all.
+ *
+ * **Load-bearing beyond hygiene.** The decision to resolve label collisions in `prepare()` and never
+ * in `draw()` rests on this contract, and until this case existed it rested on prose alone.
+ *
+ * **Two claims, and the lower bound is the point.** A bit-identity assertion is the shape this project
+ * keeps catching at a symmetry point — two blank frames are bit-identical, and so are two frames whose
+ * draw silently did nothing — so identity alone would be a seventh vacuous check rather than a seventh
+ * case. **Both** draws are therefore sampled at a point whose expected colour a blank frame cannot
+ * produce: the model's static-triangle centroid must read that triangle's **own texel**, which fails at
+ * `MODEL_ABSENT` if nothing drew, at [MODEL_GROUND_COLOUR] if only the map plane drew, and at white if
+ * the texture was never sampled. Measured against `drawModels` made a no-op, this case fails on exactly
+ * that, not on identity.
+ *
+ * **Both regimes deliberately, because the interesting reuse is in the second draw.** GPU texture
+ * upload and geometry-program compilation both need a live render context and so happen inside
+ * `draw()`, not `prepare()`: the first draw compiles and uploads, the second is supposed to reuse. A
+ * cache keyed or invalidated wrongly diverges exactly there and nowhere else, which is why the scene
+ * carries a `Geometry` alongside the model rather than the model alone.
+ *
+ * **What this case deliberately does not assert, and the measurement that settled it.** A first draft
+ * also required a sampled point beyond the model's own bounds to read the map plane, so that the
+ * geometry pass carried a lower bound of its own. It is not portable and the numbers say why: counting
+ * pixels outside the model's projected column band that read [MODEL_GROUND_COLOUR], `Apple M3 Max`
+ * paints **13,760** and `Apple Software Renderer` — the iOS simulator, and the only rasteriser a hosted
+ * macOS runner has — paints **0**, dropping the whole large off-viewport quad exactly as
+ * `BasemapReadbackSuite`'s own rasterisation probe measures it dropping ground tiles. No floor above
+ * zero survives both, so the geometry's contribution here is covered by the identity claim alone, and
+ * on that driver it is covered vacuously. Note the same measurement makes case 5's *first* half
+ * vacuous on that driver too — with nothing painted beneath it, "the model paints over the map plane"
+ * is satisfied by there being no map plane. Its second, discriminating half is unaffected.
+ *
+ * The sampled `timeSeconds` is 0.9 — not zero, not [WEDGE_ANIMATION_DURATION_SECONDS] (which
+ * `timeSeconds % durationSeconds` maps back onto zero), not the midpoint where slerp and nlerp agree,
+ * and not a time any other case in this file draws, so a memoised result cannot satisfy it. The
+ * static triangle is animation-invariant — it lies entirely outside the swept band case 3 separates —
+ * so its texel is the same constant at 0.9 as it is in bind pose.
+ *
+ * There is no tolerance on the identity claim and there must not be: the same prepared bytes through
+ * the same driver produce the same pixels, and any difference at all is state leaking between draws.
+ */
+private fun assertOnePreparedFrameDrawsTheSameTwice(world: ModelReadbackWorld) {
+    val (first, second) = world.drawTwiceFromOnePreparation(
+        modelPlan(
+            frameIndex = 10L,
+            models = listOf(wedge(timeSeconds = REPEATED_DRAW_TIME_SECONDS)),
+            geometries = listOf(mapPlaneGeometry()),
+        ),
+    )
+
+    val (centroidX, centroidY) = projectedCentroid(STATIC_TRIANGLE_CORNERS)
+    listOf("first" to first, "second" to second).forEach { (name, frame) ->
+        assertTrue(
+            frame.isNear(centroidX, centroidY, STATIC_TRIANGLE_TEXEL, MODEL_CHANNEL_TOLERANCE),
+            "the $name draw's model centroid at ($centroidX, $centroidY) reads " +
+                "${frame.describe(centroidX, centroidY)}, not its own texel " +
+                "${STATIC_TRIANGLE_TEXEL.toList()}: two frames that both drew nothing are also " +
+                "bit-identical, so this case proves each draw drew before comparing them",
+        )
+    }
+
+    assertTrue(
+        first.bytes.contentEquals(second.bytes),
+        "one Prepared Frame drawn twice differs in " +
+            "${first.pixelsDifferingFrom(second) { _, _ -> true }} pixels: drawing changed the " +
+            "history it drew from, or state leaked from the first draw into the second",
+    )
+}
+
+/** See case 7 for why this time and no other. */
+private const val REPEATED_DRAW_TIME_SECONDS: Double = 0.9
+
 // ---- projection ------------------------------------------------------------------------------
 
 private fun projectedColumn(localX: Double): Int = (ANCHOR_PIXEL + localX * MODEL_SCREEN_SCALE).toInt()
@@ -469,6 +568,27 @@ private class ModelReadbackWorld(
         }
         return readFrame(binding, target)
     }
+
+    /**
+     * Prepares **once** and draws that one [PreparedFrame] twice — the arrangement [render] cannot
+     * produce, since it prepares afresh on every call.
+     *
+     * The target is cleared before each draw rather than only before the first, so the second draw
+     * starts from exactly the pixels the first did. Drawing onto the first draw's own output would
+     * make any opaque frame trivially identical and turn this into a fourth vacuous check.
+     */
+    fun drawTwiceFromOnePreparation(plan: FramePlan): Pair<ReadFrame, ReadFrame> =
+        runBlocking { renderer.prepare(plan) }.use { prepared ->
+            clearTarget(binding, target)
+            renderer.draw(prepared, renderTarget)
+            val first = readFrame(binding, target)
+
+            clearTarget(binding, target)
+            renderer.draw(prepared, renderTarget)
+            val second = readFrame(binding, target)
+
+            first to second
+        }
 }
 
 /** One frame's RGBA bytes, bottom row first, exactly as `glReadPixels` delivers them. */

@@ -4,6 +4,7 @@ import com.rohittp.reng.internal.DiagnosticField
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failureContextDiagnostic
 import com.rohittp.reng.internal.renGFailure
+import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
 import com.rohittp.reng.internal.resourceReloadedAfterFreeDiagnostic
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -45,7 +46,10 @@ class DiagnosticsAndFailuresTest {
         )
         assertEquals(listOf("INFO", "WARNING", "ERROR"), DiagnosticSeverity.entries.map { it.name })
         assertEquals(
-            listOf("RESOURCE_RELOADED_AFTER_FREE", "FAILURE_CONTEXT", "BASEMAP_NOT_CONFIGURED"),
+            listOf(
+                "RESOURCE_RELOADED_AFTER_FREE", "FAILURE_CONTEXT", "BASEMAP_NOT_CONFIGURED",
+                "RESIDENT_GPU_TEXTURES_OVER_BUDGET",
+            ),
             DiagnosticCode.entries.map { it.name },
         )
     }
@@ -225,6 +229,81 @@ class DiagnosticsAndFailuresTest {
                 severity = DiagnosticSeverity.WARNING,
                 stage = PipelineStage.RESOURCE_LOOKUP,
                 resourceClass = ResourceClass.STICKER_IMAGE,
+            )
+        }
+    }
+
+    @Test
+    fun residentGpuTextureBudgetDiagnosticCarriesOnlyTheTwoNumbersAndRefusesAnythingElse() {
+        val diagnostic = residentGpuTexturesOverBudgetDiagnostic(
+            residentBytes = 175_112_192L,
+            budgetBytes = 134_217_728L,
+        )
+
+        assertEquals(DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET, diagnostic.code)
+        assertEquals(DiagnosticSeverity.WARNING, diagnostic.severity)
+        assertEquals(PipelineStage.DRAW, diagnostic.stage)
+        assertEquals(134_217_728L, diagnostic.limit, "the limit is the consumer's own budget")
+        assertEquals(175_112_192L, diagnostic.actual, "and the actual is what stayed resident against it")
+        assertEquals(null, diagnostic.fieldName)
+        assertEquals(null, diagnostic.resourceClass)
+        assertEquals(null, diagnostic.resourceKey)
+        assertEquals(null, diagnostic.statusCode)
+
+        // An error, a stage other than the one it fires from, or a resource identity it has no
+        // business naming are all unconstructible rather than merely discouraged.
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,
+                severity = DiagnosticSeverity.ERROR,
+                stage = PipelineStage.DRAW,
+                limit = 1L,
+                actual = 2L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.GPU_RESOURCE,
+                limit = 1L,
+                actual = 2L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.DRAW,
+                resourceKey = resourceKey(IdentityShape.EXTERNAL),
+                resourceClass = ResourceClass.STICKER_IMAGE,
+                limit = 1L,
+                actual = 2L,
+            )
+        }
+    }
+
+    @Test
+    fun aResidencyAtOrUnderItsBudgetCannotBeReportedAsOverIt() {
+        // The off-by-one, stated where it cannot be got wrong twice: the type refuses to hold the
+        // claim at all, so an emitter that miscounted by one byte fails loudly rather than warning
+        // about a residency that fits.
+        assertFailsWith<IllegalArgumentException> {
+            residentGpuTexturesOverBudgetDiagnostic(residentBytes = 4L, budgetBytes = 4L)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            residentGpuTexturesOverBudgetDiagnostic(residentBytes = 3L, budgetBytes = 4L)
+        }
+        // And one byte the other way is a legitimate report.
+        assertEquals(5L, residentGpuTexturesOverBudgetDiagnostic(residentBytes = 5L, budgetBytes = 4L).actual)
+
+        // Numbers are required at all: a bare over-budget warning naming no figures says nothing a
+        // consumer can act on.
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.DRAW,
             )
         }
     }

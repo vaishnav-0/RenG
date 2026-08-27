@@ -199,6 +199,157 @@ class RendererGroundTextureBudgetTest {
         )
     }
 
+    // ---- X2 Task 2: the thrash condition is no longer silent ----------------------------------
+
+    /**
+     * The condition the diagnostic exists for: a frame holding more tiles than the budget allows,
+     * where eviction runs out of unleased candidates with the total still over. Every tile still
+     * leased belongs to the frame that is drawing, so there is nothing left to take -- and the next
+     * frame over the same camera pays a fresh decode and upload for whatever this one dropped.
+     *
+     * **Once per frame, and once per frame.** Four leases are released here and three of those
+     * releases exit eviction still over budget, so a per-release emitter would warn three times about
+     * one condition. A latch that warned only the first time a renderer ever saw it would warn once
+     * across both draws. Two draws, two warnings, is the only reading that is per frame.
+     */
+    @Test
+    fun aFrameThatCannotFitItsOwnTilesWarnsExactlyOncePerDraw() = runTest {
+        val sink = BudgetDiagnosticSink()
+        val binding = styleGlBinding()
+        val renderer = groundRenderer(
+            binding,
+            limits = ResourceLimits(maximumResidentGpuTextureBytes = 1L),
+            sink = sink,
+        )
+        val target = renderer.mintRenderTarget(FramebufferName(0u))
+        val first = renderer.prepare(basemapPlan(frameIndex = 0L))
+        val second = renderer.prepare(basemapPlan(frameIndex = 1L))
+
+        renderer.draw(first, target)
+
+        assertEquals(
+            1,
+            sink.overBudgetWarnings.size,
+            "four leases and three over-budget evictions are one condition, not three warnings: " +
+                "${sink.overBudgetWarnings}",
+        )
+        val warning = sink.overBudgetWarnings.single()
+        assertEquals(DiagnosticSeverity.WARNING, warning.severity)
+        assertEquals(PipelineStage.DRAW, warning.stage)
+        assertEquals(1L, warning.limit, "the limit is the configured budget verbatim")
+        assertEquals(
+            (GROUND_TILES_PER_FRAME - 1) * ONE_TILE_BYTES,
+            warning.actual,
+            "and the actual is the worst residency eviction could not relieve",
+        )
+
+        renderer.draw(second, target)
+
+        assertEquals(
+            2,
+            sink.overBudgetWarnings.size,
+            "a second frame in the same condition is a second frame's worth of thrashing",
+        )
+    }
+
+    /**
+     * A budget one byte below the point where eviction can still cope, and one byte above it. The
+     * only difference between the two runs is that byte, and it is the whole of the distinction the
+     * diagnostic makes: the first frame cannot be brought under budget and says so, the second is
+     * brought under budget by evicting exactly one tile and says nothing.
+     *
+     * Both budgets are below this frame's four-tile working set, so neither is the trivially quiet
+     * case -- eviction runs in both, and only the shortfall differs.
+     */
+    @Test
+    fun theWarningTurnsOnOneByteBelowWhatEvictionCanCope() = runTest {
+        val threeTiles = (GROUND_TILES_PER_FRAME - 1) * ONE_TILE_BYTES
+
+        val overBudget = BudgetDiagnosticSink()
+        val overBudgetBinding = styleGlBinding()
+        val cannotCope = groundRenderer(
+            overBudgetBinding,
+            limits = ResourceLimits(maximumResidentGpuTextureBytes = threeTiles - 1L),
+            sink = overBudget,
+        )
+        cannotCope.draw(
+            cannotCope.prepare(basemapPlan(frameIndex = 0L)),
+            cannotCope.mintRenderTarget(FramebufferName(0u)),
+        )
+
+        val exactly = BudgetDiagnosticSink()
+        val copesBySpending = groundRenderer(
+            styleGlBinding(),
+            limits = ResourceLimits(maximumResidentGpuTextureBytes = threeTiles),
+            sink = exactly,
+        )
+        copesBySpending.draw(
+            copesBySpending.prepare(basemapPlan(frameIndex = 0L)),
+            copesBySpending.mintRenderTarget(FramebufferName(0u)),
+        )
+
+        assertEquals(1, overBudget.overBudgetWarnings.size, "a byte short is short")
+        assertEquals(threeTiles - 1L, overBudget.overBudgetWarnings.single().limit)
+        assertEquals(threeTiles, overBudget.overBudgetWarnings.single().actual)
+        assertTrue(
+            overBudgetBinding.log.any { it.startsWith("deleteTextures") },
+            "eviction must have actually run and still fallen short, or this proves nothing",
+        )
+
+        assertEquals(
+            emptyList(),
+            exactly.overBudgetWarnings,
+            "eviction that reaches the budget exactly has done its job and has nothing to report",
+        )
+    }
+
+    /**
+     * The frame fits, to the byte. Nothing is evicted, nothing is warned about, and the strict
+     * inequality is what makes the first of those two true rather than a rounding accident.
+     */
+    @Test
+    fun aFrameExactlyAtItsBudgetEvictsNothingAndWarnsAboutNothing() = runTest {
+        val sink = BudgetDiagnosticSink()
+        val binding = styleGlBinding()
+        val renderer = groundRenderer(
+            binding,
+            limits = ResourceLimits(
+                maximumResidentGpuTextureBytes = GROUND_TILES_PER_FRAME * ONE_TILE_BYTES,
+            ),
+            sink = sink,
+        )
+
+        renderer.draw(
+            renderer.prepare(basemapPlan(frameIndex = 0L)),
+            renderer.mintRenderTarget(FramebufferName(0u)),
+        )
+
+        assertEquals(emptyList(), sink.overBudgetWarnings)
+        assertTrue(
+            binding.log.none { it.startsWith("deleteTextures") },
+            "a frame exactly at its budget is not over it, so nothing may be evicted",
+        )
+    }
+
+    /**
+     * The shipped default against this fixture's four megabytes of tiles, which is headroom by any
+     * of the numbers that default has held. A diagnostic that fired here would fire for every
+     * consumer on every frame, which is the noise the design rejected a construction-time
+     * consistency check to avoid.
+     */
+    @Test
+    fun anOrdinaryFrameWellInsideItsBudgetWarnsAboutNothing() = runTest {
+        val sink = BudgetDiagnosticSink()
+        val renderer = groundRenderer(styleGlBinding(), sink = sink)
+
+        renderer.draw(
+            renderer.prepare(basemapPlan(frameIndex = 0L)),
+            renderer.mintRenderTarget(FramebufferName(0u)),
+        )
+
+        assertEquals(emptyList(), sink.overBudgetWarnings)
+    }
+
     /**
      * The one way a rendered tile's decode can legitimately fail: a consumer whose
      * [ResourceLimits.maximumDecodedImageBytes] is below one tile has configured a renderer that
@@ -223,6 +374,7 @@ class RendererGroundTextureBudgetTest {
     private fun groundRenderer(
         binding: RecordingGlBinding,
         limits: ResourceLimits = ResourceLimits(),
+        sink: DiagnosticSink = DiagnosticSink.None,
     ): Renderer = createRenderer(
         RendererConfiguration(
             outputPixelSize = OutputPixelSize(64, 64),
@@ -230,6 +382,7 @@ class RendererGroundTextureBudgetTest {
             store = RecordingStyleStore(),
             basemapStyle = ResourceLocator(STYLE_URL),
             resourceLimits = limits,
+            diagnosticSink = sink,
         ),
         binding,
         RenderContextProbe { RenderContextIdentity(1L) },
@@ -257,5 +410,17 @@ class RendererGroundTextureBudgetTest {
 
         /** One canonical 512x512 RGBA8 basemap tile on the GPU. */
         const val ONE_TILE_BYTES: Long = 512L * 512L * 4L
+    }
+}
+
+/**
+ * Collects the residency warnings and nothing else, so a case that asserts "no warning" cannot be
+ * satisfied by an unrelated diagnostic being absent.
+ */
+private class BudgetDiagnosticSink : DiagnosticSink {
+    val overBudgetWarnings: MutableList<Diagnostic> = mutableListOf()
+
+    override fun emit(diagnostic: Diagnostic) {
+        if (diagnostic.code == DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET) overBudgetWarnings += diagnostic
     }
 }

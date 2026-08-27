@@ -2,6 +2,7 @@ package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.ResourceKey
 import com.rohittp.reng.ResourceLimits
+import com.rohittp.reng.internal.GpuByteAccount
 import com.rohittp.reng.internal.lifecycle.DeferredDeletion
 import com.rohittp.reng.internal.lifecycle.DeletionId
 
@@ -155,14 +156,20 @@ internal class GlObjectRegistry(
      * this method must only ever be invoked from an operation that has already confirmed the exact
      * context is current, the same discipline [deleteGlObjects] itself already assumes throughout
      * this file.
+     *
+     * Returns the residency [evictOverBudget] left behind, which the caller needs because
+     * [GpuTextureResidency.overBudget] is the thrash condition and this class deliberately cannot
+     * report it: emitting a diagnostic needs the consumer's sink, and GL-side bookkeeping has no
+     * business holding one. The caller that does hold it decides what a whole frame's worth of
+     * these adds up to.
      */
-    internal fun releaseLease(lease: TextureLease, binding: GlBinding) {
+    internal fun releaseLease(lease: TextureLease, binding: GlBinding): GpuTextureResidency {
         lease.markReleased()
         val key = lease.key
         val remaining = (textureLeaseCounts[key] ?: 0) - 1
         check(remaining >= 0) { "cannot release a texture lease with no outstanding lease" }
         textureLeaseCounts[key] = remaining
-        if (remaining > 0) return
+        if (remaining > 0) return residency()
         if (retiredPendingLastLease.remove(key)) {
             textureByteSizes.remove(key)
             textureLeaseCounts.remove(key)
@@ -171,12 +178,36 @@ internal class GlObjectRegistry(
             unleasedOrder.remove(key)
             unleasedOrder[key] = Unit
         }
-        evictOverBudget(binding)
+        return evictOverBudget(binding)
     }
 
     /** The resident [GlObjectHandle] for [key], whether registered via [register] or [registerTexture]. */
     internal fun resident(key: ResourceKey): GlObjectHandle? =
         live[key]?.firstOrNull { it.type == GlObjectType.TEXTURE }
+
+    /**
+     * What this registry knows about [key]'s GPU bytes — a read-only view, not the maps themselves.
+     *
+     * Three states, and the middle one is the one that matters. A [registerTexture] key carries an
+     * exact byte size, so it is [GpuByteAccount.measured]. A key with live handles that [register]
+     * put there — every sticker image, geometry consumer texture, model texture and model vertex or
+     * index buffer — carries no byte size anywhere in this class, so it is
+     * [GpuByteAccount.Unmeasurable]: those bytes exist, this layer cannot count them, and saying
+     * "zero" would be a claim rather than an omission. A key with no live handle at all is
+     * [GpuByteAccount.NoGpuObjects], where zero is genuine knowledge.
+     *
+     * The measured branch reports what the **budget** counts, deliberately: `textureByteSizes` is
+     * both this answer and `evictOverBudget`'s input, so a consumer reading a report and a consumer
+     * tuning [ResourceLimits.maximumResidentGpuTextureBytes] are looking at one number.
+     */
+    internal fun gpuByteAccount(key: ResourceKey): GpuByteAccount {
+        val trackedBytes = textureByteSizes[key]
+        return when {
+            trackedBytes != null -> GpuByteAccount.measured(trackedBytes)
+            live[key]?.isNotEmpty() == true -> GpuByteAccount.Unmeasurable
+            else -> GpuByteAccount.NoGpuObjects
+        }
+    }
 
     internal fun handles(key: ResourceKey): List<GlObjectHandle> = ArrayList(live[key].orEmpty())
 
@@ -272,8 +303,15 @@ internal class GlObjectRegistry(
      * live Prepared Frame still needs a tile is the correct outcome; breaking a drawable frame to
      * honour a cache limit is not. A key [defer] retired while leased is leased by definition and is
      * therefore unreachable here for the same reason; [releaseLease] deletes it instead.
+     *
+     * Returns where that left residency. The loop has two exits and they mean opposite things: under
+     * budget is eviction having done its job, while out of candidates with the total still over
+     * budget is the thrash condition -- every leased byte was needed by the frame that is drawing, so
+     * the next frame will re-decode and re-upload whatever this one had to drop. This method reports
+     * that and does nothing about it, deliberately: it takes no diagnostic sink, because it is called
+     * from GL-side bookkeeping and a sink belongs to the operation the consumer invoked.
      */
-    private fun evictOverBudget(binding: GlBinding) {
+    private fun evictOverBudget(binding: GlBinding): GpuTextureResidency {
         var total = textureByteSizes.values.sum()
         val iterator = unleasedOrder.keys.iterator()
         while (total > residentTextureByteBudget && iterator.hasNext()) {
@@ -285,7 +323,26 @@ internal class GlObjectRegistry(
             deleteGlObjects(binding, handles)
             total -= size
         }
+        return GpuTextureResidency(residentBytes = total, budgetBytes = residentTextureByteBudget)
     }
+
+    /** This registry's budget-tracked residency as it stands, evicting nothing. */
+    private fun residency(): GpuTextureResidency = GpuTextureResidency(
+        residentBytes = textureByteSizes.values.sum(),
+        budgetBytes = residentTextureByteBudget,
+    )
+}
+
+/**
+ * How many budget-tracked texture bytes [GlObjectRegistry] holds, against the budget it holds them
+ * under. A point-in-time reading handed back by [GlObjectRegistry.releaseLease], never a live view.
+ *
+ * [overBudget] uses the same strict `>` as the eviction loop's own condition, from the same two
+ * values, so the two can never disagree about whether a residency is over budget -- a residency
+ * exactly at the budget is not over it, and that off-by-one is the whole of the distinction.
+ */
+internal data class GpuTextureResidency(val residentBytes: Long, val budgetBytes: Long) {
+    val overBudget: Boolean get() = residentBytes > budgetBytes
 }
 
 internal fun deleteGlObjects(binding: GlBinding, handles: List<GlObjectHandle>) {

@@ -102,6 +102,16 @@ class CanonicalBinaryTest {
         }
     }
 
+    /**
+     * The domain byte is what keeps two identity namespaces apart, so this table has to cover every
+     * [CanonicalRootKind] and the bytes have to be distinct — two kinds sharing one would let a
+     * model-image key collide with a basemap-tile key of the same shape.
+     *
+     * It iterated its own hand-written list with no size guard until X2, and the gap was not
+     * hypothetical: F-2 added `MODEL_GEOMETRY` and `MODEL_IMAGE`, and neither constant's permanent
+     * domain byte was asserted anywhere in the tree. Both rows below, and the two assertions above
+     * the loop, are what close that.
+     */
     @Test
     fun rootsUseExactMagicSchemaAndPermanentDomainBytes() {
         val expected = listOf(
@@ -111,8 +121,20 @@ class CanonicalBinaryTest {
             CanonicalRootKind.INTERNAL_PIPELINE to "524e47430104",
             CanonicalRootKind.OFFSCREEN_SURFACE to "524e47430105",
             CanonicalRootKind.BASEMAP_TILE to "524e47430106",
+            CanonicalRootKind.MODEL_GEOMETRY to "524e47430107",
+            CanonicalRootKind.MODEL_IMAGE to "524e47430108",
         )
 
+        assertEquals(
+            CanonicalRootKind.entries.size,
+            expected.size,
+            "a root kind absent from this table has its permanent domain byte asserted nowhere",
+        )
+        assertEquals(
+            expected.size,
+            expected.map { it.second }.toSet().size,
+            "two root kinds sharing a domain byte would collide two identity namespaces",
+        )
         expected.forEach { (kind, hex) ->
             assertEquals(hex, CanonicalBinary.root(kind) { }.hex())
         }

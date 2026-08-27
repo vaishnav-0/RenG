@@ -427,6 +427,20 @@ class ResourceOperationSpriteCommitTest {
                 RenGErrorCode.UNSUPPORTED_RESOURCE_FEATURE,
             ),
         )
+        // The same hand-written-table-over-an-enum guard X2 closed in `ResourcesTest` and
+        // `CanonicalBinaryTest`: this table is the only place a pair failure kind's reported error
+        // code is asserted, so a fourth kind added without a row here would map to anything at all
+        // and nothing would disagree. Both dimensions are pinned, since the member is half the claim.
+        assertEquals(
+            SpritePairFailureKind.entries.toSet(),
+            expectations.map { it.second }.toSet(),
+            "a pair failure kind absent from this table has its error code asserted nowhere",
+        )
+        assertEquals(
+            SpriteMember.entries.toSet(),
+            expectations.map { it.first }.toSet(),
+            "a sprite member absent from this table is never the reported one",
+        )
         expectations.forEach { (member, kind, code) ->
             val label = "$member/$kind"
             val driver = SpriteDriver(spriteGroupDefinition(concurrency = 2))

@@ -23,6 +23,7 @@ import com.rohittp.reng.internal.gl.GlObjectHandle
 import com.rohittp.reng.internal.gl.GlObjectRegistry
 import com.rohittp.reng.internal.gl.GlObjectType
 import com.rohittp.reng.internal.gl.GlProgramCache
+import com.rohittp.reng.internal.gl.GpuTextureResidency
 import com.rohittp.reng.internal.gl.GroundPipeline
 import com.rohittp.reng.internal.gl.GroundPipelineResult
 import com.rohittp.reng.internal.gl.OffscreenSurface
@@ -100,6 +101,7 @@ import com.rohittp.reng.internal.preparation.buildResourceOperationDefinition
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.projection.resolveMercatorCamera
 import com.rohittp.reng.internal.renGFailure
+import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
 import com.rohittp.reng.internal.resource.ResourceOperationOutcome
 import com.rohittp.rentile.PreparedStyle
 import kotlinx.coroutines.CancellationException
@@ -1059,7 +1061,13 @@ internal class RenGRenderer(
         val outcome = driver.run(RendererLifecycleOperation.QueryResources(selector)) { null }
         return when (outcome) {
             RendererLifecycleOutcome.EmptyResourceResult -> emptyResourceReport()
-            RendererLifecycleOutcome.Succeeded, RendererLifecycleOutcome.NoOp -> residentCache.report(selector)
+            // The cache owns raw bytes and decoded pixels; the registry owns GL handles and is the
+            // only thing that can answer for GPU bytes. Passing the lookup rather than the registry
+            // is what keeps the cache free of GL knowledge -- and it is why the report can now say
+            // "I do not know" about a sticker's texture instead of the literal zero it used to
+            // assert while that texture was resident.
+            RendererLifecycleOutcome.Succeeded, RendererLifecycleOutcome.NoOp ->
+                residentCache.report(selector, glObjectRegistry::gpuByteAccount)
             is RendererLifecycleOutcome.Failed -> throw outcome.failure.toException()
         }
     }
@@ -1196,25 +1204,63 @@ internal class RenGRenderer(
         // exempt from eviction (`GlObjectRegistry.evictOverBudget` iterates only unleased keys), so a
         // leaked one is a texture the byte budget can never reclaim for the renderer's whole life.
         val groundLeases = ArrayList<TextureLease>(frame.basemapTiles.size)
-        try {
-            val sceneGroundTiles = when (val resolved = resolveGroundTiles(frame, groundLeases)) {
-                is GroundTilesResult.Resolved -> resolved.tiles
-                is GroundTilesResult.Failed -> return resolved.failure
+        var unrelievedResidency: GpuTextureResidency? = null
+        val failure = try {
+            when (val resolved = resolveGroundTiles(frame, groundLeases)) {
+                is GroundTilesResult.Failed -> resolved.failure
+                is GroundTilesResult.Resolved -> drawResolvedFrame(
+                    frame = frame,
+                    framebufferName = framebufferName,
+                    profile = profile,
+                    surface = surface,
+                    composite = composite,
+                    sticker = sticker,
+                    ground = ground,
+                    resolvedCamera = resolvedCamera,
+                    sceneGroundTiles = resolved.tiles,
+                )
             }
-            return drawResolvedFrame(
-                frame = frame,
-                framebufferName = framebufferName,
-                profile = profile,
-                surface = surface,
-                composite = composite,
-                sticker = sticker,
-                ground = ground,
-                resolvedCamera = resolvedCamera,
-                sceneGroundTiles = sceneGroundTiles,
-            )
         } finally {
-            groundLeases.forEach { glObjectRegistry.releaseLease(it, binding) }
+            unrelievedResidency = releaseGroundLeases(groundLeases)
         }
+        // Only on a frame that actually drew. A failing draw reports its own typed failure, and
+        // reaching into the consumer's sink while that failure is on its way out would add noise to
+        // the one moment they are least able to use it -- and, from the `finally` above, could
+        // replace the failure entirely with whatever a throwing sink raises.
+        if (failure == null) {
+            unrelievedResidency?.let { residency ->
+                configuration.diagnosticSink.emit(
+                    residentGpuTexturesOverBudgetDiagnostic(
+                        residentBytes = residency.residentBytes,
+                        budgetBytes = residency.budgetBytes,
+                    ),
+                )
+            }
+        }
+        return failure
+    }
+
+    /**
+     * Releases every ground lease this draw took, and reports the worst residency that eviction could
+     * not bring under budget -- or `null` if it always could.
+     *
+     * **One reading per frame, not one per texture.** Each release runs an eviction pass, so a frame
+     * 39 tiles past the budget reaches the "out of unleased candidates, still over budget" exit 39
+     * times. Those are 39 observations of one condition, and the consumer needs the condition, not the
+     * arithmetic: this collapses them to the single worst reading, and `performDraw` emits at most one
+     * diagnostic from it. The maximum rather than the first, though the two coincide today -- within
+     * one draw nothing registers a texture after the release loop begins, so the resident total only
+     * falls -- because "the worst it got" is what the reading claims to be, and that should not
+     * quietly depend on an ordering property of a loop somewhere else.
+     */
+    private fun releaseGroundLeases(groundLeases: List<TextureLease>): GpuTextureResidency? {
+        var worst: GpuTextureResidency? = null
+        for (lease in groundLeases) {
+            val residency = glObjectRegistry.releaseLease(lease, binding)
+            if (!residency.overBudget) continue
+            if (worst == null || residency.residentBytes > worst.residentBytes) worst = residency
+        }
+        return worst
     }
 
     /**

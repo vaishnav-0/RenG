@@ -79,6 +79,28 @@ internal fun basemapNotConfiguredDiagnostic(): Diagnostic =
         stage = PipelineStage.BASEMAP_RENDER,
     )
 
+/**
+ * A draw ended with more budget-tracked texture bytes resident than
+ * [com.rohittp.reng.ResourceLimits.maximumResidentGpuTextureBytes] allows, and eviction could do
+ * nothing about it: every remaining byte belonged to a texture the frame itself was holding. The
+ * next frame over the same camera therefore re-decodes and re-uploads whatever this one dropped —
+ * a megabyte each way per 512x512 tile, every frame, at a stationary camera.
+ *
+ * A warning rather than a failure, because the frame drew correctly and RenG repairs nothing on the
+ * caller's behalf: the two numbers are what a consumer needs to decide whether to raise the limit or
+ * lower [com.rohittp.reng.RendererConfiguration.maximumBasemapTileInstances], and that decision is
+ * theirs. It names no resource key: the condition is a property of the whole working set, and
+ * blaming the last tile released would be arbitrary.
+ */
+internal fun residentGpuTexturesOverBudgetDiagnostic(residentBytes: Long, budgetBytes: Long): Diagnostic =
+    Diagnostic(
+        code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,
+        severity = DiagnosticSeverity.WARNING,
+        stage = PipelineStage.DRAW,
+        limit = budgetBytes,
+        actual = residentBytes,
+    )
+
 internal fun renGFailure(
     code: RenGErrorCode,
     stage: PipelineStage,
