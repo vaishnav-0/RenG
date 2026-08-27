@@ -82,6 +82,7 @@ jobs:
           :kmp:compileKotlinIosArm64
           :kmp:compileKotlinIosSimulatorArm64
           :kmp:macosArm64Test
+          :kmp:iosSimulatorArm64Test
           :kmp:publishAllPublicationsToLocalTestRepository
       - name: Resolve aggregate coordinate from clean consumer
         run: |
