@@ -161,7 +161,12 @@ relationships over a real GLB drawn through the public API, on a rasteriser noth
 ever run before, with no tolerance change. That is the strongest single result in this document, because it
 is the one that says F-2's numbers are portable rather than tuned to two drivers.
 
-The basemap readback suite was not run: it needs a style URL carrying an API key, which this spike does not
+The basemap readback suite was not run here. **Corrected 2026-08-28 — the stated reason was wrong.** It
+does *not* need a style URL carrying an API key: it is fully self-contained, driving a fake `Transport` over
+hand-assembled PNGs, and Cycle H's Task 2 runs it on iOS unchanged. That also measured something nobody had:
+Rentile's Skia rasterises on the iOS simulator. What follows is the original text, kept because it records
+what this spike actually did rather than what was later found possible. It needs a style URL carrying an API
+key, which this spike does not
 have.
 
 ## The one negative: the simulator's rasteriser is `Apple Software Renderer`
@@ -205,7 +210,8 @@ Three consequences for Cycle H, none of them blockers:
   `--rerun-tasks`, succeeds) but has no host to run on. **Attaching a provisioned iPhone and running
   `:kmp:iosArm64Test` is what would settle it**, and it is the only way to learn whether the device GPU's
   rasteriser passes the large-quad probe and what its real `GL_MAX_TEXTURE_SIZE` is.
-- **The basemap readback suite on iOS.** Needs a style URL with an API key. Given the rasteriser probe
+- ~~**The basemap readback suite on iOS.** Needs a style URL with an API key.~~ **Wrong, and settled by
+  Task 2**: the suite is self-contained and runs on iOS. Given the rasteriser probe
   above, the expected outcome on the simulator is known — one case skips — but it was not run.
 - **`EAGLContext` under a `CAEAGLLayer`.** The spike renders only to an FBO. Whether presenting to a real
   drawable still works on iOS 26 is untested and is not something RenG needs: RenG draws onto a
