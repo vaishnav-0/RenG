@@ -10,6 +10,15 @@ plugins {
 kotlin {
     explicitApi()
 
+    // Required, not redundant. The explicit `dependsOn(commonTest)` edge on `androidDeviceTest`
+    // below makes the Kotlin Gradle Plugin stop applying the default hierarchy template to this
+    // project -- as a *warning*. The consequence is not a warning: `iosMain`, `nativeMain`,
+    // `linuxMain` and `macosMain` stop being wired to `commonMain`, and every Kotlin/Native
+    // compilation then fails with "Expected ... has no actual declaration in module <commonMain>
+    // for Native". The whole Android half of the build stays green while that is true, so deleting
+    // this line breaks four targets and shows nothing on the platform it was deleted for.
+    applyDefaultHierarchyTemplate()
+
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
     abiValidation {
         enabled.set(true)
@@ -23,6 +32,13 @@ kotlin {
         compileSdk = 37
         minSdk = 30
         withHostTest {}
+        // ADR 0032. Registers `compileAndroidDeviceTest`, `packageAndroidDeviceTest` and
+        // `connectedAndroidDeviceTest`; the runner class named here lives in `androidx.test:runner`,
+        // which is why that coordinate is declared below. Instrumented tests are the only way RenG
+        // executes `AndroidGlBinding` against a real driver.
+        withDeviceTest {
+            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        }
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_21)
         }
@@ -41,6 +57,19 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
+        }
+        // `androidDeviceTest` is not reached by the default hierarchy template, so without this
+        // edge it sees neither `commonTest`'s suites nor `commonMain`'s internals. See the comment
+        // on `applyDefaultHierarchyTemplate()` above for what taking the edge costs.
+        val androidDeviceTest by getting {
+            dependsOn(commonTest.get())
+        }
+        // The edge carries source, not dependencies: an `androidDeviceTest` with no block of its
+        // own does not even resolve `kotlin.test`. ADR 0032 admits exactly these three.
+        androidDeviceTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.androidx.test.runner)
             implementation(libs.kotlinx.coroutines.test)
         }
     }

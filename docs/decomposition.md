@@ -13,6 +13,10 @@ corrected GL source-set visibility, ADR 0023 corrects the GL restore set, ADRs 0
 draw-regime order, the map-regime depth rule and draw order for coplanar content, and the single
 world-anchored light models are shaded by, ADR 0027 supersedes 0025's depth-*write* ruling so that no
 map-regime draw writes depth, and ADR 0028 narrows ADR 0021's flat GLB accessor subset to a per-role one.
+ADR 0029 rejects a `SCREEN`-positioned model and ADR 0030 reopens ADR 0027's depth-write ruling for the
+model pass alone; ADRs 0031–0033 are Cycle H's and touch the platforms and the gates rather than the
+contract — standing on deprecated OpenGL ES for iOS, taking `androidx.test:runner` for instrumented tests,
+and gating the mobile targets asymmetrically.
 Everything below inherits the current decisions rather than revisiting them without new evidence.
 
 ## Order
@@ -45,15 +49,17 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | F-2 | Models with textures and animation | Analytical readback over a real GL context |
 | E-labels | Map text drawn as screen-space primitives from Rentile label candidates | Labels legible and collision-free over a moving camera |
 | E-terrain | Terrain displacing the mercator ground, plus deferred Cycle C task 20 | Golden baselines with terrain |
-| H | Android and iOS bring-up | Device/simulator runs, manual for Android GL |
+| H | Android and iOS bring-up | `iosSimulatorArm64Test` in CI; two one-command device runs, neither automated |
 | G | Globe projection | Golden baselines at both projection modes |
 | I | macOS harness: plans in, video out | A rendered sequence encodes and plays |
 | J | Golden-image corpus gate | Corpus job wired into `ci.yml` and `publish.yml` |
 
 **Where the sequence stands.** A, B, C, D, F-1 and E-basemap are released: A as `0.1.0`, B/C/D/F-1 together
-as `0.2.0`, and E-basemap as `0.3.0`. **F-2 is complete and unreleased** — all eighteen tasks landed on
-`feat/f2-models`, gated by a model readback suite that draws a real GLB on a real driver. Everything from
-E-labels onward is unstarted, though E-labels has been spiked; see `HANDOFF.md` for what that spike settled.
+as `0.2.0`, and E-basemap as `0.3.0`. **F-2 and H are both complete and both unreleased.** F-2's eighteen
+tasks are merged into `main`, gated by a model readback suite that draws a real GLB on a real driver; H's
+seven land on `feat/h-mobile-bring-up`, which has not been merged into `main`. E-labels and E-terrain remain
+unstarted, though E-labels has been spiked; see `HANDOFF.md` for what that spike settled. **H ran out of order deliberately**, ahead of
+G, on the 2026-08-22 reasoning recorded under "G — Globe projection" below.
 
 **Pixel verification is deferred to Cycle J** by owner decision, recorded at
 `docs/superpowers/specs/2026-08-19-cycle-f1-stickers-and-geometries-design.md:204-205`. The gate rows for
@@ -314,9 +320,47 @@ cycle's record is that watching is what finds the defects a green suite does not
 
 ## H — Android and iOS bring-up
 
-The two targets CI cannot exercise against a real context. Android's `GLES30` path and iOS's
-`platform.gles3` path get run on real devices, and whatever differs from the macOS and Linux behaviour
-gets fixed or documented.
+**Complete and unreleased**, on `feat/h-mobile-bring-up`. Its authority is
+`docs/superpowers/specs/2026-08-28-cycle-h-mobile-bring-up-design.md` and its plan is
+`docs/superpowers/plans/2026-08-28-cycle-h-mobile-bring-up.md`.
+
+The deliverable as written was "Android's `GLES30` path and iOS's `platform.gles3` path get run on real
+devices, and whatever differs from the macOS and Linux behaviour gets fixed or documented." **The preflight
+did exactly that before the cycle started, and nothing differed** — all 91 roster entry points resolve on
+both platforms, and the GL conformance suite passes unmodified at `ShaderDialect.GLES` on an Apple A14 and
+on a Qualcomm Adreno 830, the latter with the real cross-dialect link that Linux has to skip for a Mesa
+defect. The one thing that looked like a difference, Skia on Android, was a host-JVM packaging fact.
+
+So the cycle's real subject is **permanence**, not bring-up: a binding proven once on a developer's desk is
+proven until the next commit, and these two had shipped unexercised through three releases. What it built is
+an `iosTest` source set holding an EAGL context and an `androidDeviceTest` source set holding an EGL14
+pbuffer context; `BasemapReadbackSuite`, `ModelReadbackSuite`, `ModelFixtureBuilder` and the large-quad
+rasterisation probe relocated from `nativeTest` to `commonTest`, so one copy reaches every target instead of
+the Android spike's second copy; `:kmp:iosSimulatorArm64Test` appended to `ci.yml`'s existing
+`apple-publication` invocation; `tools/run_ios_device_tests.py`, which makes the iOS device run one command
+where it had been five manual steps; an explicit third dependency scope in `tools/check_repository_policy.py`
+so `androidx.test:runner` can be declared without weakening the gate; and ADRs 0031, 0032 and 0033.
+
+**It grew the public ABI by nothing** — the first cycle since F-1 to do so, and the constraint it was
+gated on. `kmp/api/kmp.klib.api` is byte-identical to `main`.
+
+**What it did not do, stated plainly because the gate is weaker than the headline.** Neither permanent
+device test has met a real GPU: both phones were detached when their tasks ran, so `androidDeviceTest`'s
+only execution is against a `Pixel_10_Pro_XL` emulator on ANGLE over Vulkan over SwiftShader, and the
+Adreno 830 and Apple A14 results live in the preflight spikes rather than in any gate.
+`tools/run_ios_device_tests.py` has never been run against the class it defaults to — it was exercised on
+hardware against the spike's test class, and `IosGlConformanceTest` arrived afterwards; the filter matches
+structurally, but the loop is unrun. And the one readback case that would catch a ground regression skips on
+the iOS simulator's `Apple Software Renderer`, the only rasteriser CI will ever run for this target — a skip
+proved load-bearing by mutation, since trusting that driver makes 2 of 5 cases fail, the ground one over
+3,005 of 15,876 interior pixels, which is `0.3.0`'s exact publication-failure signature. Ubuntu's llvmpipe
+job keeps that case gated. **ADR 0033 is the record of that asymmetry and of what a release may claim about
+a target verified only in simulation.**
+
+No Android emulator joined CI: an AVD selects its ANGLE backend from configuration rather than from a
+documented default — measured, `hw.gpu.mode=auto` chose Vulkan-on-SwiftShader — and an unstable rasteriser
+makes an unstable probe reading. `iosArm64` still has no Gradle test runner; the Python tool works around
+that rather than fixing it. No GPU vendor beyond Adreno and Apple has been measured on any target.
 
 ## G — Globe projection
 

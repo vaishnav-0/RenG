@@ -319,6 +319,59 @@ _VERSION_CATALOG_WITH_COROUTINES = VERSION_CATALOG.replace(
     'rentile-kmp = { module = "com.rohittp.rentile:kmp", version.ref = "rentile" }\n',
 )
 
+# ADR 0032's `androidDeviceTest` scope (Cycle H task 4): the with-coroutines fixtures above plus
+# the device-test source set and the one coordinate it adds. Built by amending those rather than
+# standing alone, for the same reason they amend the base fixtures -- every other check
+# `check_dependencies` runs on `kmp/build.gradle.kts` must still recognize the rest of the file,
+# and the token stream has to match the real file exactly for the shared build-fingerprint pin.
+#
+# `applyDefaultHierarchyTemplate()` is here because it is in the real file, where it is load-bearing:
+# the explicit `dependsOn(commonTest)` edge below makes the Kotlin Gradle Plugin stop applying the
+# default hierarchy template, which un-wires every Kotlin/Native source set while leaving Android
+# green. The checker cannot see that, but the fingerprint pins it in place.
+_KMP_BUILD_WITH_DEVICE_TEST = _KMP_BUILD_WITH_COROUTINES.replace(
+    "    explicitApi()\n",
+    "    explicitApi()\n"
+    "\n"
+    "    applyDefaultHierarchyTemplate()\n",
+).replace(
+    "        withHostTest {}\n",
+    "        withHostTest {}\n"
+    "        withDeviceTest {\n"
+    "            instrumentationRunner = \"androidx.test.runner.AndroidJUnitRunner\"\n"
+    "        }\n",
+).replace(
+    "        commonTest.dependencies {\n"
+    "            implementation(kotlin(\"test\"))\n"
+    "            implementation(libs.kotlinx.coroutines.test)\n"
+    "        }\n",
+    "        commonTest.dependencies {\n"
+    "            implementation(kotlin(\"test\"))\n"
+    "            implementation(libs.kotlinx.coroutines.test)\n"
+    "        }\n"
+    "        val androidDeviceTest by getting {\n"
+    "            dependsOn(commonTest.get())\n"
+    "        }\n"
+    "        androidDeviceTest.dependencies {\n"
+    "            implementation(kotlin(\"test\"))\n"
+    "            implementation(libs.androidx.test.runner)\n"
+    "            implementation(libs.kotlinx.coroutines.test)\n"
+    "        }\n",
+)
+
+# Alphabetical in both tables, matching the real catalog, because this fixture and the real file
+# must tokenize identically for the shared build-fingerprint pin.
+_VERSION_CATALOG_WITH_DEVICE_TEST = _VERSION_CATALOG_WITH_COROUTINES.replace(
+    'agp = "9.3.1"\n',
+    'agp = "9.3.1"\n'
+    'androidxTestRunner = "1.7.0"\n',
+).replace(
+    'kotlinx-coroutines-core = ',
+    'androidx-test-runner = { module = "androidx.test:runner",'
+    ' version.ref = "androidxTestRunner" }\n'
+    'kotlinx-coroutines-core = ',
+)
+
 PUBLIC_SMOKE_STEP = """      - name: Resolve six targets from the public repository without credentials
         run: >-
           ./gradlew --gradle-user-home "$PUBLIC_HOME" --refresh-dependencies
@@ -900,6 +953,151 @@ class RepositoryPolicyTests(unittest.TestCase):
                 ),
             )
             codes = {violation.code for violation in check_repository(root)}
+            self.assertIn("FORBIDDEN_CYCLE_B_DEPENDENCY", codes)
+
+    # ADR 0032's third dependency scope. A widening that admits anything is not a widening, so
+    # every test below the first one is a mutation: each takes the accepted shape and changes one
+    # thing, and each must still be refused.
+
+    def test_device_test_scope_with_its_catalog_entry_passes(self) -> None:
+        # The exact combination Cycle H task 4 lands in the real repository, through the full
+        # check_repository pipeline: the build script's androidDeviceTest block and the catalog's
+        # androidx-test-runner entry together, plus both files' build fingerprints.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_clean_fixture(root)
+            write(root, "kmp/build.gradle.kts", _KMP_BUILD_WITH_DEVICE_TEST)
+            write(root, "gradle/libs.versions.toml", _VERSION_CATALOG_WITH_DEVICE_TEST)
+            self.assertEqual([], check_repository(root))
+
+    def _refuses_device_test_build(self, build: str) -> None:
+        """Write `build` as the only mutation and require `check_dependencies` to refuse it.
+
+        The build-fingerprint pin fires on any token change to `kmp/build.gradle.kts` at all, so it
+        masks every mechanism underneath it: measured here, with `device_test_allowed` forced to
+        `True`, all of these mutations were still "refused" and the whole suite still passed.
+        Neutralizing the pin, exactly as the catalog forbidden-scan test does, leaves the dependency
+        rules as the only thing that can produce a violation.
+        """
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_clean_fixture(root)
+            write(root, "kmp/build.gradle.kts", build)
+            write(root, "gradle/libs.versions.toml", _VERSION_CATALOG_WITH_DEVICE_TEST)
+            with patch.dict(
+                _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS,
+                _neutralized_fingerprint_overrides(root),
+            ):
+                violations = check_dependencies(root)
+            self.assertEqual(
+                {"FORBIDDEN_CYCLE_B_DEPENDENCY"},
+                {violation.code for violation in violations},
+            )
+
+    def test_rejects_a_fourth_device_test_dependency(self) -> None:
+        # The coordinate here shares no hyphen-bounded word with _FORBIDDEN_DEPENDENCY, so this
+        # measures the scope's own allowlist rather than the forbidden-word scan behind it.
+        self._refuses_device_test_build(
+            _KMP_BUILD_WITH_DEVICE_TEST.replace(
+                "            implementation(libs.androidx.test.runner)\n",
+                "            implementation(libs.androidx.test.runner)\n"
+                "            implementation(libs.androidx.test.core)\n",
+            ),
+        )
+
+    def test_rejects_a_repeated_device_test_dependency(self) -> None:
+        # A fourth call naming a coordinate the scope *does* admit. Every other mechanism accepts
+        # it — the coordinate is catalogued, permitted, and inside the device range — so the
+        # scope's own shape rule is the only thing left that can refuse it. That is what makes this
+        # the case that dies when that rule is weakened, and the reason it exists alongside the one
+        # above rather than instead of it.
+        self._refuses_device_test_build(
+            _KMP_BUILD_WITH_DEVICE_TEST.replace(
+                "            implementation(libs.androidx.test.runner)\n",
+                "            implementation(libs.androidx.test.runner)\n"
+                "            implementation(libs.androidx.test.runner)\n",
+            ),
+        )
+
+    def test_rejects_a_dependency_block_in_a_fourth_source_set(self) -> None:
+        # The scope is androidDeviceTest specifically, not "test source sets". androidHostTest is
+        # the nearest neighbour -- also a test source set, also on the JVM -- and it is refused.
+        self._refuses_device_test_build(
+            _KMP_BUILD_WITH_DEVICE_TEST.replace(
+                "        val androidDeviceTest by getting {\n",
+                "        androidHostTest.dependencies {\n"
+                "            implementation(kotlin(\"test\"))\n"
+                "        }\n"
+                "        val androidDeviceTest by getting {\n",
+            ),
+        )
+
+    def test_still_rejects_a_bare_runner_coordinate(self) -> None:
+        self._refuses_device_test_build(
+            _KMP_BUILD_WITH_DEVICE_TEST.replace(
+                "implementation(libs.androidx.test.runner)",
+                'implementation("androidx.test:runner:1.7.0")',
+            ),
+        )
+
+    def test_the_runner_is_not_admitted_into_the_production_scope(self) -> None:
+        # The allowlist is per-scope. A coordinate ADR 0032 admits for instrumented tests must not
+        # become admissible in commonMain, where it would reach every consumer.
+        self._refuses_device_test_build(
+            _KMP_BUILD_WITH_DEVICE_TEST.replace(
+                "            implementation(libs.kotlinx.coroutines.core)\n",
+                "            implementation(libs.kotlinx.coroutines.core)\n"
+                "            implementation(libs.androidx.test.runner)\n",
+            ),
+        )
+
+    def test_rejects_a_device_test_block_missing_its_required_kotlin_test_call(self) -> None:
+        self._refuses_device_test_build(
+            _KMP_BUILD_WITH_DEVICE_TEST.replace(
+                "        androidDeviceTest.dependencies {\n"
+                "            implementation(kotlin(\"test\"))\n",
+                "        androidDeviceTest.dependencies {\n",
+            ),
+        )
+
+    def test_catalog_rejects_a_fourth_library_entry_beyond_the_three_permitted(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_clean_fixture(root)
+            write(root, "kmp/build.gradle.kts", _KMP_BUILD_WITH_DEVICE_TEST)
+            write(
+                root,
+                "gradle/libs.versions.toml",
+                _VERSION_CATALOG_WITH_DEVICE_TEST.replace(
+                    "[plugins]",
+                    'androidx-test-core = { module = "androidx.test:core",'
+                    ' version.ref = "androidxTestRunner" }\n\n'
+                    "[plugins]",
+                ),
+            )
+            codes = {violation.code for violation in check_repository(root)}
+            self.assertIn("FORBIDDEN_CYCLE_B_DEPENDENCY", codes)
+
+    def test_catalog_forbidden_scan_still_covers_the_device_test_shape(self) -> None:
+        # The androidx-test-runner entry is deliberately not masked out of the raw forbidden-word
+        # scan, unlike the two coroutines entries. This proves the scan still reaches text in a
+        # catalog that carries it -- the fingerprint pin is neutralized so that only the scan can
+        # be what fires.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_clean_fixture(root)
+            write(root, "kmp/build.gradle.kts", _KMP_BUILD_WITH_DEVICE_TEST)
+            write(
+                root,
+                "gradle/libs.versions.toml",
+                _VERSION_CATALOG_WITH_DEVICE_TEST + "\n[bundles]\n"
+                'sneaky = ["com.squareup.wire:wire-runtime:1.0"]\n',
+            )
+            with patch.dict(
+                _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS,
+                _neutralized_fingerprint_overrides(root),
+            ):
+                codes = {violation.code for violation in check_dependencies(root)}
             self.assertIn("FORBIDDEN_CYCLE_B_DEPENDENCY", codes)
 
     def test_cycle_b_dependency_allowlist_rejects_gradle_indirection(self) -> None:
