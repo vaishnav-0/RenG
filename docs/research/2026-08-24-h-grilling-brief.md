@@ -22,7 +22,13 @@ Linux needs. `runModelReadbackSuite` passes all six pixel relationships **with n
 `iosSimulatorArm64Test` stands at 1146 tests, 0 failures.
 
 **No ANGLE pivot is required, and ANGLE is off Cycle H's critical path.** That was the question the owner
-sequenced iOS first to answer early, and it is answered.
+sequenced iOS first to answer early, and it is answered — twice, once in simulation and once on an
+**iPhone 12 (A14) running iOS 26.4.2**, where all five spike cases pass unmodified.
+
+And the device reframes the pivot itself: it reports `OpenGL ES 3.0 **Metal** - 104.1`, so **Apple's own
+GLES on iOS is already implemented over Metal**. Adopting ANGLE would have replaced Apple's Metal
+translation with Google's, for an API Apple is already translating — a materially different proposition
+from the "GLES is unsupported and needs an emulation layer" framing the option started with.
 
 Corroboration rather than coincidence: `EAGL.def` and `OpenGLES3.def` exist upstream for both iOS targets,
 and public projects already do this — WorldWindKotlin drives `kEAGLRenderingAPIOpenGLES3` with
@@ -103,14 +109,16 @@ Both of these would have entered the grilling as frightening unknowns. Neither i
 
 ## What is still open, and what would settle each
 
-1. **No iOS device has run anything.** `iosArm64Test` compiles and has never executed; no device is
-   attached. Every iOS fact above is simulator-only, on a software rasteriser. **Settled by**: attaching a
-   device and running the suites.
-2. **Whether the readback tolerances survive a real mobile GPU, or either ANGLE backend.** Every tolerance
-   in both suites was derived against Apple M3 Max, Apple Software Renderer and llvmpipe.
-   `measureLargeQuadRasterisation` already exists as the instrument and already fails on the simulator's
-   rasteriser (3,040 mismatched pixels against a 512 budget) — which is the *expected* answer there, not a
-   defect. **Settled by**: running the suites on each target rasteriser and recording the probe's number.
+1. ~~**No iOS device has run anything.**~~ **Settled 2026-08-27** on an iPhone 12 (A14), iOS 26.4.2: all
+   five spike cases pass on real hardware — every roster entry point resolves, the conformance suite passes,
+   and **the model readback suite passes unmodified with no tolerance change**. See the addendum to
+   `2026-08-24-h-ios-gles-context-spike.md`. What remains open is only *how* a device run is automated: there
+   is no `iosArm64Test` task, the binary must be wrapped in a signed `.app` and launched via `devicectl`,
+   and **an unfiltered run is SIGKILLed by the watchdog** because the app never becomes responsive.
+2. ~~**Whether the readback tolerances survive a real mobile GPU.**~~ **Settled for iOS**: they do, exactly.
+   The A14 reports `GL_SUBPIXEL_BITS=4` and `GL_MAX_TEXTURE_SIZE=16384` — matching macOS's Metal path, not
+   the simulator — and the large-quad probe reports **0 pixels of disagreement**. The simulator was the
+   outlier, not the device. Still open for **Android's two ANGLE backends**, which no measurement covers.
 3. **Whether Skia loads and rasterises on an Android device or emulator.** Decides whether
    `BasemapReadbackSuite` can run on Android at all, or only the two self-contained suites. **Settled by**:
    one `androidDeviceTest` that calls into Rentile.
@@ -126,16 +134,20 @@ Both of these would have entered the grilling as frightening unknowns. Neither i
 
 Each is now askable against facts rather than impressions.
 
-1. **Does Cycle H gate on the simulator, on a device, or both?** The simulator is free, runs in CI's reach,
-   and is a software rasteriser that cannot speak for a GPU. A device is the only real signal and cannot be
-   automated here. What is the gate, and what does a release claim about targets it has only simulated?
+1. **Does Cycle H gate on the simulator, on a device, or both?** Sharpened by the device run rather than
+   settled. The simulator is free, automated by Gradle, and is a software rasteriser whose probe *fails*
+   where the device's passes — so a simulator-only gate certifies logic and misrepresents rasterisation. A
+   device run now demonstrably works and produces the stronger result, but needs a signed `.app`, a
+   `devicectl` launch, a test filter to survive the watchdog, and hardware nobody's CI has. What is the gate,
+   and what may a release claim about a target verified only in simulation?
 2. **Does the iOS deprecation get an ADR?** The build will never warn. RenG has committed to six targets
    permanently, and one of them now rests on an API Apple deprecated in 2018 and has not removed in eight
    years. That is a real decision with a real risk, and it is currently recorded in no ADR.
 3. **Which rasterisers must a tolerance survive, and what happens when one cannot?** `0.3.0` already
-   answered this once by skipping a single case out loud rather than loosening every budget. Does that
-   precedent extend to two more rasterisers, and where is the line past which a suite is tolerated into
-   meaninglessness?
+   answered this once by skipping a single case out loud rather than loosening every budget. iOS turns out
+   to need nothing — the device agrees exactly and the simulator fails the probe honestly, which is the
+   mechanism working as designed. The live question is now Android's two ANGLE backends. Where is the line
+   past which a suite is tolerated into meaninglessness?
 4. **Is `androidDeviceTest` in scope for this cycle, or does Android stop at "the binding compiles"?** The
    Android half is four unmeasured unknowns against iOS's zero.
 5. **Does CI change?** Neither an iOS simulator nor an Android emulator runs in `ci.yml` today, and the

@@ -228,3 +228,84 @@ Three commits on `spike/h-ios-gles`, all test-source-only:
 `kmp/api/kmp.klib.api` is byte-identical and `:kmp:checkKotlinAbi` passes. `kmp/build.gradle.kts` is
 untouched. This is spike code: it should be reshaped into a proper `IosGlConformanceTest` matching
 `MacosGlConformanceTest`'s structure when Cycle H is scoped, not merged as-is.
+
+---
+
+## Addendum, 2026-08-27: the same suites on a real device
+
+An **iPhone 12 (iPhone13,2), iOS 26.4.2, Apple A14 GPU** was attached, which closes the largest gap this
+document left open. Everything below is that device's own stdout.
+
+### Getting a Kotlin/Native test binary onto a device at all
+
+There is **no `iosArm64Test` Gradle task** — Kotlin/Native links a device test binary (`iosArm64TestBinaries`
+→ `kmp/build/bin/iosArm64/debugTest/test.kexe`, a plain arm64 Mach-O with `minos 14.0`) and provides no
+runner, because iOS will not execute a bare executable. The route that worked, and that a Cycle H task would
+have to automate:
+
+1. `./gradlew :kmp:linkDebugTestIosArm64`
+2. wrap the `.kexe` as the `CFBundleExecutable` of a minimal signed `.app`
+3. `xcrun devicectl device install app`
+4. `xcrun devicectl device process launch --console`, which streams the binary's stdout back
+
+Signing needed a provisioning profile covering the device. Every profile on this machine that did so targeted
+a **shipping** bundle id (`com.travelanimator.routemap`, `com.lascade.marinetracker`), so installing under one
+would have replaced a real app; the owner chose a throwaway id instead. In the event `xcodebuild
+-allowProvisioningUpdates` matched an existing **wildcard** development profile
+(`iOS Team Provisioning Profile: *`), so **no new App ID was registered** and nothing on the device was
+disturbed. The app was uninstalled afterwards.
+
+**One trap worth recording.** Launched with no filter, the binary runs all 1146 tests and iOS **SIGKILLs it
+part-way through** — the app has no UI, never becomes responsive, and the watchdog takes it. From the
+outside that looks like a white screen that closes, and it is easy to mistake for a crash in RenG. Passing
+`--ktest_filter=` to scope the run finishes inside the watchdog window and exits 0. **Any Cycle H device job
+must either filter or solve the responsiveness problem**; a full-suite device run is not simply slower, it
+is killed.
+
+### The result: 5 of 5, unmodified
+
+```
+GL_VERSION=OpenGL ES 3.0 Metal - 104.1
+GL_RENDERER=Apple A14 GPU
+GL_VENDOR=Apple Inc.
+GL_SHADING_LANGUAGE_VERSION=OpenGL ES GLSL ES 3.00
+19 extensions
+```
+
+Every roster entry point resolves. `runGlConformanceSuite(..., ShaderDialect.GLES)` passes. **The model
+readback suite passes on real hardware, unmodified and with no tolerance change** — all six pixel
+relationships, including the indexed `drawElements` draws that the Apple-silicon-simulator bug reports say
+crash.
+
+### The device is the trustworthy rasteriser; the simulator was the outlier
+
+| | Simulator | **Device (A14)** | macOS (M3 Max) |
+|---|---|---|---|
+| `GL_RENDERER` | `Apple Software Renderer` | `Apple A14 GPU` | `Apple M3 Max` |
+| `GL_VERSION` | `OpenGL ES 3.0 APPLE-23.1.1` | `OpenGL ES 3.0 Metal - 104.1` | `4.1 Metal - 90.5` |
+| `GL_SUBPIXEL_BITS` | 10 | **4** | 4 |
+| `GL_MAX_TEXTURE_SIZE` | 4096 | **16384** | 16384 |
+| large off-screen quad probe | fails, 3,040 px | **0 px disagreement** | 0 px |
+
+Three corrections to this document's own body follow.
+
+**`GL_MAX_TEXTURE_SIZE = 4096` is a simulator limit, not an iOS limit.** The body flagged it as a constraint
+a quarter of the desktop targets'. On device it is 16384, the same as macOS. Nothing needs to be designed
+around it.
+
+**`GL_SUBPIXEL_BITS = 10` is likewise the software rasteriser's**, matching the macOS software path; the
+device reports 4, matching the macOS Metal path. The device behaves like the desktop GPU, not like the
+simulator.
+
+**The rasterisation probe passes on device with zero disagreement.** The body records it failing on the
+simulator at 3,040 pixels against a 512 budget and treats that as the expected answer for a software
+rasteriser — which it is. What is now measured is that **no tolerance needs widening for iOS at all**: the
+real hardware agrees with the analytic rectangle exactly.
+
+### And a fact that reframes the ANGLE question entirely
+
+The device reports `OpenGL ES 3.0 **Metal** - 104.1`. **Apple's own OpenGL ES on iOS is already implemented
+over Metal.** The pivot that was on the table — adopting ANGLE to translate GLES to Metal — would replace
+Apple's Metal translation with Google's, for an API Apple is already translating. That is a materially
+different proposition from "GLES is unsupported and needs an emulation layer", which is how the option was
+framed before any of this was measured.
