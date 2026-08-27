@@ -86,8 +86,15 @@ public data class ResourceLimits(
      * Tile Budget (`maximumBasemapTileInstances`) -- a tile count means a different number of
      * bytes at every tile size and on every device, so deriving one from the other would hide the
      * real cost from whoever configures it.
+     *
+     * The two *defaults* are nonetheless sized to agree, which is a different claim: 512 canonical
+     * 512x512 RGBA8 tiles are exactly 512 MiB, so a frame at the default tile ceiling cannot thrash
+     * against the default budget. The two sat 4x apart until a level 3840x2160 camera was measured
+     * reaching 167 tiles. This is an eviction threshold rather than a reservation, so the larger
+     * default costs nothing until a frame genuinely needs it. A consumer who changes either number
+     * is back to reasoning in bytes themselves, which is what the independence above is for.
      */
-    public val maximumResidentGpuTextureBytes: Long = 128L * 1024L * 1024L,
+    public val maximumResidentGpuTextureBytes: Long = 512L * 1024L * 1024L,
 ) {
     init {
         val minimum = 1L

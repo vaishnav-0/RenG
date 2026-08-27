@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class RendererProtocolTest {
     @Test
@@ -48,6 +49,31 @@ class RendererProtocolTest {
         assertEquals(256, defaults.maximumPreparationBatchSize)
         assertEquals(8, defaults.maximumConcurrentResourceOperations)
         assertSame(DiagnosticSink.None, defaults.diagnosticSink)
+    }
+
+    @Test
+    fun theDefaultGpuTextureBudgetHoldsTheDefaultTileCeilingWithoutThrashing() {
+        val defaults = RendererConfiguration(
+            OutputPixelSize(3840, 2160),
+            Transport { error("test transport must not execute") },
+            TestStore(),
+        )
+
+        // Stated as the relationship, never as a literal. `assertEquals(512 MiB, ...)` would pass
+        // just as happily with the tile ceiling at 4096, which is the case it exists to catch: what
+        // matters is that a frame drawing every tile RenG will plan for it fits the budget RenG
+        // ships, so a level 4K camera cannot re-decode and re-upload a megabyte per tile per frame
+        // under a configuration nobody touched.
+        //
+        // Greater-or-equal, not equal, because the budget covering *more* than the ceiling is not a
+        // defect -- but it is exactly equal today, so a byte off in the default is a failure here.
+        val canonicalTileBytes = 512L * 512L * 4L
+        assertTrue(
+            ResourceLimits().maximumResidentGpuTextureBytes >=
+                defaults.maximumBasemapTileInstances * canonicalTileBytes,
+            "the default budget (${ResourceLimits().maximumResidentGpuTextureBytes} bytes) must hold " +
+                "the ${defaults.maximumBasemapTileInstances} canonical tiles the default ceiling admits",
+        )
     }
 
     @Test
