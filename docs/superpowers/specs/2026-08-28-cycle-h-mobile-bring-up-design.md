@@ -56,13 +56,20 @@ The automatable rasterisers are the untrustworthy ones, and the trustworthy ones
 |---|---|---|
 | iOS simulator | yes, Gradle drives it | **fails** — 3,040 px against a 512 budget |
 | iOS device (A14) | no | **0 px** |
-| Android emulator | yes, Gradle Managed Devices | unmeasured; ANGLE, backend varies by AVD |
+| Android emulator | yes, Gradle Managed Devices | **0 px** — ANGLE/SwiftShader; backend varies by AVD |
 | Android device (Adreno 830) | no | **0 px** |
 
 Rather than choose, both run. `measureLargeQuadRasterisation` already exists for precisely this: `0.3.0`
 failed publication on a hosted runner's software rasteriser, and `BasemapReadbackSuite`'s answer was not to
 loosen every budget but to let the probe distrust the driver, skip one case **out loud**, and still run the
 other four. That precedent extends to two more rasterisers unchanged.
+
+**Corrected 2026-08-28.** This table first recorded the Android emulator's probe as unmeasured. It was
+measured, by the 2026-08-27 device spike: ANGLE-over-SwiftShader reports **0 px**, `GL_SUBPIXEL_BITS = 4`
+and `GL_MAX_TEXTURE_SIZE = 8192`. So "both automated rasterisers are software" stays true, but it does not
+follow that both fail the probe — **only the iOS simulator's does.** The distinction matters to anyone
+reading the gate's promise: the automated pair is weak because it is software, not because it is measurably
+wrong, and one half of it agrees with the analytic rectangle exactly.
 
 A consequence worth stating rather than discovering: the iOS simulator reports `GL_SUBPIXEL_BITS = 10` and
 `GL_MAX_TEXTURE_SIZE = 4096` where the device reports 4 and 16384 — matching macOS's Metal path, not its
@@ -74,7 +81,8 @@ own research first recorded as "iOS constraints" were simulator artefacts.
 Not a preference — the platform forces it. An unfiltered device run executes all ~1,146 tests, and iOS
 **SIGKILLs it part-way through**: the app has no UI, never becomes responsive, and the watchdog takes it.
 From outside that looks like a white screen that closes, which is easy to mistake for a crash in RenG.
-Scoped with `--ktest_filter` the GL tests finish in 310 ms and exit 0.
+Scoped with `--ktest_filter` the GL tests exit 0 (measured at 310 ms on the attached A14; see the iOS
+spike's device addendum).
 
 The other ~1,100 tests are pure logic already covered on four targets. Running them on a phone buys nothing
 and is exactly what trips the watchdog.

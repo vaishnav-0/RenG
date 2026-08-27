@@ -262,7 +262,7 @@ outside that looks like a white screen that closes, and it is easy to mistake fo
 must either filter or solve the responsiveness problem**; a full-suite device run is not simply slower, it
 is killed.
 
-### The result: 5 of 5, unmodified
+### The result: 5 of 5, unmodified, in 310 ms
 
 ```
 GL_VERSION=OpenGL ES 3.0 Metal - 104.1
