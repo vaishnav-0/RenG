@@ -119,13 +119,18 @@ Both of these would have entered the grilling as frightening unknowns. Neither i
    The A14 reports `GL_SUBPIXEL_BITS=4` and `GL_MAX_TEXTURE_SIZE=16384` — matching macOS's Metal path, not
    the simulator — and the large-quad probe reports **0 pixels of disagreement**. The simulator was the
    outlier, not the device. Still open for **Android's two ANGLE backends**, which no measurement covers.
-3. **Whether Skia loads and rasterises on an Android device or emulator.** Decides whether
-   `BasemapReadbackSuite` can run on Android at all, or only the two self-contained suites. **Settled by**:
-   one `androidDeviceTest` that calls into Rentile.
-4. **Whether the 91-entry-point roster resolves on Android.** Unknown; iOS's does. **Settled by**: the
-   conformance suite in an `androidDeviceTest`.
-5. **Whether an application-level EGL context on the emulator reports what SurfaceFlinger reports.**
-   **Settled by**: the same test.
+3. ~~**Whether Skia loads and rasterises on an Android device.**~~ **Settled 2026-08-27: it does.** Rentile
+   rendered a 3,605-byte PNG tile through the firewall on a real OnePlus, and Skia driven directly returned
+   a real native `Surface`. The host test's failure names `libskiko-macos-arm64.dylib` — a *host* library —
+   so that limitation was never about Android. `CLAUDE.md` is corrected.
+4. ~~**Whether the 91-entry-point roster resolves on Android.**~~ **Settled: it does**, and the conformance
+   suite passes unmodified on Adreno 830 at `ShaderDialect.GLES` — all eight checks, with the real
+   cross-dialect link and no escape hatch. The whole `commonTest` suite runs on the phone: **1,125 tests, 0
+   failures, 0 skipped.**
+5. ~~**Whether an emulator EGL context reports what SurfaceFlinger reports.**~~ **Partly settled, and the
+   answer is "do not rely on either."** The emulator's backend is an AVD configuration property, not a
+   documented default: `hw.gpu.mode=auto` with no `-gpu` flag selected ANGLE-over-Vulkan-over-SwiftShader,
+   not the ANGLE-over-Metal the host libraries suggested. A job must pin the backend and print what it got.
 6. **Rentile `0.6.0` exists and is unevaluated** while RenG pins `0.5.0`. Bumping moves five coupled places
    at once or the policy checker fails closed. **Settled by**: an explicit decision, not by discovery
    mid-cycle as happened with `0.5.0`.
@@ -148,11 +153,23 @@ Each is now askable against facts rather than impressions.
    to need nothing — the device agrees exactly and the simulator fails the probe honestly, which is the
    mechanism working as designed. The live question is now Android's two ANGLE backends. Where is the line
    past which a suite is tolerated into meaninglessness?
-4. **Is `androidDeviceTest` in scope for this cycle, or does Android stop at "the binding compiles"?** The
-   Android half is four unmeasured unknowns against iOS's zero.
-5. **Does CI change?** Neither an iOS simulator nor an Android emulator runs in `ci.yml` today, and the
+4. **What does Android's gate actually cover, given the readback suites cannot reach it?**
+   `ModelReadbackSuite` and `BasemapReadbackSuite` live in `nativeTest`, and an Android JVM test cannot see
+   a Kotlin/Native source set at any visibility — the `private`→`internal` widening that let the iOS spike
+   reuse them does not help. So Android gets the conformance suite and the `commonTest` body for free, and
+   the pixel suites only if they move to `commonTest`, which would then have to compile for the JVM too.
+   Is that move in scope, or does Android's gate stop at conformance?
+
+5. **What does the build pay for an `androidDeviceTest` source set, and is it worth it?** Measured: it
+   works and needs no invention, but the `dependsOn(commonTest)` edge that makes the existing suites
+   reachable **silently disables the default hierarchy template project-wide and breaks every Kotlin/Native
+   compilation while the Android build stays green** — `applyDefaultHierarchyTemplate()` fixes it. And the
+   repository policy refuses the change at two lines: a recomputed token-stream fingerprint, and a widening
+   of `check_dependencies` to admit a third dependency scope. Both are permanent edits to a gate that
+   exists to fail closed. What is the honest version?
+6. **Does CI change?** Neither an iOS simulator nor an Android emulator runs in `ci.yml` today, and the
    publication gate claims nothing about either target. If a suite runs only on a developer's machine, what
    is the release actually asserting?
-6. **What does the release note say about targets verified only by simulation?** `CLAUDE.md` already holds
+7. **What does the release note say about targets verified only by simulation?** `CLAUDE.md` already holds
    that "which of them anyone has actually executed belongs in release notes rather than being discovered by
    an Android consumer." Cycle H is where that promise comes due.

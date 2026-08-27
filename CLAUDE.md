@@ -112,9 +112,20 @@ A public field with no wiring is the failure mode worth remembering here.
 
 **Basemap rendering is verified on `macosArm64Test` and `linuxX64Test` only, and that is a measured limit,
 not a scheduling one.** Those are the only two test tasks that can hold a GL context. Android's host tests
-are doubly excluded: no GL, and they cannot execute Rentile's Skia rasterization at all, which was measured
-with error codes rather than assumed. All six targets still publish at every release; which of them anyone
-has actually executed belongs in release notes rather than being discovered by an Android consumer.
+are doubly excluded: no GL, and they cannot execute Rentile's Skia rasterization. All six targets still
+publish at every release; which of them anyone has actually executed belongs in release notes rather than
+being discovered by an Android consumer.
+
+**Corrected 2026-08-27: the Skia half of that is about the host JVM, not about Android.** This file
+previously said Android "cannot execute Rentile's Skia rasterization **at all**". Measured on a real
+OnePlus (Adreno 830, Android 16) in `docs/research/2026-08-27-h-android-gles-device-spike.md`: an
+`androidDeviceTest` runs Rentile end to end, rendering a 3,605-byte PNG tile through the firewall, and Skia
+driven directly returns a real native `Surface`. The host test fails because it looks for
+`libskiko-macos-arm64.dylib` — a **host** library that was never going to be an Android one — while
+Rentile's own AAR ships `jni/arm64-v8a/libskiko-android-arm64.so` at 30 MB, which only an Android runtime
+unpacks. Also measured there: RenG's GL conformance suite passes unmodified on Adreno at
+`ShaderDialect.GLES`, and the whole `commonTest` suite runs on the phone at **1,125 tests, 0 failures**.
+None of that is wired into any gate — see the Cycle H research for what it would cost.
 
 **A visual harness exists, it found four defects the passing suite did not, and it is the reason `0.3.0`
 draws.** It lives in `consumer-smoke/src/macosArm64Main/kotlin/com/rohittp/reng/smoke/harness/`, is invoked

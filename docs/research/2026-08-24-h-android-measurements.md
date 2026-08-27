@@ -32,10 +32,14 @@ GLES: Google (Google Inc. (Google)), Android Emulator OpenGL ES Translator
 run forced it*. The emulator's own default host backend on Apple silicon is **ANGLE-over-Metal**:
 `~/Library/Android/sdk/emulator/lib64/gles_angle/libGLESv2.dylib` is an arm64 Mach-O containing
 `ANGLE Metal Renderer`, `DisplayMtl` and `ContextMtl`, and the guest's maximum GLES version is computed from
-the host at boot (`GLESDynamicVersion = on`). So there are **two** emulator rasterisers reachable by a flag,
-not one: ANGLE-over-Metal by default and ANGLE-over-Vulkan-over-SwiftShader when SwiftShader is forced. A
-Cycle H test job has to pick one deliberately and record which, because the tolerance question below has a
-different answer for each.
+the host at boot (`GLESDynamicVersion = on`). So there are **two** emulator rasterisers reachable by
+configuration, not one, and a Cycle H test job has to pick one deliberately and record which, because the
+tolerance question below has a different answer for each.
+
+**Corrected 2026-08-27 by the device spike**: "by default" overstates it. Booting `Pixel_10_Pro_XL` with
+`hw.gpu.mode=auto` and **no** `-gpu` flag selected ANGLE-over-Vulkan-over-SwiftShader on this machine, not
+ANGLE-over-Metal. Which backend an emulator picks is a property of the AVD's own configuration, so the only
+safe statement is that a job must pin it explicitly and print what it got.
 
 Three things follow.
 
