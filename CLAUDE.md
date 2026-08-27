@@ -32,12 +32,12 @@ over public HTTP with no credentials. The version was declared explicitly in `6e
 the resolver, which would have advanced to `0.2.1` and understated the release. **Unlike the first two
 releases, its CI and publication run IDs are recorded nowhere in this repository — do not invent them.**
 
-**Cycle F-2 is complete, unreleased, and lives on `feat/f2-models`.** That branch is 51 commits ahead of
-`origin/main` and 41 ahead of local `main`; `main` itself is `9a43b14`, ten ahead of the released
-`49cc1d5`, carrying ADR 0028's per-role GLB accessor gates, the Rentile `0.5.0` bump, and F-2's spec and
-plan. **Nothing of F-2 is published to R2.**
+**Cycles F-2 and H are both complete and both unreleased.** F-2 has since merged into local `main` at
+`63528ce`, so `feat/f2-models` is no longer ahead of it — the branch survives only as history. Local `main`
+is `00f26dc`, 63 commits ahead of `origin/main`, which is still at the released `49cc1d5`. Cycle H lives on
+`feat/h-mobile-bring-up` and is not merged into `main`. **Nothing of either cycle is published to R2.**
 
-**`VERSION_NAME` is `0.4.0` on that branch, declared deliberately rather than left to the resolver.** F-2
+**`VERSION_NAME` is `0.4.0`, declared deliberately rather than left to the resolver.** F-2
 grows the public ABI by three enum entries, so a patch bump would understate it — and the resolver would
 have chosen `0.3.1`, since `0.3.0` has a valid completion record. Declaring it explicitly is also what
 keeps a *local* publish honest: `consumer-smoke` resolves `../build/local-maven` by default, so republishing
@@ -45,7 +45,8 @@ under `0.3.0` would have put F-2's bytes behind the released `0.3.0`'s coordinat
 same-version-different-bytes hazard ADR 0013 exists to prevent, one layer down.
 
 **`publish.yml` ignores only `docs/**`, `**/*.md` and `LICENSE`, so pushing either branch as it stands cuts
-a `0.4.0` release.** That is the intended number when the time comes; it is not intended yet.
+a `0.4.0` release.** That is the intended number when the time comes; it is not intended yet. Cycle H adds
+nothing to the public ABI, so it does not move that number.
 
 **The visual harness runs against a local publish, with no repository edit and nothing to revert.**
 `consumer-smoke/settings.gradle.kts` already defaults `rengRepositoryUrl` to `../build/local-maven` under an
@@ -68,7 +69,8 @@ entire diagnostic, and passed on every developer machine. A hosted GitHub macOS 
 ground tile has — losing the south-east tile outright and cutting the south-west one on a straight
 diagonal, 3,005 of 15,876 interior pixels untouched. The suite now measures the driver instead of naming
 it: `measureLargeQuadRasterisation`
-(`kmp/src/nativeTest/kotlin/com/rohittp/reng/BasemapReadbackSuite.kt:669`) draws the fixture's own four
+(`kmp/src/commonTest/kotlin/com/rohittp/reng/BasemapReadbackSuite.kt:669` — Cycle H moved the file
+out of `nativeTest`; the line number did not change) draws the fixture's own four
 ground-tile footprints at the fixture's real clip `w` and counts pixels disagreeing with the analytic
 rectangle — 0 on Apple M3 Max, 2,112 on `Apple Software Renderer`, against a 512-pixel boundary budget.
 When the probe distrusts the driver exactly one case skips out loud and the other four still run; Ubuntu's
@@ -110,24 +112,55 @@ plus its mechanical constructor/`copy`/`component11` fallout. It was inert for m
 all — until the ground-draw task threaded it from the caller's configuration at `RendererFactory.kt:115`.
 A public field with no wiring is the failure mode worth remembering here.
 
-**Basemap rendering is verified on `macosArm64Test` and `linuxX64Test` only, and that is a measured limit,
-not a scheduling one.** Those are the only two test tasks that hold a GL context **today** — not the only
-ones that can: Cycle H's preflight held a real context on an iOS simulator, an iPhone 12 and a OnePlus, and
-ran RenG's conformance suite unmodified on all three. Android's host tests remain doubly excluded: no GL,
-and they cannot execute Rentile's Skia rasterization. All six targets still
-publish at every release; which of them anyone has actually executed belongs in release notes rather than
-being discovered by an Android consumer.
+**RenG's GL code reaches a real context five ways now; three are automated and two need hardware plugged
+in.** Cycle H moved `BasemapReadbackSuite`, `ModelReadbackSuite`, `ModelFixtureBuilder` and the
+rasterisation probe from `nativeTest` to `commonTest`, so one copy reaches every target, then added an
+`iosTest` source set (EAGL) and an `androidDeviceTest` source set (EGL14 pbuffer). Basemap and model
+readback are no longer macOS-and-Linux only.
 
-**Corrected 2026-08-27: the Skia half of that is about the host JVM, not about Android.** This file
-previously said Android "cannot execute Rentile's Skia rasterization **at all**". Measured on a real
-OnePlus (Adreno 830, Android 16) in `docs/research/2026-08-27-h-android-gles-device-spike.md`: an
-`androidDeviceTest` runs Rentile end to end, rendering a 3,605-byte PNG tile through the firewall, and Skia
-driven directly returns a real native `Surface`. The host test fails because it looks for
-`libskiko-macos-arm64.dylib` — a **host** library that was never going to be an Android one — while
-Rentile's own AAR ships `jni/arm64-v8a/libskiko-android-arm64.so` at 30 MB, which only an Android runtime
-unpacks. Also measured there: RenG's GL conformance suite passes unmodified on Adreno at
-`ShaderDialect.GLES`, and the whole `commonTest` suite runs on the phone at **1,125 tests, 0 failures**.
-None of that is wired into any gate — see the Cycle H research for what it would cost.
+| how RenG's GL runs | context | driver it has actually run on | gate |
+|---|---|---|---|
+| `:kmp:macosArm64Test` | CGL core profile | Apple M3 Max, and `Apple Software Renderer` through `MacosGlRenderer.SOFTWARE` | automated — `ci.yml` `apple-publication` |
+| `:kmp:linuxX64Test` | surfaceless EGL | llvmpipe | automated — `ci.yml` `android-linux` |
+| `:kmp:iosSimulatorArm64Test` | EAGL | `Apple Software Renderer` (simulator) | automated — `ci.yml` `apple-publication`, added by Cycle H |
+| `:kmp:connectedAndroidDeviceTest` | EGL14 pbuffer | a `Pixel_10_Pro_XL` emulator on ANGLE over Vulkan over SwiftShader | manual — `./gradlew --no-configuration-cache :kmp:connectedAndroidDeviceTest`, against whatever `adb` offers |
+| the `iosArm64` device run | EAGL | never, as the permanent suite — see below | manual — `python3 tools/run_ios_device_tests.py --device <udid> --profile <mobileprovision> --identity <sha1>`; `iosArm64` has no Gradle test task at all |
+
+**Neither permanent device test has met a real GPU, and nothing here should be read as saying it has.** Both
+phones were detached from this machine when their tasks ran. `androidDeviceTest`'s only execution is the
+emulator run above, at 1,124 tests, 0 failures, 0 skips. The Adreno 830 and Apple A14 numbers — the
+rasterisation probe reporting 0 disagreeing pixels on each — live in the preflight spikes
+(`docs/research/2026-08-27-h-android-gles-device-spike.md`, where the spike's own build also ran the
+whole `commonTest` suite on the Adreno phone at 1,125 tests and 0 failures, and
+`docs/research/2026-08-24-h-ios-gles-context-spike.md`) — not in any gate, and not on this build. And
+`tools/run_ios_device_tests.py` **has never been run against the class it defaults to**: it was built and
+exercised on hardware against the spike's `IosGlSpikeTest`, and `IosGlConformanceTest`, which
+`tools/run_ios_device_tests.py:50` names, arrived afterwards. The filter matches that class structurally —
+verified — but the loop is unrun, and a filter matching nothing is the one case the tool turns into a loud
+failure rather than a green run.
+
+**The one case that would catch a ground regression skips on the only rasteriser CI will ever run.** On the
+iOS simulator the probe measures 3,040 pixels of disagreement against a 512-pixel budget, so
+`runBasemapReadbackSuite` skips its ground-coverage case out loud and runs the other four. That skip is
+load-bearing rather than cosmetic: widening the budget until the probe trusts that driver makes **2 of 5
+cases fail**, the ground one over 3,005 of 15,876 interior pixels — `0.3.0`'s exact signature, measured
+again on a different rasteriser. Ubuntu's llvmpipe job is what keeps that case gated at all.
+
+**Android's host tests remain doubly excluded, and the Skia half of that is about the host JVM rather than
+about Android.** `testAndroidHostTest` compiles the moved suites and must never run them: that JVM has no
+GL context, and it looks for `libskiko-macos-arm64.dylib` — a **host** library that was never going to be
+an Android one — while Rentile's own AAR ships `jni/arm64-v8a/libskiko-android-arm64.so` at 30 MB, which
+only an Android runtime unpacks. Measured on a real OnePlus (Adreno 830, Android 16), an `androidDeviceTest`
+runs Rentile end to end, rendering a 3,605-byte PNG tile through the firewall.
+
+All six targets still publish at every release; which of them anyone has actually executed belongs in
+release notes rather than being discovered by an Android consumer, and **ADR 0033 is where that promise now
+lives**.
+
+**Measured on this checkout at Cycle H's close:** `testAndroidHostTest` **1,123**, `macosArm64Test`
+**1,159**, `iosSimulatorArm64Test` **1,145** — 0 failures, 0 errors and 0 skips on each, summed from
+Gradle's own JUnit XML rather than from scrollback. 138 Python tests pass, and
+`check_repository_policy.py` passes.
 
 **A visual harness exists, it found four defects the passing suite did not, and it is the reason `0.3.0`
 draws.** It lives in `consumer-smoke/src/macosArm64Main/kotlin/com/rohittp/reng/smoke/harness/`, is invoked
@@ -172,8 +205,8 @@ every mutation observation, every measured number — is
 a byte of a GLB's BIN chunk**; `parseGltf` took `binChunkLength` and never the bytes. F-2 is the numeric
 half: `internal/model/` (accessor decoding, node transforms, animation resolution and sampling, model
 assembly), `internal/gl/ModelPipeline.kt` and `SceneLight.kt`, and the renderer arm that acquires,
-decodes, uploads and draws. Test counts last measured in this checkout: **1123 Android host / 1159
-`macosArm64`, no failures, none skipped**; 84 Python tests pass.
+decodes, uploads and draws. Test counts for this checkout are recorded once, with the GL-context table
+above, so the two cannot drift apart.
 
 It reaches **40 of the consumer's 41 models**, measured against
 `docs/research/2026-08-22-consumer-model-corpus-check.md` rather than against glTF's breadth. Morph targets
@@ -187,6 +220,35 @@ on an M3 Max, roughly 18% of a 60 Hz budget for one model; that is the argument 
 residency. `decodedCpuBytes` shares `maximumDecodedImageBytes` with rasters instead of taking its own
 public limit. And all-zero skin weights collapse a vertex to the origin, which is the specification's
 formula applied literally rather than a repair.
+
+**What Cycle H contains.** Its authority is
+`docs/superpowers/specs/2026-08-28-cycle-h-mobile-bring-up-design.md`, its plan is
+`docs/superpowers/plans/2026-08-28-cycle-h-mobile-bring-up.md`, and the per-task ledger is
+`.superpowers/sdd/2026-08-28-cycle-h-mobile-bring-up/progress.md` — which stops after waves 1 and 2, the
+rest of the record being the task reports beside it (Task 3 has a brief but no report — its agent died
+after making the correct one-line edit, and the controller finished it). **RenG's Android and iOS GL
+bindings had shipped in every release since `0.2.0` and, until this cycle's preflight, had never executed
+a single line anywhere** — not on a device, not on an emulator, not in CI. The preflight ran them and
+nothing differed from macOS and Linux, so the cycle's subject is not the bindings but *permanence*: an
+`iosTest` source set (EAGL) and an `androidDeviceTest` source set (EGL14 pbuffer), the readback suites and
+probe relocated to `commonTest`, `:kmp:iosSimulatorArm64Test` appended to `ci.yml`'s existing
+`apple-publication` invocation, `tools/run_ios_device_tests.py` with 45 unit tests, `androidx.test:runner`
+catalogued, and ADRs 0031–0033.
+
+**It grows the public ABI by nothing at all** — the first cycle since F-1 to do so. `kmp/api/kmp.klib.api`
+is byte-identical to `main` at `sha256 fecb289f29ecfbb419287f5b6aa918085574afb5b6958dd7cc2b3ccb2065e5f6`,
+and a diff there would have been a defect rather than a decision. **The cost is paid in the policy gate
+instead**: `check_dependencies` grows a *third* dependency scope with its own closed allowlist rather than
+exempting test source sets wholesale, and `kmp/build.gradle.kts` and `gradle/libs.versions.toml` each gain
+a **third** accepted fingerprint form. Cataloguing the coordinate produced four refusals, not the three the
+spec and ADR 0032 predicted, because the catalog is fingerprinted too. Every historical form stays accepted
+forever, because an ADR-era test fixture depends on each one.
+
+**What Cycle H did not do.** No Android emulator joined CI — an AVD picks its ANGLE backend from
+configuration rather than from a documented default, and an unstable rasteriser makes an unstable probe
+reading. `iosArm64` still has no Gradle test runner; the Python tool works around that rather than fixing
+it. No GPU vendor beyond Adreno and Apple has been measured, on any target. And F-2's three debts — a
+parsed-model residency, `maximumDecodedModelBytes`, and all-zero skin weights — are untouched.
 
 **Seven vacuous checks were caught during F-2, every one a fixture or an assertion sitting at a symmetry
 point of the thing being tested** — a cap whose fixture was derived from the mutated constant; a slerp check
@@ -212,7 +274,11 @@ whole rule inside the regime rather than only its tie-break, ADR 0028 narrows AD
 subset to a per-role one, and ADR 0029 rejects a `SCREEN`-positioned **Model** at frame planning because
 the screen projection carries no z row at all, and ADR 0030 supersedes ADR 0027 **for the model pass alone**
 so that a mesh writes depth and can occlude itself, giving the map regime three depth phases and the order
-ground, geometries, models, map-anchored stickers). Read both before proposing anything that touches the public API — where this
+ground, geometries, models, map-anchored stickers, ADR 0031 stands on deprecated OpenGL ES for iOS and
+records that cinterop drops `API_DEPRECATED`, so no build will ever warn, ADR 0032 takes
+`androidx.test:runner` as the second third-party dependency after ADR 0019's, for instrumented tests only,
+and ADR 0033 gates the mobile targets asymmetrically and says what a release may claim about a target
+verified only in simulation). Read both before proposing anything that touches the public API — where this
 file and an ADR disagree, the newer ADR wins.
 
 ## What RenG is
@@ -305,7 +371,7 @@ Rentile remains the structural template. The implemented surface is:
 | `CONTEXT.md` | Domain vocabulary: each term with its definition and an explicit `_Avoid_:` list of rejected synonyms. Read it before naming anything. |
 | `consumer-smoke/` | **Standalone** Gradle build (own `settings.gradle.kts`) that resolves the published coordinate from an isolated repository with `exclusiveContent`, proving a release resolves without credentials and without Central masking it. Reads `VERSION_NAME` out of `../gradle.properties` rather than pinning a literal. `commonMain` is that six-target proof; `macosArm64Main` is the visual harness, which lives here because the policy checker permits Kotlin in exactly two places, `kmp/src` and `consumer-smoke`. |
 | `.github/workflows/` | `ci.yml` gates the branch on Ubuntu and macOS; `publish.yml` resolves one release candidate and verifies local, R2, public HTTP, and clean-consumer publication stages. See "CI/CD" below. |
-| `tools/` | Standard-library Python release resolver, publication verifier, repository-policy checker, and their unit tests. |
+| `tools/` | Standard-library Python release resolver, publication verifier, repository-policy checker, test-failure printer, iOS device-test runner, and their unit tests. The repository contains no shell scripts at all. |
 
 Conventions carried over:
 
@@ -356,9 +422,12 @@ Python tools, and policy checks.
 
 `ci.yml` has two jobs on push to `main` and every PR. `android-linux` runs the complete Python suite,
 repository policy, ABI validation, Android host tests, `linuxX64Test`, Linux ARM64 compilation, and the
-Android AAR gate on Ubuntu. `apple-publication` compiles both iOS targets, runs `macosArm64Test`,
-publishes all seven publications to `build/local-maven`, then compiles the standalone consumer's six
-targets with a fresh Gradle home and `--refresh-dependencies`.
+Android AAR gate on Ubuntu. `apple-publication` compiles both iOS targets, runs `macosArm64Test` and
+`iosSimulatorArm64Test`, publishes all seven publications to `build/local-maven`, then compiles the
+standalone consumer's six targets with a fresh Gradle home and `--refresh-dependencies`. Cycle H added
+`iosSimulatorArm64Test` as one more task name in that existing invocation — no new job, no new step, and
+`print_test_failures.py`'s `if: failure()` step already globbed the whole `kmp/build/test-results` tree,
+so nothing had to widen to see it.
 
 `publish.yml` runs for every non-documentation push to `main` and for an explicit dispatch from `main`.
 It implements a **one-candidate rule**. If checked-in stable `VERSION_NAME` is newer than every public
@@ -407,6 +476,16 @@ The standard-library Python tools are:
   JUnit XML and prints what the console withheld. It runs as an `if: failure()` step on all four
   test-running jobs across both workflows, alongside an `upload-artifact` of the reports, and it never
   fails: a job that reaches it has already failed, and a reporting error must not change how.
+- `tools/run_ios_device_tests.py --device <udid> --profile <mobileprovision> --identity <sha1>` — **also a
+  developer tool, not a gate**, and nothing in CI runs it. `iosArm64` links a test binary that iOS will not
+  execute as a bare Mach-O, so this links, wraps the `.kexe` as an `.app`, signs it against a profile
+  covering the device, installs, launches with `--ktest_filter`, and uninstalls. It defaults the filter to
+  the GL tests because an unfiltered run executes every test, never becomes responsive, and is SIGKILLed by
+  the watchdog. It reads its verdict from Kotlin/Native's own GTEST summary rather than from the exit code,
+  because a filter that matches nothing prints `[  PASSED  ] 0 tests.` and exits 0. It refuses an expired
+  profile, a profile that does not list the device, and a profile whose bundle identifier belongs to a real
+  app, all before the phone is touched — and it keeps `security cms -D` quiet, because a wildcard profile's
+  device list is 41 other people's UDIDs and diagnostics never carry that class of thing.
 
 Publishing needs repository **vars** `R2_ENDPOINT`, `R2_BUCKET`, `R2_PUBLIC_URL` and **secrets**
 `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`. A dedicated step fails fast if any is missing. Do not run AWS,
@@ -475,7 +554,9 @@ Run the Apple, cross-target compilation, local publication, and fresh dependency
 ./gradlew --no-configuration-cache \
   :kmp:compileKotlinIosArm64 \
   :kmp:compileKotlinIosSimulatorArm64 \
+  :kmp:compileTestKotlinIosArm64 \
   :kmp:macosArm64Test \
+  :kmp:iosSimulatorArm64Test \
   :kmp:compileKotlinLinuxX64 \
   :kmp:compileKotlinLinuxArm64 \
   :kmp:publishAllPublicationsToLocalTestRepository
@@ -504,13 +585,20 @@ On Ubuntu CI, the host-executable command is:
   :kmp:bundleAndroidMainAar
 ```
 
-`linuxX64Test` is Linux CI coverage, not a macOS-local gate. `macosArm64Test` is the one Apple target
-with a test task rather than a compile-only gate. On the current macOS system Ruby 2.6 toolchain, parse
-both workflow files with Psych's aliases-enabled positional API:
+`linuxX64Test` is Linux CI coverage, not a macOS-local gate. `macosArm64Test` and `iosSimulatorArm64Test`
+are the two Apple test tasks; `iosArm64` stays compile-only, and `compileKotlinIosArm64` compiles `iosMain`
+alone, so `compileTestKotlinIosArm64` is what actually proves the `iosTest` sources build for the device
+target. On the current macOS system Ruby 2.6 toolchain, parse both workflow files with Psych's
+aliases-enabled positional API:
 
 ```bash
 ruby -e 'require "yaml"; YAML.safe_load(File.read(".github/workflows/ci.yml"), [], [], true); YAML.safe_load(File.read(".github/workflows/publish.yml"), [], [], true)'
 ```
+
+The two device runs are manual and need hardware attached — an Android phone or a booted emulator on `adb`
+for `./gradlew --no-configuration-cache :kmp:connectedAndroidDeviceTest`, and a paired, provisioned iPhone
+for `python3 tools/run_ios_device_tests.py --device <udid> --profile <mobileprovision> --identity <sha1>`,
+which links, signs, installs, runs filtered and uninstalls in one command. Neither is in CI, by ADR 0033.
 
 Single test in any Gradle test source set: `--tests "com.rohittp.reng.SomeTest"` (works on Kotlin/Native
 test tasks too). Every CI and publication Gradle invocation passes `--no-configuration-cache`.
