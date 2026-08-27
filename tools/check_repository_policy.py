@@ -71,6 +71,21 @@ _FORBIDDEN_DEPENDENCY = re.compile(
 # neither exemption can widen by accident.
 _PERMITTED_NEW_DEPENDENCIES = frozenset({"libs.kotlinx.coroutines.core"})
 _PERMITTED_NEW_TEST_DEPENDENCIES = frozenset({"libs.kotlinx.coroutines.test"})
+# ADR 0032 adds a third dependency scope, `androidDeviceTest`, in the same shape as the second
+# rather than as a blanket exemption for test source sets: `commonTest` stays policed, and this
+# scope names every coordinate it admits. Its required first call is `kotlin("test")` -- an
+# `androidDeviceTest` with no dependencies of its own does not resolve `kotlin.test` at all,
+# because the source set is in a different tree from `commonTest` -- and these are the only two
+# extras. `androidx.test:runner` holds `androidx.test.runner.AndroidJUnitRunner`, the
+# instrumentation runner AGP requires on the classpath for any instrumented test to run; it ships
+# in nothing, since the published Android artifact is the AAR built from `androidMain`.
+#
+# The order matters: `_dependency_call_shape_allowed` matches the extras against this set's
+# *sorted* tokenization in order, so `kmp/build.gradle.kts` declares them alphabetically.
+_PERMITTED_DEVICE_TEST_DEPENDENCIES = frozenset({
+    "libs.androidx.test.runner",
+    "libs.kotlinx.coroutines.test",
+})
 _CONFLICTING_LICENSE = re.compile(
     r"\b(?:mit|bsd|gpl|lgpl|agpl|mozilla\s+public\s+license|eclipse\s+public\s+license|isc|unlicense|cc0)\b",
     re.IGNORECASE,
@@ -242,17 +257,22 @@ _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS = {
     "build.gradle.kts": frozenset({
         "552201d8dc4bf1ffffc11bb1c95363bb853ee62e7d25a4b55bb853a61c7af352",
     }),
-    # ADR 0019's coroutines dependency (see _PERMITTED_NEW_DEPENDENCIES above) is a second,
-    # equally-exact accepted form of these two files, alongside the pre-Cycle-C original.
-    # Both forms carry the rentile 0.5.0 bump (see _dependency_name_policy_token's base_versions
-    # below, which must move in lockstep with these fingerprints).
+    # These are SHA-256 over the *token stream* _build_configuration_fingerprint derives, not
+    # whole-file digests: comments and whitespace are free, and any token is not. Each of these
+    # two files pins three equally-exact accepted forms -- the pre-Cycle-C original, ADR 0019's
+    # coroutines form, and ADR 0032's device-test form, which is the one currently on disk.
+    # Every form carries the rentile 0.5.0 bump (see base_versions below, which must move in
+    # lockstep with these fingerprints), and the two older forms cannot be recomputed from disk;
+    # they are the fixtures in tools/tests/test_check_repository_policy.py.
     "gradle/libs.versions.toml": frozenset({
         "c53967f3a738a29f39817a93be0090ba96884c90b173591b021d32c2d30a71b9",
         "7eb2e12a272e4b1eb7e48dc62e27eced1e76f873b84cb7ac036b67934de7d59f",
+        "c79cc53420a717078f4f6b15aba2cd6120d9ab431496ea1c660b8e037354ed7e",
     }),
     "kmp/build.gradle.kts": frozenset({
         "cb2e7408aea431f014fbb1235b0a1793a39289a4dbf52c331e2f2fda23f236df",
         "386c6936c783eb1004ac0efe0a7954b0e93674d739f407e298e94a7a0763ccc7",
+        "3d81ad92a07df321c226e3b796d02b7be85ca332b00f63e04c800d23fc399dfc",
     }),
     "settings.gradle.kts": frozenset({
         "875c43c41cd359df0236f99f7cee86b020d168cc6c73f1a424db53a093eeaa31",
@@ -1230,6 +1250,7 @@ def _dependency_name_policy_token(
                 ("libs", ".", "rentile", ".", "kmp"),
                 *_permitted_dependency_tokens(_PERMITTED_NEW_DEPENDENCIES),
                 *_permitted_dependency_tokens(_PERMITTED_NEW_TEST_DEPENDENCIES),
+                *_permitted_dependency_tokens(_PERMITTED_DEVICE_TEST_DEPENDENCIES),
             )
             permitted_libs_dependency = relative == "kmp/build.gradle.kts" and any(
                 index >= 2
@@ -1646,6 +1667,7 @@ def check_dependencies(root: Path) -> list[Violation]:
     tokens = _kotlin_tokens(text)
     common_main_ranges = _source_set_dependency_ranges(tokens, "commonMain")
     common_test_ranges = _source_set_dependency_ranges(tokens, "commonTest")
+    device_test_ranges = _source_set_dependency_ranges(tokens, "androidDeviceTest")
     dependency_calls = [
         (index, token, arguments)
         for index, token in enumerate(tokens)
@@ -1656,8 +1678,10 @@ def check_dependencies(root: Path) -> list[Violation]:
 
     expected_main = ("libs", ".", "rentile", ".", "kmp")
     expected_test = ("kotlin", "(", "test", ")")
+    expected_device_test = expected_test
     permitted_main = _permitted_dependency_tokens(_PERMITTED_NEW_DEPENDENCIES)
     permitted_test = _permitted_dependency_tokens(_PERMITTED_NEW_TEST_DEPENDENCIES)
+    permitted_device_test = _permitted_dependency_tokens(_PERMITTED_DEVICE_TEST_DEPENDENCIES)
     main_calls = [
         (token.value, tuple(item.value for item in arguments))
         for index, token, arguments in dependency_calls
@@ -1668,14 +1692,30 @@ def check_dependencies(root: Path) -> list[Violation]:
         for index, token, arguments in dependency_calls
         if _inside_ranges(index, common_test_ranges)
     ]
+    device_test_calls = [
+        (token.value, tuple(item.value for item in arguments))
+        for index, token, arguments in dependency_calls
+        if _inside_ranges(index, device_test_ranges)
+    ]
     main_allowed = _dependency_call_shape_allowed(main_calls, expected_main, permitted_main)
     test_allowed = _dependency_call_shape_allowed(test_calls, expected_test, permitted_test)
+    # ADR 0032's scope is optional, unlike the other two: the pre-Cycle-H build file has no
+    # `androidDeviceTest` block at all, and a repository that drops the device gate must still
+    # pass. What it must never be is *unchecked* -- a block that exists is held to the same exact
+    # shape as `commonMain` and `commonTest`, and the totals below still refuse a `dependencies {}`
+    # call in any fourth place.
+    device_test_allowed = not device_test_calls or _dependency_call_shape_allowed(
+        device_test_calls, expected_device_test, permitted_device_test,
+    )
     allowed = (
         len(common_main_ranges) == 1
         and len(common_test_ranges) == 1
+        and len(device_test_ranges) <= 1
         and main_allowed
         and test_allowed
-        and len(dependency_calls) == len(main_calls) + len(test_calls)
+        and device_test_allowed
+        and len(dependency_calls)
+        == len(main_calls) + len(test_calls) + len(device_test_calls)
     )
 
     allowed_call_indices = frozenset(
@@ -1691,11 +1731,17 @@ def check_dependencies(root: Path) -> list[Violation]:
                 _inside_ranges(index, common_test_ranges)
                 and tuple(item.value for item in arguments) in (expected_test, *permitted_test)
             )
+            or (
+                _inside_ranges(index, device_test_ranges)
+                and tuple(item.value for item in arguments)
+                in (expected_device_test, *permitted_device_test)
+            )
         )
     )
     allowed_dependency_markers = frozenset(
         _dependency_marker_indices(tokens, "commonMain")
         + _dependency_marker_indices(tokens, "commonTest")
+        + _dependency_marker_indices(tokens, "androidDeviceTest")
     )
 
     violations = _build_semantics_violations(root)
@@ -1715,7 +1761,7 @@ def check_dependencies(root: Path) -> list[Violation]:
     kmp_indirection = _dependency_indirection_token(
         tokens, allowed_call_indices, allowed_dependency_markers,
     )
-    permitted_dependency_runs = permitted_main + permitted_test
+    permitted_dependency_runs = permitted_main + permitted_test + permitted_device_test
     forbidden_token = None
     for index, token in enumerate(tokens):
         arguments = _call_arguments(tokens, index)
@@ -1872,13 +1918,27 @@ def check_dependencies(root: Path) -> list[Violation]:
                 "version": {"ref": "kotlinxCoroutines"},
             },
         }
+        # ADR 0032's instrumentation runner (see _PERMITTED_DEVICE_TEST_DEPENDENCIES above) is a
+        # third, equally-exact accepted catalog shape, on top of the with-coroutines one. Nothing
+        # but these three named coordinates may join the catalog, and each accepted shape is still
+        # compared for exact equality rather than containment.
+        permitted_device_test_catalog_libraries = {
+            "androidx-test-runner": {
+                "module": "androidx.test:runner",
+                "version": {"ref": "androidxTestRunner"},
+            },
+        }
+        coroutines_versions = base_versions | {"kotlinxCoroutines": "1.11.0"}
         exact = exact and versions in (
             base_versions,
-            base_versions | {"kotlinxCoroutines": "1.11.0"},
+            coroutines_versions,
+            coroutines_versions | {"androidxTestRunner": "1.7.0"},
         )
+        coroutines_libraries = base_libraries | permitted_catalog_libraries
         exact = exact and libraries in (
             base_libraries,
-            base_libraries | permitted_catalog_libraries,
+            coroutines_libraries,
+            coroutines_libraries | permitted_device_test_catalog_libraries,
         )
         exact = exact and plugins == {
             "kotlin-multiplatform": {
@@ -1902,6 +1962,10 @@ def check_dependencies(root: Path) -> list[Violation]:
         # _toml_entry_span, never a substring/prefix match), so a differently-named key that
         # merely shares text with a permitted coordinate — e.g. a smuggled
         # `kotlinx-coroutines-core-jvm` — is untouched and still scanned.
+        #
+        # ADR 0032's `androidx-test-runner` entry is deliberately *not* masked: no word in it is
+        # hyphen-bounded against _FORBIDDEN_DEPENDENCY, so it passes the raw scan on its own and
+        # masking it would only shrink what the scan covers.
         forbidden_scan_text = _mask_hash_comments(catalog_text)
         scan_tokens = _toml_tokens(forbidden_scan_text)
         permitted_spans = [
