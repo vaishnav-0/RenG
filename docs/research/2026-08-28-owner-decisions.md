@@ -336,12 +336,45 @@ Leased textures are correctly exempt from eviction, so a 129–512 tile frame dr
 moment the lease releases, and re-decodes and re-uploads it next frame. `evictOverBudget` emits **nothing** —
 no exception, no diagnostic. Three regimes: ≤128 fits; **129–512 thrashes silently**; >512 fails cleanly.
 
-Whether a pitched mercator camera reaches 129 tiles **today** is unmeasured, and I will not assert it
-without a number — but the design plainly anticipates frames well past 128, since that is what the sibling
-default permits. Under G's naive `zoom` convention (**G1**) it is reached easily.
+**Measured, and it is reached today by an unpitched camera on a 4K display.** Seven source files were
+copied byte-identically into a scratch JVM project and driven through the same call order as
+`planMercatorSpatial`, validated against **four** asserted values from the existing suite before being
+trusted, then swept over 802,560 cameras, asymmetric on every axis:
 
-**Recommended: treat as a live defect now rather than a G problem.** At minimum a diagnostic when the
-working set exceeds the budget; ideally defaults that agree.
+| viewport | max tiles at pitch 0 | first pitch above 128 | max in any legal frame |
+|---|---:|---:|---:|
+| 960×540 (the harness's own) | 20 | 62.5° | 512 |
+| 1179×2556 phone | 76 | 45° | 512 |
+| 2560×1440 | 84 | 40° | 512 |
+| **3840×2160** | **167** | **0°** | 512 |
+
+One tile is 1,048,576 bytes exactly, so those counts are MiB. A 4K display at **pitch 0** reaches **167
+tiles against a 128 MiB budget — 39 tiles into the thrashing band with the camera level.**
+
+**LOD hysteresis is what does it, which makes this worse than a sizing error.** The same viewport peaks at
+**93** tiles with no LOD history and **167** with one frame of it — so the default budget sits *between*
+RenG's own two worst cases. The feature that exists to stop the tile set thrashing is what pushes residency
+into thrashing.
+
+Every viewport reaches **512** canonical tiles — 512 MiB, 4× the budget — before
+`maximumBasemapTileInstances` fails closed, and roughly a third of swept cameras exceed 512.
+
+**Two further findings make the public surface worse than the defaults alone.** Basemap tiles are the
+**only** tenant of the byte budget: `registerTexture` has exactly one call site, and stickers, geometry
+textures, model textures and model buffers all use the unbudgeted `register`. So the headroom is genuinely
+the full 128 tiles — but the budget is blind to most of RenG's real GPU bytes, and a consumer who raises it
+to cover their models is adjusting a number that does not count them.
+
+And there is no way whatsoever to observe the condition. `evictOverBudget` emits nothing, `DiagnosticCode`
+has three constants and none concerns residency, and `queryResources` reaches `ResidentCache`, which
+hardcodes `knownGpuBytes = 0L, hasUnknownGpuBytes = false` (`ResidentCache.kt:234-235`). **The public
+resource report does not say "unknown" — it affirmatively reports zero GPU bytes while 167 MiB are
+resident.**
+
+**Recommended: fix now, ahead of both cycles, as its own change.** Three things, in order of how badly they
+are needed: make `ResourceReport` stop claiming zero (`hasUnknownGpuBytes = true` at minimum, ideally the
+real figure); emit a diagnostic when the working set exceeds the budget; then reconcile the two defaults.
+The first is a public API telling a falsehood and is the one that should not wait.
 
 ### X3. Release `0.4.0`?
 
@@ -355,8 +388,6 @@ explicit approval.
 - **RenG's own composite path at `0.6.0`.** The bump is green on tests and Rentile's corpus renders all 34
   styles, but no RenG *harness* run has been done at `0.6.0`. **Settles it:** a harness pass over a few
   styles at the bumped pin. Needs a style URL, which is the owner's.
-- **Whether mercator reaches 129 tiles today** (**X2**). **Settles it:** instrument
-  `selectBasemapTiles` across a pitched, large-viewport camera sweep.
 - **Mali** (**G5**). No device.
 - **What a *real-viewport* label handover contains** — candidate counts, glyph range counts and atlas size
   for an actual style at an actual camera. The spike measured a synthetic fixture (3 ranges, 2 font stacks),
