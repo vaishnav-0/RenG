@@ -20,6 +20,8 @@ shorter than those documents imply.
 | `2026-08-28-g-globe-projection-seam.md` | RenG's own projection seam and what a second mode costs |
 | `2026-08-28-g-globe-prior-art.md` | how shipping globes actually work, sourced and graded |
 | `2026-08-28-g-globe-rentile-tiles.md` | the supply side: tiles, seams, counts, budgets |
+| `2026-08-28-e-labels-handover-spike.md` | one real label handover, driven end to end through the firewall |
+| `2026-08-28-tile-residency-headroom.md` | whether the residency thrash band is reachable today (it is) |
 
 ---
 
