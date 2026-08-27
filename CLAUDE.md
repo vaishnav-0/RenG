@@ -167,7 +167,7 @@ draws.** It lives in `consumer-smoke/src/macosArm64Main/kotlin/com/rohittp/reng/
 as `./gradlew -p consumer-smoke runHarness -PstyleUrl=<url>`, and writes 960×540 binary PPM frames for
 `ffmpeg` rather than PNG, because RenG owns a decoder and no encoder. Across all 34 styles the consumer
 ships it rendered **1630 of 1632 frames**, the two losses being transport timeouts reported precisely
-rather than swallowed. See "The macOS test harness" below for how it relates to Cycle I.
+rather than swallowed. See "The visual harness" below.
 
 **Out of scope in the basemap cycle, and not implemented:** terrain (Cycle C's task 20 travels to
 E-terrain), map labels, models with textures and animation, the globe projection, and golden images. Map
@@ -508,24 +508,29 @@ in `publish.yml` before upload).
 `org.gradle.configuration-cache=true` is set in `gradle.properties`, but every workflow and release-gate
 Gradle invocation passes `--no-configuration-cache` because remote Maven publishing is not CC-compatible.
 
-## The macOS test harness
+## The visual harness
 
-Cycle I's harness is a local development client that consumes a locally published RenG, feeds it a series
-of `FramePlan` JSON documents, and encodes the output as an MP4. **Capture and MP4 encoding live in the
-harness, not in RenG** — RenG only draws.
+A local development client that consumes a locally published RenG, drives it through a storyboard, and
+writes frames for `ffmpeg` to assemble. **Capture and encoding live in the harness, not in RenG** — RenG
+only draws. It was pulled forward into the basemap cycle from what was then Cycle I, and on **2026-08-28
+Cycle I was withdrawn**, so this is the whole of the harness rather than half of it.
 
-**Half of that already exists, pulled forward into the basemap cycle.** The visual harness lives in
-`consumer-smoke/src/macosArm64Main/`, under the standalone consumer's own build, so it exercises the real
-published coordinate rather than a project dependency. It owns context creation, as Cycle I's harness was
-always meant to: a headless CGL core-profile context reached through the stock `platform.OpenGLCommon` and
-`platform.OpenGL3` klibs with **no cinterop at all**, reporting `Apple M3 Max | 4.1 Metal - 90.5`. It
-drives a fixed 48-frame storyboard (`Storyboard.kt:25`, with frames 30..32 as negative cases) rather than
-`FramePlan` JSON, and it writes binary PPM and prints an `ffmpeg` line rather than encoding. The style URL
-carries the owner's API key, so no style is checked in: pass `-PstyleUrl=` or `RENG_HARNESS_STYLE_URL`.
+It lives in `consumer-smoke/src/macosArm64Main/`, under the standalone consumer's own build, so it
+exercises the real published coordinate rather than a project dependency. It owns context creation: a
+headless CGL core-profile context reached through the stock `platform.OpenGLCommon` and `platform.OpenGL3`
+klibs with **no cinterop at all**, reporting `Apple M3 Max | 4.1 Metal - 90.5`. It drives a fixed 48-frame
+storyboard (`Storyboard.kt:25`, with frames 30..32 as negative cases), and it writes binary PPM and prints
+an `ffmpeg` line. The style URL carries the owner's API key, so no style is checked in: pass `-PstyleUrl=`
+or `RENG_HARNESS_STYLE_URL`.
 
-**What is still Cycle I's, therefore:** `FramePlan` JSON in, a self-contained AVFoundation encoder, and
-MP4 out. Note that the current `ffmpeg`/libx264/`yuv420p` assembly step is **lossy**, and has already once
-misled a judgement about image sharpness — compare at `crf 12` / `yuv444p`, or on the PPM frames directly.
+**`FramePlan` JSON and a self-contained AVFoundation encoder were withdrawn with Cycle I, deliberately.**
+The harness is verification code, so an encoder inside it is bug surface that can produce a misleading
+video and cast doubt on the renderer; a PPM frame is a header and raw bytes, and `ffmpeg` is better
+debugged than anything written here would be. RenG therefore gains no serialization surface and no
+serialization dependency, and `FramePlan` serialization is no longer an unowned prerequisite of anything —
+Cycle J's corpus is in-source Kotlin fixtures. The cost is kept rather than removed: the
+`ffmpeg`/libx264/`yuv420p` assembly step is **lossy** and has already once misled a judgement about image
+sharpness, so judge sharpness at `crf 12` / `yuv444p`, or on the PPM frames directly.
 
 ## Commands
 

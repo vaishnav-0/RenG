@@ -31,7 +31,7 @@ below for exactly which.
 A skeleton ──► B core ──┬──► C resources ──┐
                         └──► D gl foundation┘──► F-1 (MVP) ──► release ──► E-basemap ──► release
                                                             ──► F-2 models ──► release ──► E-labels ──► E-terrain
-                                                            ──► H platforms ──► G globe ──► I harness ──► J corpus
+                                                            ──► H platforms ──► G globe ──► J corpus
 ```
 
 C and D are genuinely independent — one is I/O and CPU, the other is GPU — and are the natural place to
@@ -51,13 +51,12 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | E-terrain | Terrain displacing the mercator ground, plus deferred Cycle C task 20 | Golden baselines with terrain |
 | H | Android and iOS bring-up | `iosSimulatorArm64Test` in CI; two one-command device runs, neither automated |
 | G | Globe projection | Golden baselines at both projection modes |
-| I | macOS harness: plans in, video out | A rendered sequence encodes and plays |
 | J | Golden-image corpus gate | Corpus job wired into `ci.yml` and `publish.yml` |
 
 **Where the sequence stands.** A, B, C, D, F-1 and E-basemap are released: A as `0.1.0`, B/C/D/F-1 together
 as `0.2.0`, and E-basemap as `0.3.0`. **F-2 and H are both complete and both unreleased.** F-2's eighteen
 tasks are merged into `main`, gated by a model readback suite that draws a real GLB on a real driver; H's
-seven land on `feat/h-mobile-bring-up`, which has not been merged into `main`. E-labels and E-terrain remain
+seven merged into `main` on 2026-08-28. E-labels and E-terrain remain
 unstarted, though E-labels has been spiked; see `HANDOFF.md` for what that spike settled. **H ran out of order deliberately**, ahead of
 G, on the 2026-08-22 reasoning recorded under "G — Globe projection" below.
 
@@ -69,15 +68,15 @@ plausible — a transposed tile index, a v-flipped texture, a silently empty gro
 black because its mipmap filter has no mipmaps — and it cannot tell anyone whether the result *looks*
 right. That remains Cycle J's job, and these cycles should not imply otherwise.
 
-**A visual harness runs earlier than Cycle I, and it now exists.** Pulled forward on the reasoning that
-RenG had drawn a basemap no human had looked at: analytical assertions prove relationships, not
-resemblance. It lives in `consumer-smoke/src/macosArm64Main/` rather than in its own directory, because
-`tools/check_repository_policy.py` permits Kotlin source in exactly two places — `kmp/src` and
-`consumer-smoke` — and because the six-target resolution proof is what protects every release and should
-not share a source set with rendering machinery. It writes a PPM frame sequence and leaves assembly to
-`ffmpeg`; a self-contained encoder through AVFoundation cinterop stays with Cycle I. It earned the
-reordering immediately: four of the five defects the basemap cycle fixed after its suite went green were
-found by looking at its output.
+**A visual harness runs earlier than the cycle that was to own it, and it now exists.** Pulled forward on
+the reasoning that RenG had drawn a basemap no human had looked at: analytical assertions prove
+relationships, not resemblance. It lives in `consumer-smoke/src/macosArm64Main/` rather than in its own
+directory, because `tools/check_repository_policy.py` permits Kotlin source in exactly two places —
+`kmp/src` and `consumer-smoke` — and because the six-target resolution proof is what protects every release
+and should not share a source set with rendering machinery. It writes a PPM frame sequence and leaves
+assembly to `ffmpeg`. It earned the reordering immediately: four of the five defects the basemap cycle
+fixed after its suite went green were found by looking at its output. **Cycle I, which was to finish it,
+was withdrawn on 2026-08-28** — the harness as pulled forward is the whole of it; see below.
 
 The MVP release is **internal**: breaking the public interface in a later cycle is accepted. Publication
 itself stays immutable regardless — a later breaking change means a new version, never overwriting a
@@ -370,15 +369,29 @@ partial one. Moved behind H on 2026-08-22: every cycle adds GL surface that two 
 targets have never executed, and that gap compounds, so bring-up should not keep waiting behind new
 rendering work.
 
-## I — macOS harness
+## I — macOS harness — withdrawn 2026-08-28
 
-A consumer that happens to live in this repo, under its own build like `consumer-smoke`, resolving the
-published coordinate rather than a project dependency. It owns everything RenG refuses to: creating the
-headless CGL context, driving a capture framebuffer, reading back frames, and encoding MP4. **Half of it
-already exists** — the visual harness pulled forward into the basemap cycle owns the context, the capture
-and the readback. What is still this cycle's: consuming a sequence of `FramePlan` JSON documents, which
-means plan serialization is settled by then and is still unowned, and a self-contained AVFoundation
-encoder in place of the current print-an-`ffmpeg`-line step.
+**Withdrawn by owner decision. The letter stays bound to its content so no prior reference breaks**, the
+same convention the 2026-08-19 reorder used. The harness pulled forward into the basemap cycle already owns
+everything RenG refuses to — the headless CGL context, the capture framebuffer, the readback — and it has
+found defects a passing suite did not, which was the cycle's whole purpose. What remained was consuming
+`FramePlan` JSON documents and replacing the print-an-`ffmpeg`-line step with a self-contained AVFoundation
+encoder. Both were withdrawn on one argument: **the harness is verification code, so every line of encoder
+inside it is a line that can produce a misleading video and cast doubt on the renderer.** A PPM frame is a
+header and raw bytes, with essentially nothing to get wrong, and `ffmpeg` has been debugged by more people
+than this project ever will. Shelling out keeps the bug surface outside the thing being trusted.
+
+Two consequences worth recording. **`FramePlan` serialization stops being an unowned prerequisite**: it had
+exactly one consumer, this cycle, and Cycle J's corpus is in-source Kotlin fixtures rather than documents
+(`docs/research/2026-08-21-golden-image-gate-design.md:392`), so nothing else needs it and RenG adds neither
+a public serialization surface nor a serialization dependency the repository policy would refuse. And the
+assembly step's **lossiness is now a hazard to live with rather than one to engineer away**:
+`ffmpeg`/libx264/`yuv420p` has already once misled a judgement about image sharpness, so sharpness is judged
+at `crf 12` / `yuv444p` or on the PPM frames directly. That caveat's permanent home is `CLAUDE.md` under
+"The visual harness".
+
+Reversing this is cheap and compatible if a consumer ever needs RenG to hand over plan documents: the
+harness gains a parser and the decomposition gains a cycle. Nothing here forecloses that.
 
 ## J — Golden-image corpus
 

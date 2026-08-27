@@ -624,15 +624,15 @@ remains manual.
 **G — globe projection.** The second projection mode, re-projecting mercator tiles and every placement, so
 that it re-projects a complete scene rather than a partial one.
 
-**I — macOS harness.** Half of it exists already, pulled forward into the basemap cycle (see "The visual
-harness"). What is still Cycle I's: consuming `FramePlan` JSON documents, a self-contained AVFoundation
-encoder, and MP4 out. **`FramePlan` serialization is still an unowned prerequisite.** The decomposition says
-the harness consumes `FramePlan` JSON, "which means plan serialization is settled by then" — and nothing has
-settled it. RenG has no serialization surface in its public ABI and no serialization dependency or plugin
-anywhere in the build. Two candidate owners: a public serialization API in RenG, which adds public surface
-and probably a dependency the repository policy forbids; or harness-side parsing through the existing public
-constructors, which keeps RenG dependency-free but duplicates the schema. Decide before Cycle I, and note
-that F-1 already fixed the shader uniform names a serialized plan would have to name.
+**I — macOS harness — withdrawn 2026-08-28.** The harness pulled forward into the basemap cycle (see "The
+visual harness") is the whole of it. `FramePlan` JSON and a self-contained AVFoundation encoder were
+withdrawn on the argument that the harness is verification code, so an encoder inside it is bug surface that
+can produce a misleading video and cast doubt on the renderer; `ffmpeg` stays, and its lossiness stays a
+documented hazard rather than an engineered-away one. **`FramePlan` serialization is therefore no longer an
+unowned prerequisite** — it had exactly one consumer and that consumer is gone, and Cycle J's corpus is
+in-source Kotlin fixtures rather than documents, so RenG adds neither a public serialization surface nor the
+dependency the repository policy would refuse. Reversing this is cheap and compatible if a consumer ever
+needs plan documents. See `docs/decomposition.md` under "I — macOS harness — withdrawn".
 
 **J — golden-image corpus.** The home of all pixel verification deferred from E-basemap, F-2 and beyond. Its
 design is spiked (`docs/research/2026-08-21-golden-image-gate-design.md`) and two findings shrink the work:
