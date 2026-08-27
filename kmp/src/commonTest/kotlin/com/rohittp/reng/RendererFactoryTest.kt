@@ -37,6 +37,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RendererFactoryTest {
@@ -809,10 +810,42 @@ class RendererFactoryTest {
     }
 
     @Test
+    fun queryResourcesStopsClaimingZeroGpuBytesOnceATextureIsResident() = runTest {
+        val binding = validGlesBinding()
+        val renderer = createRenderer(testConfiguration(transport = CountingTransport()), binding, fixedProbe())
+        val plan = FramePlan(
+            frameIndex = 0L,
+            camera = testCamera(),
+            stickers = listOf(Sticker(testPlacement(), ResourceLocator("https://example.invalid/a.png"))),
+        )
+        val frame = renderer.prepare(plan)
+        val selector = ResourceSelector.ByClass(ResourceClass.STICKER_IMAGE)
+
+        // Prepared but never drawn: the image is decoded and resident on the CPU, and nothing of it
+        // is on the GPU yet. Zero GPU bytes here is knowledge, and the report is right to say so.
+        val beforeDraw = renderer.queryResources(selector).entries.single().usage
+        assertEquals(0L, beforeDraw.knownGpuBytes, "nothing is uploaded before the first draw")
+        assertFalse(beforeDraw.hasUnknownGpuBytes)
+
+        renderer.draw(frame, renderer.mintRenderTarget(FramebufferName(0u)))
+
+        // The same key, the same query, after `cachedTexture` uploaded and registered a texture under
+        // it. That texture goes through the unbudgeted `register` path, so its bytes are genuinely
+        // unknown to the layer that owns it -- and the report must now say "unknown" rather than
+        // repeating the zero it was entitled to a moment ago. These are two different claims and the
+        // difference is the whole defect: before this fix, both frames read 0L / false.
+        val afterDraw = renderer.queryResources(selector).entries.single().usage
+        assertNull(afterDraw.knownGpuBytes, "a resident texture of unrecorded size has no known byte count")
+        assertTrue(afterDraw.hasUnknownGpuBytes, "and the report must declare that it does not know")
+        assertEquals(beforeDraw.rawBytes, afterDraw.rawBytes, "nothing about the CPU-side account changed")
+    }
+
+    @Test
     fun aModelsGlbIsReportedAsAResidentResourceAndIsFreed() = runTest {
-        // GPU objects appear in no ResourceReport at all today -- ResidentCache reports every entry's
-        // knownGpuBytes as 0, for a ground tile and a sticker exactly as for a model -- so what a
-        // report can honestly say about a model is that its GLB is resident, and by how many bytes.
+        // A GLB is bytes, never a GPU object of its own: its vertex and index buffers are registered
+        // under `ResourceKeyDeriver.modelGeometry` keys, not under this one, so this entry's own GPU
+        // account is a knowable zero and stays one. What a report can say about a model here is that
+        // its GLB is resident, and by how many bytes.
         val binding = modelBinding()
         val renderer = createRenderer(testConfiguration(transport = ModelTransport()), binding, fixedProbe())
         renderer.prepare(modelPlan())
@@ -821,6 +854,8 @@ class RendererFactoryTest {
         val report = renderer.queryResources(selector)
         assertEquals(1, report.entries.size, "the GLB must be resident under its own class")
         assertEquals(texturedTriangleGlb().size.toLong(), report.totals.rawBytes)
+        assertEquals(0L, report.entries.single().usage.knownGpuBytes, "a GLB key holds no GPU object")
+        assertFalse(report.entries.single().usage.hasUnknownGpuBytes)
 
         // Deferred rather than fully freed, and that is not a model-shaped fact: the preparation that
         // installed this generation still holds the lease `ResidentCache.installAndTakeLease` gave it,

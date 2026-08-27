@@ -7,6 +7,7 @@ import com.rohittp.reng.ResourceReportEntry
 import com.rohittp.reng.ResourceSelector
 import com.rohittp.reng.ResourceUsage
 import com.rohittp.reng.StoredRawResource
+import com.rohittp.reng.internal.GpuByteAccount
 import com.rohittp.reng.internal.image.DecodedImage
 import kotlinx.coroutines.sync.Mutex
 
@@ -185,10 +186,23 @@ internal class ResidentCache {
         )
     }
 
-    fun report(selector: ResourceSelector): ResourceReport = locked {
+    /**
+     * The point-in-time account of every key matching [selector], with each key's GPU bytes supplied
+     * by [gpuBytes] rather than known here.
+     *
+     * A lookup rather than a registry, deliberately: this class owns raw bytes and decoded pixels and
+     * has never known what a GL texture is, so the alternative — handing it the GL object registry —
+     * would put the whole GPU layer inside the CPU cache to answer two fields. [GpuByteAccount] is
+     * the seam, and it names no GL concept.
+     *
+     * [gpuBytes] is called under this cache's own lock, which is safe for exactly the reason the lock
+     * holds at all: like everything else in a [locked] block it must be a synchronous handful of
+     * reads, never an adapter call, a decode or a parse. The GL registry's answer is a map lookup.
+     */
+    fun report(selector: ResourceSelector, gpuBytes: (ResourceKey) -> GpuByteAccount): ResourceReport = locked {
         val reportEntries = entries
             .filterKeys { it.matches(selector) }
-            .map { (key, entry) -> entry.toReportEntry(key) }
+            .map { (key, entry) -> entry.toReportEntry(key, gpuBytes(key)) }
         ResourceReport(entries = reportEntries, totals = reportEntries.totalUsage())
     }
 
@@ -220,7 +234,7 @@ internal class ResidentCache {
         is ResourceSelector.ByKey -> this == selector.key
     }
 
-    private fun KeyEntry.toReportEntry(key: ResourceKey): ResourceReportEntry {
+    private fun KeyEntry.toReportEntry(key: ResourceKey, gpu: GpuByteAccount): ResourceReportEntry {
         val resident = listOfNotNull(current) + retired
         return ResourceReportEntry(
             key = key,
@@ -231,12 +245,20 @@ internal class ResidentCache {
             usage = ResourceUsage(
                 rawBytes = resident.sumOf { it.stored.byteSnapshot.size.toLong() },
                 decodedCpuBytes = resident.sumOf { (it.decoded?.byteCount ?: 0).toLong() },
-                knownGpuBytes = 0L,
-                hasUnknownGpuBytes = false,
+                knownGpuBytes = gpu.knownBytes,
+                hasUnknownGpuBytes = gpu.hasUnknownBytes,
             ),
         )
     }
 
+    /**
+     * Sums usage across matched entries. The two GPU fields aggregate differently on purpose: an
+     * entry that knows nothing contributes nothing to the known sum but does set the flag, so a total
+     * of "1 MiB known" beside `hasUnknownGpuBytes = true` reads as "at least this much, and there is
+     * more nobody counted" — CONTEXT.md's rule that when known and unknown allocations coexist the
+     * known sum stays present and the flag goes up. Dropping unknown entries from the sum silently
+     * would be the same lie one level up.
+     */
     private fun List<ResourceReportEntry>.totalUsage(): ResourceUsage = ResourceUsage(
         rawBytes = sumOf { it.usage.rawBytes },
         decodedCpuBytes = sumOf { it.usage.decodedCpuBytes },

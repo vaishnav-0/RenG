@@ -26,6 +26,7 @@ import com.rohittp.reng.internal.basemap.BasemapTileJsonOutcome
 import com.rohittp.reng.internal.cache.ResidentCache
 import com.rohittp.reng.internal.identity.CanonicalBytes
 import com.rohittp.reng.internal.identity.PureKotlinSha256
+import com.rohittp.reng.internal.GpuByteAccount
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.planning.BasemapTileInstance
 import com.rohittp.reng.internal.planning.CanonicalBasemapTile
@@ -573,7 +574,10 @@ class BasemapEngineHostTest {
     ): BasemapStyleManifestOutcome = host.styleManifest(styleKey, stored, baseUri)
 
     private fun hostLeaseCount(cache: ResidentCache, key: ResourceKey): Int =
-        cache.report(ResourceSelector.ByKey(key)).entries.single().leaseCount
+        cache.report(ResourceSelector.ByKey(key), noGpuObjects).entries.single().leaseCount
+
+    /** No GL layer stands behind this cache: nothing it holds has a GPU object. */
+    private val noGpuObjects: (ResourceKey) -> GpuByteAccount = { GpuByteAccount.NoGpuObjects }
 
     // ---- incremental route registration ----------------------------------------------------------
 

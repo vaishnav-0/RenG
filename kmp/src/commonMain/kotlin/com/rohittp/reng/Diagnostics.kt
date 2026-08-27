@@ -35,6 +35,7 @@ public enum class DiagnosticCode {
     RESOURCE_RELOADED_AFTER_FREE,
     FAILURE_CONTEXT,
     BASEMAP_NOT_CONFIGURED,
+    RESIDENT_GPU_TEXTURES_OVER_BUDGET,
 }
 
 @ConsistentCopyVisibility
@@ -98,6 +99,24 @@ public data class Diagnostic internal constructor(
                     fieldName == null && resourceClass == null && resourceKey == null &&
                         statusCode == null && limit == null,
                 ) { "basemap-not-configured diagnostics carry no further context" }
+            }
+
+            DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET -> {
+                require(severity == DiagnosticSeverity.WARNING) {
+                    "resident-GPU-texture-budget diagnostics are warnings"
+                }
+                require(stage == PipelineStage.DRAW) {
+                    "resident-GPU-texture-budget diagnostics occur during draw"
+                }
+                require(fieldName == null && resourceClass == null && resourceKey == null && statusCode == null) {
+                    "resident-GPU-texture-budget diagnostics name no single resource"
+                }
+                // The two numbers are the whole content, and the strict inequality is the claim: a
+                // residency exactly at the budget is not over it, and a diagnostic saying otherwise
+                // would be unconstructible rather than merely wrong.
+                require(limit != null && actual!! > limit) {
+                    "resident-GPU-texture-budget diagnostics carry resident bytes strictly above the budget"
+                }
             }
         }
     }

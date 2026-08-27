@@ -1,7 +1,9 @@
 package com.rohittp.reng.internal.gl
 
+import com.rohittp.reng.ResourceClass
 import com.rohittp.reng.ResourceKey
 import com.rohittp.reng.ResourceKind
+import com.rohittp.reng.ResourceSelector
 import com.rohittp.reng.StoredRawResource
 import com.rohittp.reng.StoredRawResourceMetadata
 import com.rohittp.reng.internal.cache.ResidentCache
@@ -318,6 +320,126 @@ class GlObjectRegistryTest {
         assertEquals(listOf(100), binding.deletedNames, "and the refused reuse did not delay the retired deletion")
     }
 
+    // ---- X2 Task 1: what this registry may claim about a key's GPU bytes ----------------------
+
+    @Test fun aBudgetTrackedTextureIsReportedByItsExactByteSize() {
+        val cache = ResidentCache()
+        val registry = GlObjectRegistry()
+        cache.install(tileKey(0), storedTileBytes, null)
+        registry.registerTexture(tileKey(0), GlObjectHandle(GlObjectType.TEXTURE, 100), THREE_TILES_BYTES)
+
+        val usage = cache.report(ResourceSelector.ByKey(tileKey(0)), registry::gpuByteAccount)
+            .entries.single().usage
+
+        assertEquals(THREE_TILES_BYTES, usage.knownGpuBytes, "a tracked texture's bytes are known exactly")
+        assertFalse(usage.hasUnknownGpuBytes, "and nothing about it is unaccounted for")
+    }
+
+    @Test fun aTextureOutsideTheByteBudgetIsReportedAsUnknownRatherThanAsZero() {
+        val cache = ResidentCache()
+        val registry = GlObjectRegistry()
+        cache.install(stickerKey, storedTileBytes, null)
+        // The path every sticker image, geometry consumer texture, model texture and model buffer
+        // takes: a live GL object with no byte size recorded anywhere in the registry.
+        registry.register(stickerKey, listOf(GlObjectHandle(GlObjectType.TEXTURE, 101)))
+
+        val usage = cache.report(ResourceSelector.ByKey(stickerKey), registry::gpuByteAccount)
+            .entries.single().usage
+
+        assertNull(
+            usage.knownGpuBytes,
+            "a texture whose size this layer never recorded has no known byte count, and 0 would be a claim",
+        )
+        assertTrue(usage.hasUnknownGpuBytes, "the bytes exist and go undeclared, which is what the flag is for")
+    }
+
+    @Test fun aKeyWithNoLiveGlObjectIsReportedAsAKnownZero() {
+        val cache = ResidentCache()
+        val registry = GlObjectRegistry()
+        cache.install(glbKey, storedTileBytes, null)
+
+        val usage = cache.report(ResourceSelector.ByKey(glbKey), registry::gpuByteAccount)
+            .entries.single().usage
+
+        assertEquals(0L, usage.knownGpuBytes, "nothing on the GPU is a knowable zero, not an unknown")
+        assertFalse(usage.hasUnknownGpuBytes)
+    }
+
+    @Test fun reportTotalsSumWhatIsKnownAndStillDeclareWhatIsNot() {
+        val cache = ResidentCache()
+        val registry = GlObjectRegistry()
+        // Two tracked textures of deliberately different sizes, so the total is neither entry's own
+        // figure and a sum that quietly returned the first or the largest would show; one untracked
+        // texture; and one key with no GL object at all. All three rows of the rule in one report.
+        cache.install(tileKey(0), storedTileBytes, null)
+        cache.install(tileKey(1), storedTileBytes, null)
+        cache.install(stickerKey, storedTileBytes, null)
+        cache.install(glbKey, storedTileBytes, null)
+        registry.registerTexture(tileKey(0), GlObjectHandle(GlObjectType.TEXTURE, 100), THREE_TILES_BYTES)
+        registry.registerTexture(tileKey(1), GlObjectHandle(GlObjectType.TEXTURE, 101), FIVE_TILES_BYTES)
+        registry.register(stickerKey, listOf(GlObjectHandle(GlObjectType.TEXTURE, 102)))
+
+        val report = cache.report(ResourceSelector.All, registry::gpuByteAccount)
+
+        assertEquals(4, report.entries.size)
+        assertEquals(
+            THREE_TILES_BYTES + FIVE_TILES_BYTES,
+            report.totals.knownGpuBytes,
+            "the known sum must survive an unknown entry standing beside it rather than collapsing to null",
+        )
+        assertTrue(
+            report.totals.hasUnknownGpuBytes,
+            "and the unknown entry must still be declared, or the total silently drops it",
+        )
+    }
+
+    // ---- X2 Task 2: eviction reports whether it got under budget ------------------------------
+
+    @Test fun aReleaseThatCannotGetUnderBudgetSaysSo() {
+        val binding = RecordingGlBinding()
+        // One byte below one tile. The frame holds two tiles; releasing the first leaves it the only
+        // eviction candidate, and taking it still leaves the second tile's megabyte resident against
+        // a budget a byte smaller -- with nothing left that may be evicted, because the frame is
+        // still holding it.
+        val registry = GlObjectRegistry(residentTextureByteBudget = ONE_TILE_BYTES - 1L)
+        val leased = registry.registerTexture(tileKey(0), GlObjectHandle(GlObjectType.TEXTURE, 100), ONE_TILE_BYTES)
+        registry.registerTexture(tileKey(1), GlObjectHandle(GlObjectType.TEXTURE, 101), ONE_TILE_BYTES)
+
+        val residency = registry.releaseLease(leased, binding)
+
+        assertEquals(ONE_TILE_BYTES, residency.residentBytes, "the tile the frame still holds is what remains")
+        assertEquals(ONE_TILE_BYTES - 1L, residency.budgetBytes)
+        assertTrue(residency.overBudget, "one byte over is over")
+    }
+
+    @Test fun aResidencyExactlyAtTheBudgetIsNotOverIt() {
+        val binding = RecordingGlBinding()
+        // The same fixture as the case above, one byte of budget larger. That byte is the whole
+        // difference between a thrash report and silence.
+        val registry = GlObjectRegistry(residentTextureByteBudget = ONE_TILE_BYTES)
+        val leased = registry.registerTexture(tileKey(0), GlObjectHandle(GlObjectType.TEXTURE, 100), ONE_TILE_BYTES)
+        registry.registerTexture(tileKey(1), GlObjectHandle(GlObjectType.TEXTURE, 101), ONE_TILE_BYTES)
+
+        val residency = registry.releaseLease(leased, binding)
+
+        assertEquals(ONE_TILE_BYTES, residency.residentBytes)
+        assertEquals(ONE_TILE_BYTES, residency.budgetBytes)
+        assertFalse(residency.overBudget, "at the budget is not over the budget")
+    }
+
+    @Test fun aReleaseWithRoomToSpareEvictsNothingAndReportsItsResidency() {
+        val binding = RecordingGlBinding()
+        val registry = GlObjectRegistry(residentTextureByteBudget = 4 * ONE_TILE_BYTES)
+        val leased = registry.registerTexture(tileKey(0), GlObjectHandle(GlObjectType.TEXTURE, 100), ONE_TILE_BYTES)
+        registry.registerTexture(tileKey(1), GlObjectHandle(GlObjectType.TEXTURE, 101), ONE_TILE_BYTES)
+
+        val residency = registry.releaseLease(leased, binding)
+
+        assertEquals(2 * ONE_TILE_BYTES, residency.residentBytes, "both tiles are still resident")
+        assertFalse(residency.overBudget)
+        assertTrue(binding.deletedNames.isEmpty(), "and nothing was evicted to make that true")
+    }
+
     @Test fun contextLossForgetsTexturesWhileTheDecodedImageStaysLeased() {
         val registry = GlObjectRegistry()
         val residentCache = ResidentCache()
@@ -340,6 +462,19 @@ class GlObjectRegistryTest {
 }
 
 private const val ONE_TILE_BYTES: Long = 512L * 512L * 4L
+
+/** Two budget-tracked sizes that are neither equal to each other nor to their own sum. */
+private const val THREE_TILES_BYTES: Long = 3L * ONE_TILE_BYTES
+private const val FIVE_TILES_BYTES: Long = 5L * ONE_TILE_BYTES
+
+private val stickerKey = ResourceKey(ResourceKind.EXTERNAL, "c".repeat(64), ResourceClass.STICKER_IMAGE)
+private val glbKey = ResourceKey(ResourceKind.EXTERNAL, "d".repeat(64), ResourceClass.MODEL_GLB)
+
+private val storedTileBytes = StoredRawResource(
+    bytes = "tile-bytes".encodeToByteArray(),
+    contentDigest = "e".repeat(64),
+    metadata = StoredRawResourceMetadata(storedAtEpochMillis = 1L),
+)
 
 private fun tileKey(index: Int): ResourceKey =
     ResourceKey(ResourceKind.BASEMAP_TILE, index.toString().repeat(64).take(64), null)
