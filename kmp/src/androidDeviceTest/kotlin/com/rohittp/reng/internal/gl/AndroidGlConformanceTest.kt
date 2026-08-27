@@ -1,0 +1,153 @@
+package com.rohittp.reng.internal.gl
+
+import com.rohittp.reng.BASEMAP_READBACK_PIXELS
+import com.rohittp.reng.MODEL_READBACK_PIXELS
+import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.runModelReadbackSuite
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * Android's half of the GL gate, and the only place `AndroidGlBinding` is executed at all. It shipped
+ * in every release from `0.2.0` without a single one of its entry points ever running — not on a
+ * device, not on an emulator, not in CI — because `kmp/src` had no device test source set. It has one
+ * now (ADR 0032), and this is what runs in it.
+ *
+ * The shape is `LinuxGlConformanceTest`'s, with two differences that are facts about the platform
+ * rather than choices. There is only one dialect: an Android EGL context is GLES, so there is no
+ * `DESKTOP` half to pair with and no same-binary two-dialect case. And the cross-dialect link runs
+ * for real — `CrossDialectLinkPolicy.SKIP_ON_LINUX_MESA_LINK_SEGFAULT` exists for one Mesa
+ * `libgallium` bug and must not travel to a driver that does not have it.
+ *
+ * Every suite this calls lives in `commonTest`, in one copy, reached through the explicit
+ * `dependsOn(commonTest)` edge `kmp/build.gradle.kts` declares.
+ */
+class AndroidGlConformanceTest {
+
+    /**
+     * Reports the driver rather than asserting a particular one. Which GPU an instrumented run lands
+     * on is a property of the attached device, and a suite that names one would be a suite that only
+     * one phone can pass; the emulator's ANGLE-over-SwiftShader stack and Adreno both have to be
+     * legible here. What *is* asserted is the contract RenG's dialect detection depends on: this is
+     * an ES 3 context.
+     */
+    @Test fun theDriverIdentifiesItselfAsAnEs3Context() {
+        withCurrentContext { binding ->
+            val subpixelBits = IntArray(1)
+            binding.getIntegerv(GL_SUBPIXEL_BITS, subpixelBits)
+            val maxTextureSize = IntArray(1)
+            binding.getIntegerv(GL_MAX_TEXTURE_SIZE, maxTextureSize)
+            val extensions = readExtensionNames(binding)
+            println(
+                "RenG Android GL driver: GL_RENDERER=${binding.getString(GL_RENDERER)} " +
+                    "GL_VENDOR=${binding.getString(GL_VENDOR)} " +
+                    "GL_VERSION=${binding.getString(GL_VERSION)} " +
+                    "GL_SHADING_LANGUAGE_VERSION=${binding.getString(GL_SHADING_LANGUAGE_VERSION)} " +
+                    "GL_SUBPIXEL_BITS=${subpixelBits[0]} GL_MAX_TEXTURE_SIZE=${maxTextureSize[0]} " +
+                    "extensions=${extensions.size}",
+            )
+            assertTrue(
+                binding.getString(GL_VERSION).orEmpty().startsWith("OpenGL ES 3"),
+                "an EGL_CONTEXT_CLIENT_VERSION=3 context must report OpenGL ES 3.x",
+            )
+        }
+    }
+
+    /**
+     * `openPlatformGlBinding()` returns `Bound(AndroidGlBinding)` unconditionally, exactly as the iOS
+     * binding does, so a green `Bound` proves nothing on its own. `adoptRenderContext` is what drives
+     * the binding — version, renderer, extension set, three `GL_MAX_*` limits — and requires a clean
+     * error flag afterwards, so a mis-declared entry point surfaces here as a rejection rather than
+     * as a silent wrong answer somewhere later.
+     */
+    @Test fun everyRosterEntryPointResolvesOnThisDriver() {
+        assertEquals(91, GlEntryPoint.entries.size)
+        withCurrentContext { binding ->
+            val adoption = adoptRenderContext(binding)
+            val adopted = adoption as? RenderContextAdoption.Adopted
+                ?: throw AssertionError("adoption rejected: $adoption")
+            println(
+                "RenG Android adopted: dialect=${adopted.profile.dialect} " +
+                    "renderer=${adopted.profile.rendererName} version=${adopted.profile.version} " +
+                    "maxTextureSize=${adopted.profile.maxTextureSize} " +
+                    "maxColorAttachments=${adopted.profile.maxColorAttachments} " +
+                    "maxCombinedTextureImageUnits=${adopted.profile.maxCombinedTextureImageUnits}",
+            )
+            assertEquals(ShaderDialect.GLES, adopted.profile.dialect)
+        }
+    }
+
+    @Test fun theSuitePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, CONFORMANCE_SURFACE_PIXELS, CONFORMANCE_SURFACE_PIXELS)
+            binding.scissor(0, 0, CONFORMANCE_SURFACE_PIXELS, CONFORMANCE_SURFACE_PIXELS)
+            val report = runGlConformanceSuite(binding, fixture.probe, ShaderDialect.GLES)
+            println(
+                "RenG conformance renderer: ${report.rendererName} / ${report.versionText} " +
+                    "sl=${report.shadingLanguageVersionText} checks=${report.checks}",
+            )
+            assertEquals(ShaderDialect.GLES, report.dialect)
+            assertEquals(8, report.checks.size)
+            assertTrue(report.shadingLanguageVersionText.startsWith("OpenGL ES GLSL ES"))
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle E's gate on Android's driver. This is where the large-off-screen-quad probe runs and
+     * prints its verdict: the suite measures the rasteriser and skips exactly the case that cannot
+     * survive a driver dropping whole primitives, rather than tolerating a budget into meaning
+     * nothing. Reading the printed pixel count is the point — it is how a new GPU vendor gets
+     * assessed without anybody editing a tolerance.
+     *
+     * It also exercises Rentile's Skia on the device, which is the half `androidHostTest` provably
+     * cannot do: that JVM looks for `libskiko-macos-arm64.dylib`, a host library the Android AAR was
+     * never going to carry.
+     */
+    @Test fun theBasemapReadbackSuitePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
+            binding.scissor(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
+            runBasemapReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /** Cycle F-2's gate on Android's driver: a GLB drawn through the public API and read back. */
+    @Test fun theModelReadbackSuitePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, MODEL_READBACK_PIXELS, MODEL_READBACK_PIXELS)
+            binding.scissor(0, 0, MODEL_READBACK_PIXELS, MODEL_READBACK_PIXELS)
+            runModelReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    private fun bindOrFail(): GlBinding = when (val result = openPlatformGlBinding()) {
+        is GlBindingResult.Bound -> result.binding
+        is GlBindingResult.Unsupported ->
+            throw AssertionError("every roster entry point must resolve on this driver: ${result.failure}")
+    }
+
+    private fun withCurrentContext(body: (GlBinding) -> Unit) {
+        val fixture = PbufferEglContext.create()
+        try {
+            body(bindOrFail())
+        } finally {
+            fixture.destroy()
+        }
+    }
+}
+
+/** `GL_SUBPIXEL_BITS`, which separates a hardware rasteriser (4) from a software one (10). */
+private const val GL_SUBPIXEL_BITS: Int = 0x0D50
