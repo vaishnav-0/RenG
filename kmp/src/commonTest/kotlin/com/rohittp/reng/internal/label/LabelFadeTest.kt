@@ -8,6 +8,7 @@ import com.rohittp.rentile.LabelGlyphAtlas
 import com.rohittp.rentile.LabelGlyphEntry
 import com.rohittp.rentile.LabelGlyphQuad
 import com.rohittp.rentile.LabelLayerStyle
+import com.rohittp.rentile.LabelPlacement
 import com.rohittp.rentile.SymbolOverlap
 import com.rohittp.rentile.TileId
 import kotlin.math.abs
@@ -223,6 +224,43 @@ class LabelFadeTest {
 
         assertEquals(List(before.size) { 0.4f }, moved.labels.map { it.opacity })
         assertEquals(before.size, moved.nextState.entryCount)
+    }
+
+    @Test
+    fun aLineCentreLabelKeepsOneIdentityWhileTheCameraMoves() {
+        // `line-center` places one instance per candidate, so it has nothing to be told apart from
+        // -- and the only along-line distance it has is half a **projected** run's length, which is
+        // a different number every time the camera moves. Carrying it would restart every
+        // `line-center` label's fade on every frame, which is the same silent inertness the screen
+        // anchor causes and is invisible to the case above, whose candidate is a `line` one.
+        val settled = resolvedPlacementCamera()
+        val panned = resolvedPlacementCamera(pannedPlacementCamera())
+        val batch = fadeBatch(
+            lineCandidate(placement = LabelPlacement.LINE_CENTER, glyphs = shortLineGlyphRow()),
+        )
+        val before = placeLabels(settled, batch).single()
+        val after = placeLabels(panned, batch).single()
+
+        // Both halves of the non-vacuity: the label moved on screen, and -- the one this case turns
+        // on -- the run it halves is a different length under the two cameras, so a `line-center`
+        // distance admitted to the identity really would be a different number in the second frame.
+        assertTrue(
+            abs(before.anchorPixelX - after.anchorPixelX) > MOVED_PIXELS,
+            "the anchor did not move",
+        )
+        val settledLength = screenRunOf(settled, LONG_LINE).length
+        val pannedLength = screenRunOf(panned, LONG_LINE).length
+        assertTrue(
+            abs(settledLength - pannedLength) > MOVED_PIXELS,
+            "the run is $settledLength pixels under both cameras",
+        )
+
+        var state = LabelFadeState.EMPTY
+        repeat(3) { state = advanceLabelFade(state, batch, listOf(before)).nextState }
+        val moved = advanceLabelFade(state, batch, listOf(after))
+
+        assertEquals(0.4f, moved.labels.single().opacity)
+        assertEquals(1, moved.nextState.entryCount)
     }
 
     @Test
