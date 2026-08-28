@@ -388,6 +388,29 @@ private class FrameAcquisition(
     val spriteAtlas: SpriteAtlasManifest? = null,
 )
 
+/**
+ * One Label handover held for reuse by a later frame, under the key Rentile itself published for the
+ * purpose ([BasemapEngineHost.labelCandidateRequestKey]).
+ *
+ * **The sprite manifest travels with it, and leaving it behind would be a visible defect rather than a
+ * missed optimisation.** [FrameAcquisition.spriteAtlas] can only be read from inside the invocation that
+ * proxied the sprite pair, and on a frame whose style was compiled earlier the Label acquisition is the
+ * only thing left that makes the engine ask for it. Reusing the batch without it would therefore hand
+ * every cached frame a `null` atlas and silently drop the frame's icons — a cache that changed how the
+ * map looks, which is the one thing a cache may not do.
+ */
+private class RetainedLabelHandover(
+    val requestKey: String,
+    val candidates: AcquiredLabelCandidates,
+    val spriteAtlas: SpriteAtlasManifest?,
+)
+
+/** One decoded glyph atlas held under the [ResourceKey] `ResourceKeyDeriver.glyphAtlas` named it with. */
+private class RetainedGlyphAtlas(
+    val key: ResourceKey,
+    val image: DecodedImage,
+)
+
 /** The concrete [RenderTarget] [RenGRenderer.mintRenderTarget] produces. */
 internal class RenGRenderTarget(
     internal val owner: RenGRenderer,
@@ -586,6 +609,38 @@ internal class RenGRenderer(
      * function of the plan.
      */
     private var previousLabelFade: LabelFadeState = LabelFadeState.EMPTY
+
+    /**
+     * The Label handover this renderer is holding, and the exact opposite kind of thing to
+     * [previousLabelFade] above: **a cache**, changing how fast a frame is produced and never how it
+     * looks. It is therefore not a fifth member of Frame History and is deliberately not cleared by
+     * `clearFrameHistory()` — see [labelHandover] for the whole decision.
+     *
+     * One entry, on [BasemapEngineHost.compiledStyle]'s own terms rather than as a map: a camera that
+     * moves changes its tile set every frame and would evict any bounded cache continuously, while a
+     * camera that sits still — the case measured at 514–520 ms of `prepare()` per frame, ~85% of it,
+     * for a batch that was byte-identical all three times — needs exactly one. A second entry would buy
+     * only an oscillation between two tile sets, which no consumer produces and no measurement asked
+     * for.
+     */
+    private var retainedLabelHandover: RetainedLabelHandover? = null
+
+    /**
+     * The glyph atlas of [retainedLabelHandover]'s batch, decoded once rather than on every frame that
+     * keeps a label.
+     *
+     * **Keyed by the atlas's own content, not by the handover's request key**, and the two are genuinely
+     * different questions. `ResourceKeyDeriver.glyphAtlas` names the atlas by the digest Rentile packed
+     * it under, so two tile sets whose label text happens to need the identical glyphs share this entry
+     * even though their handover keys differ — a pan along a repetitive coastline is exactly that shape.
+     * Keying it off the handover instead would throw the decode away on every invalidation and re-do
+     * 122 ms of work (measured, 16 ranges, 6.88 MB) to arrive at the same pixels.
+     *
+     * Bounded by `ResourceLimits.maximumDecodedImageBytes` — the same ceiling `decodeGlyphAtlas` already
+     * enforces — because that is what a `DecodedImage` of an atlas can weigh at all. One is held, for
+     * the same reason one handover is.
+     */
+    private var retainedGlyphAtlas: RetainedGlyphAtlas? = null
 
     /** Once per renderer, never per frame — see the design spec's `drawBasemap` decision. */
     private var basemapWarningEmitted: Boolean = false
@@ -803,9 +858,10 @@ internal class RenGRenderer(
             val labels = if (labelBatch == null || labelFade.labels.isEmpty()) {
                 null
             } else {
+                val atlasKey = geometryKeyDeriver.glyphAtlas(labelBatch.atlas.contentKey).key
                 PreparedLabelFrame(
-                    atlasKey = geometryKeyDeriver.glyphAtlas(labelBatch.atlas.contentKey).key,
-                    atlas = decodeGlyphAtlas(labelBatch.atlas.pngBytes),
+                    atlasKey = atlasKey,
+                    atlas = residentGlyphAtlas(atlasKey, labelBatch.atlas.pngBytes),
                     labels = labelFade.labels,
                 )
             }
@@ -850,6 +906,27 @@ internal class RenGRenderer(
      * [ResourceLimits.maximumDecodedImageBytes] with every raster RenG decodes, and a style whose
      * font stacks pack past it fails the frame rather than drawing text without its glyphs.
      */
+    /**
+     * [decodeGlyphAtlas], but paid once per distinct atlas rather than once per frame that keeps a label.
+     *
+     * **The decode is the atlas's real per-frame cost, and the upload never was.** `uploadGlyphAtlas`
+     * has leased a resident texture by key since task 20, so the GPU half was already right; what was
+     * not is that `prepare()` decoded 6.88 MB of PNG -- 120-130 ms measured, 24% of the whole label
+     * path -- to produce a [DecodedImage] the upload then threw away on every frame after the first.
+     * `prepare()` cannot consult [glObjectRegistry] to find out whether it needs one: it is a `suspend`
+     * function that may resume off the thread holding the render context, and the registry belongs to
+     * the draw. So the decode is memoized here instead, on the CPU side where it happens.
+     *
+     * [key] is the atlas's content identity, so a hit means the same bytes rather than the same request,
+     * and a `RESIDENT` handover that repacked an identical atlas hits it too.
+     */
+    private fun residentGlyphAtlas(key: ResourceKey, pngBytes: ByteArray): DecodedImage {
+        retainedGlyphAtlas?.takeIf { it.key == key }?.let { return it.image }
+        val decoded = decodeGlyphAtlas(pngBytes)
+        retainedGlyphAtlas = RetainedGlyphAtlas(key, decoded)
+        return decoded
+    }
+
     private fun decodeGlyphAtlas(pngBytes: ByteArray): DecodedImage =
         when (val decoded = decodePng(pngBytes, configuration.resourceLimits.maximumDecodedImageBytes)) {
             is PngDecodeResult.Success -> decoded.image
@@ -1141,11 +1218,13 @@ internal class RenGRenderer(
                         basemapStyleDigest = style.digest
                     }
                     if (manifest != null && labelTiles.isNotEmpty()) {
-                        labelCandidates = acquireLabelCandidates(manifest, style, labelTiles, accessMode)
-                        // Read after the acquisition rather than before it, because a style compiled on
-                        // an earlier invocation proxies its sprite pair again only when something asks
-                        // for it, and the label acquisition is the last thing in this block that can.
-                        spriteAtlas = basemapEngineHost.spriteAtlasManifest()
+                        val handover = labelHandover(manifest, style, labelTiles, accessMode)
+                        labelCandidates = handover.candidates
+                        // Taken from the handover rather than read here, because on a frame that reused
+                        // a retained one nothing in this invocation ever asked the engine for the sprite
+                        // pair -- so the registry holds no manifest and reading it now would answer
+                        // `null` for a style that declares one. See [RetainedLabelHandover].
+                        spriteAtlas = handover.spriteAtlas
                     }
                 }
             }
@@ -1293,32 +1372,89 @@ internal class RenGRenderer(
      * in this string rather than one the engine composed. A style declaring no `glyphs` passes `null`,
      * which is a failure only if the engine nevertheless froze a non-empty closure -- the handover's
      * own judgement, not this call site's.
+     *
+     * ---
+     *
+     * **And it is called once per *tile set*, not once per frame.** Measured on a real context with a
+     * stationary camera, the label path was 514-520 ms of a 605-610 ms `prepare()` -- ~85% of it, and
+     * 5.5x the ground path over the same 17 tiles -- because nothing was retained: three acquisitions of
+     * an identical tile set asked the consumer's `Transport` for all 17 label tiles and all 16 Glyph
+     * Ranges every single time (17 -> 34 -> 51 and 16 -> 32 -> 48) and re-packed a **byte-identical**
+     * atlas, the same `contentKey` all three times.
+     *
+     * **The key is [BasemapEngineHost.labelCandidateRequestKey] and RenG derives nothing of its own.**
+     * Rentile publishes that key for precisely this cache, computed before any network from its own
+     * compiled-style digest, the sorted de-duplicated tile identities, and a private label-semantics
+     * version it bumps whenever a change to label evaluation, text layout or glyph packing would alter a
+     * batch this key would otherwise leave looking unchanged. That last input is unreachable from here,
+     * which is exactly why a key RenG derived itself would be wrong: it would be a second opinion about
+     * someone else's cache validity, and it would keep looking valid on the day the engine's own answer
+     * moved. What the key deliberately omits -- credentials, sessions, validators, the Glyph Closure --
+     * is what makes it a *request* identity; [com.rohittp.rentile.LabelCandidateBatch.contentKey] is the
+     * answer's, and RenG stores the atlas under it separately.
+     *
+     * **This is a cache and never Frame History, and `clearFrameHistory()` therefore leaves it alone.**
+     * ADR 0035 draws the line in as many words: every cross-frame mechanism in this renderer except the
+     * fade -- decoded images, uploaded textures, parsed GLBs, compiled shaders, resident tiles -- "changes
+     * how fast a frame is produced, never how it looks", and this one is squarely on that side. Two
+     * consecutive frames over one tile set draw the same labels whether or not the batch behind them was
+     * re-fetched, so clearing it would make a history call into a cache-invalidation call as well, and
+     * `CONTEXT.md`'s Frame History entry already says the opposite twice: `clearFrameHistory()` "neither
+     * frees resources nor invalidates prepared frames", and its own `_Avoid_` list names "Cache". The
+     * resident cache, which suppresses far more consumer traffic than this does, is likewise untouched
+     * by it; `freeResources` and `close()` are the calls that own caches.
+     *
+     * **What it holds contradicts no GL opinion, because it holds no GL object.** The batch is an
+     * immutable Rentile value -- candidates, layer styles, atlas PNG bytes, a content key, diagnostics --
+     * with no `close()` and nothing engine-side behind it, unlike a `PreparedBatch`. The atlas's *texture*
+     * lives where every other texture does, in [glObjectRegistry] under the content-derived key
+     * `ResourceKeyDeriver.glyphAtlas`, so `freeResources`, LRU eviction, `notifyGpuObjectsGone` and
+     * `close()` all keep exactly the authority over it they already had: a frame that lost the texture
+     * re-uploads it from [RetainedGlyphAtlas], and a frame that lost both decodes it again from bytes
+     * that are still correct. `close()` drops both retentions as the CPU state they are.
      */
-    private suspend fun acquireLabelCandidates(
+    private suspend fun labelHandover(
         manifest: BasemapStyleManifest,
         style: PreparedStyle,
         labelTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
-    ): AcquiredLabelCandidates {
-        val acquired = basemapEngineHost.acquireLabelCandidates(
-            style = style,
-            tiles = labelTiles,
-            glyphTemplate = manifest.glyphTemplate,
-            labelTileRoutes = tileTimeRoutes(
-                manifest = manifest,
+    ): RetainedLabelHandover {
+        val requestKey = basemapEngineHost.labelCandidateRequestKey(style, labelTiles)
+        val handover = retainedLabelHandover?.takeIf { it.requestKey == requestKey } ?: run {
+            val acquired = basemapEngineHost.acquireLabelCandidates(
+                style = style,
                 tiles = labelTiles,
-                accessMode = accessMode,
+                glyphTemplate = manifest.glyphTemplate,
+                labelTileRoutes = tileTimeRoutes(
+                    manifest = manifest,
+                    tiles = labelTiles,
+                    accessMode = accessMode,
+                    limits = configuration.resourceLimits,
+                ),
                 limits = configuration.resourceLimits,
-            ),
-            limits = configuration.resourceLimits,
-        )
+            )
+            // Committed only once the acquisition has fully succeeded, exactly as the LOD and the fade
+            // are. A throw leaves the previous entry standing, which is correct rather than merely
+            // convenient: it is keyed on a request this frame is not making, so it can only ever be
+            // served to a later frame that asks the same question again.
+            RetainedLabelHandover(
+                requestKey = requestKey,
+                candidates = acquired,
+                spriteAtlas = basemapEngineHost.spriteAtlasManifest(),
+            ).also { retainedLabelHandover = it }
+        }
         // ADR 0036's "once per prepare", and this call site is the whole of the mechanism: the
         // handover runs once per prepare, so an aggregate emitted beside it does too, however many
         // exclusions the batch reported and however many layers or tiles they came from. The batch's
         // own diagnostics never travel further than this line -- `reportLabelContentExclusions`
         // returns nothing, and what it emits is RenG's own code with a severity and no other field.
-        reportLabelContentExclusions(acquired.batch.diagnostics, configuration.diagnosticSink)
-        return acquired
+        //
+        // **Deliberately outside the `run` block**, so a frame served from the retained handover reports
+        // exactly what a frame that re-acquired it would. The aggregate describes the content this frame
+        // is drawing, not the exchange that fetched it, and a consumer whose warning appeared on frame 0
+        // and vanished on frame 1 would be reading RenG's cache state rather than its own style.
+        reportLabelContentExclusions(handover.candidates.batch.diagnostics, configuration.diagnosticSink)
+        return handover
     }
 
     override suspend fun cancelPreparations() {
@@ -1333,6 +1469,12 @@ internal class RenGRenderer(
                 previousEncodedPlan = null
                 previousSelectedLod = null
                 previousLabelFade = LabelFadeState.EMPTY
+                // `retainedLabelHandover` and `retainedGlyphAtlas` are deliberately NOT cleared here,
+                // and the omission is a decision rather than an oversight: they are caches, this call
+                // clears history, and CONTEXT.md says a history clear "neither frees resources nor
+                // invalidates prepared frames". ADR 0035's rule -- after `clearFrameHistory()` the render
+                // is a pure function of the plan -- still holds, because neither of them can change what
+                // a frame looks like. `labelHandover` carries the full argument.
                 identityRegistry = CanonicalIdentityRegistry()
                 framePlanningCore = newFramePlanningCore(identityRegistry)
                 null
@@ -1925,6 +2067,13 @@ internal class RenGRenderer(
                 groundPipeline = null
                 labelPipeline = null
                 residentCache.closeAll()
+                // CONTEXT.md's Close entry says a close "releases CPU state", and these two are exactly
+                // that and nothing more: an immutable Rentile batch and one decoded atlas, no GL handle
+                // between them, so unlike everything above they need no context and can never fail. They
+                // are dropped here rather than in `clearFrameHistory()` because they are caches -- see
+                // [labelHandover] for why that distinction is the whole decision.
+                retainedLabelHandover = null
+                retainedGlyphAtlas = null
                 // The renderer owns exactly one Rentile engine (ADR 0016), so closing the renderer closes
                 // it. Its close() is idempotent and, unlike everything above it here, not GL-scoped -- so
                 // it neither needs nor consults the exact current context (ADRs 0007/0015).
