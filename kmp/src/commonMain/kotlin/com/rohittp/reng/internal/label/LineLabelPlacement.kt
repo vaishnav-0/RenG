@@ -123,9 +123,11 @@ internal fun layOutLineLabels(
         // which matters because `keepUpright` reverses the *reading* direction and must not
         // therefore move the labels.
         var distance = spacing / 2.0
-        while (distance <= run.length) {
+        var anchors = 0
+        while (distance <= run.length && anchors < MAXIMUM_ANCHORS_PER_RUN) {
             instance.layOut(run, distance)?.let { placed += it }
             distance += spacing
+            anchors += 1
         }
     }
     return placed
@@ -433,6 +435,25 @@ private const val MINIMUM_SEGMENT_PIXELS: Double = 1.0e-6
 
 /** See the walk in [layOutLineLabels]. */
 private const val MINIMUM_LINE_SPACING_PIXELS: Double = 1.0
+
+/**
+ * The bound on one run's walk, because **a run's length is a projected pixel distance and that is
+ * not bounded by anything the caller controls.**
+ *
+ * A run is measured on screen, not on the ground, and the perspective divide is by a `w` the near
+ * plane only holds at or above one logical pixel. A ground vertex just in front of that plane -- a
+ * road passing beneath a pitched camera, which is an ordinary tile rather than a pathological one --
+ * projects hundreds of thousands of pixels away: measured at **390,000** on this cycle's own fixture
+ * camera, for a vertex whose `w` is 1.05. Multiply that by the [MINIMUM_LINE_SPACING_PIXELS] floor
+ * and the walk below is a loop with no ceiling in a function that runs inside `prepare()`.
+ *
+ * Set far above what a screen can show: a 4K viewport's diagonal is about 4,400 pixels, so a run
+ * lying entirely within one cannot ask for more anchors than this even at the one-pixel floor, and a
+ * real style's `symbol-spacing` is two orders of magnitude above that floor. When it does bite, the
+ * anchors lost are at the far end of a run that is overwhelmingly off screen, and the alternative it
+ * is chosen over is a frame that never finishes preparing.
+ */
+internal const val MAXIMUM_ANCHORS_PER_RUN: Int = 4096
 
 private const val QUAD_CORNERS: Int = 4
 

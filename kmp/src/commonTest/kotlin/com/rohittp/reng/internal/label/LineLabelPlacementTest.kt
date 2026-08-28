@@ -288,6 +288,46 @@ class LineLabelPlacementTest {
         )
     }
 
+    /**
+     * The walk is bounded, because the thing it walks is not.
+     *
+     * `NEAR_PLANE_LINE`'s far vertex sits 1.05 logical pixels in front of the near plane and lands
+     * about 390,000 output pixels away -- an ordinary road under a pitched camera, not a contrived
+     * one. At the one-pixel spacing floor that is 390,000 anchors from a single two-point line, in a
+     * function that runs inside `prepare()`. The last assertion is what stops the bound from being
+     * mistaken for a placement policy: at a real `symbol-spacing` the same run never reaches it.
+     */
+    @Test
+    fun theWalkIsBoundedWhenAVertexSitsAgainstTheNearPlane() {
+        val camera = resolvedPlacementCamera()
+        val run = screenRunOf(camera, NEAR_PLANE_LINE)
+        assertTrue(run.length > 100_000.0, "the fixture's run is only ${run.length} pixels")
+        assertTrue(
+            run.length / 1.0 > MAXIMUM_ANCHORS_PER_RUN,
+            "the fixture must ask for more anchors than the bound allows",
+        )
+
+        val dense = layOutLineLabels(
+            camera,
+            PLACEMENT_ATLAS,
+            lineCandidate(line = NEAR_PLANE_LINE, symbolSpacing = 1.0, glyphs = shortLineGlyphRow()),
+            candidateIndex = 0,
+        )
+        assertTrue(dense.isNotEmpty(), "the bound refuses nothing outright")
+        assertTrue(dense.size <= MAXIMUM_ANCHORS_PER_RUN, "but it stops at ${dense.size}")
+
+        val sparse = layOutLineLabels(
+            camera,
+            PLACEMENT_ATLAS,
+            lineCandidate(line = NEAR_PLANE_LINE, symbolSpacing = 250.0, glyphs = shortLineGlyphRow()),
+            candidateIndex = 0,
+        )
+        assertTrue(
+            sparse.size < MAXIMUM_ANCHORS_PER_RUN,
+            "a real spacing does not reach the bound: ${sparse.size}",
+        )
+    }
+
     // ---- the bend ceiling --------------------------------------------------------------------
 
     /**
@@ -320,6 +360,37 @@ class LineLabelPlacementTest {
         assertEquals(1, placedOn(BENT_LINE, 89.0), "a ceiling just over the bend admits it")
         assertEquals(1, placedOn(LONG_LINE, 45.0), "a 4.8-degree bend is not refused at 45 degrees")
         assertEquals(0, placedOn(LONG_LINE, 4.0), "and is refused at 4")
+    }
+
+    /**
+     * The ceiling measures the shape of the ink, not the order of the array.
+     *
+     * A label the engine wrapped onto two rows restarts at its own left edge for the second row, so
+     * in glyph order one pair jumps from the label's right end back to its left. On `LONG_LINE`'s
+     * `line-center` anchor a `WIDE_LINE_GLYPH_LOCAL_X` row spans both vertices: neighbouring glyphs
+     * turn by at most 12.809 degrees, while the two ends of the label differ by 17.574. A ceiling of
+     * 15 therefore separates the two readings -- and 12 refuses both, which is what stops "15 admits
+     * everything" from being the explanation.
+     */
+    @Test
+    fun theBendCeilingMeasuresTheShapeOfTheInkRatherThanTheOrderOfTheArray() {
+        val camera = resolvedPlacementCamera()
+
+        fun placedWith(glyphs: List<LabelGlyphQuad>, maxAngleDegrees: Double): Int = layOutLineLabels(
+            camera,
+            PLACEMENT_ATLAS,
+            lineCandidate(
+                placement = LabelPlacement.LINE_CENTER,
+                maxAngleDegrees = maxAngleDegrees,
+                glyphs = glyphs,
+            ),
+            candidateIndex = 0,
+        ).size
+
+        assertEquals(1, placedWith(wideLineGlyphRow(), 15.0), "one row spanning both vertices")
+        assertEquals(1, placedWith(twoRowLineGlyphs(), 15.0), "the same ink wrapped onto two rows")
+        assertEquals(0, placedWith(wideLineGlyphRow(), 12.0), "and 12 degrees refuses one row")
+        assertEquals(0, placedWith(twoRowLineGlyphs(), 12.0), "and refuses two")
     }
 
     // ---- keepUpright -------------------------------------------------------------------------
@@ -553,12 +624,25 @@ class LineLabelPlacementTest {
      * that reached the comparison as `NaN` would admit **every** bend rather than refuse them, and
      * the failure would look like line placement ignoring `text-max-angle` on exactly the styles
      * whose expression for it did not evaluate.
+     *
+     * **Every case here needs a fixture that would otherwise place**, which is not automatic and was
+     * not true of the first one when it was written: deleting the ceiling's own guard left the suite
+     * green, because that candidate was a `line` instance too long for `BENT_LINE` and placed
+     * nothing for a reason that had nothing to do with the ceiling. The closing control asserts the
+     * shared candidate does place, and the ones that vary the line say so themselves.
      */
     @Test
     fun unusableLineInputsPlaceNothing() {
         val camera = resolvedPlacementCamera()
         for ((description, candidate) in listOf(
-            "a NaN bend ceiling" to lineCandidate(line = BENT_LINE, maxAngleDegrees = Double.NaN),
+            // `line-center`, not `line`: at the default spacing a `line` instance on `BENT_LINE`
+            // does not fit anyway, so the case would have passed with the ceiling's guard deleted.
+            // It did -- the mutation survived until this line said `LINE_CENTER`.
+            "a NaN bend ceiling" to lineCandidate(
+                line = BENT_LINE,
+                placement = LabelPlacement.LINE_CENTER,
+                maxAngleDegrees = Double.NaN,
+            ),
             "a NaN padding" to lineCandidate(padding = Double.NaN),
             "a negative padding" to lineCandidate(padding = -1.0),
             "a NaN spacing" to lineCandidate(symbolSpacing = Double.NaN),

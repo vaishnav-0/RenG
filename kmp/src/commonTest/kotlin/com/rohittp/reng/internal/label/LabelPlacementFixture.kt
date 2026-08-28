@@ -229,6 +229,27 @@ internal val SHORT_LINE_GLYPH_LOCAL_X: DoubleArray = doubleArrayOf(-14.0, -3.5, 
 internal fun shortLineGlyphRow(y: Double = -13.25, scale: Double = 0.75): List<LabelGlyphQuad> =
     SHORT_LINE_GLYPH_LOCAL_X.map { x -> LabelGlyphQuad(entryIndex = 0, x = x, y = y, scale = scale) }
 
+/**
+ * Three glyphs spanning `[-48, +21]`, wide enough that a `line-center` instance on [LONG_LINE]
+ * straddles **both** of its vertices -- the one case where the total turn across the label and the
+ * largest turn between two neighbouring glyphs are different numbers.
+ */
+internal val WIDE_LINE_GLYPH_LOCAL_X: DoubleArray = doubleArrayOf(-48.0, -20.0, 12.0)
+
+/** The glyph row [WIDE_LINE_GLYPH_LOCAL_X] describes. */
+internal fun wideLineGlyphRow(y: Double = -13.25): List<LabelGlyphQuad> =
+    WIDE_LINE_GLYPH_LOCAL_X.map { x -> LabelGlyphQuad(entryIndex = 0, x = x, y = y, scale = 0.75) }
+
+/**
+ * The same row wrapped onto two lines, the way Rentile lays a label out past `text-max-width`: the
+ * second row restarts at the label's own left edge, one line height further down.
+ *
+ * In array order the pair straddling the row break jumps from the label's right edge back to its
+ * left, which is a turn no reader ever sees.
+ */
+internal fun twoRowLineGlyphs(): List<LabelGlyphQuad> =
+    wideLineGlyphRow() + wideLineGlyphRow(y = -13.25 + 24.0)
+
 /** Each cell's width in label-local units: the entry's own width at the row's scale. */
 internal const val LINE_GLYPH_CELL_WIDTH: Double = 12.0 * 0.75
 
@@ -269,6 +290,22 @@ internal val BROKEN_LINE: List<LabelLinePoint> = listOf(
     ),
     LONG_LINE[2],
     LONG_LINE[3],
+)
+
+/**
+ * A line from a vertex **just** in front of the near plane to the shared anchor, which projects to a
+ * run about 390,000 pixels long.
+ *
+ * Nothing about it is exotic: it is a road passing beneath a camera pitched at 52 degrees, and its
+ * far vertex has a `w` of 1.05 logical pixels. It is here because a projected run's length is
+ * bounded by nothing the caller sets, which is what `MAXIMUM_ANCHORS_PER_RUN` exists for.
+ */
+internal val NEAR_PLANE_LINE: List<LabelLinePoint> = listOf(
+    LabelLinePoint(longitude = 2.2500, latitude = 48.84655),
+    LabelLinePoint(
+        longitude = PLACEMENT_ANCHOR.unwrappedLongitude,
+        latitude = PLACEMENT_ANCHOR.latitude,
+    ),
 )
 
 /** One line candidate: [placementCandidate] with the line-only fields exposed. */
