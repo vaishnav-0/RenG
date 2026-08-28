@@ -269,6 +269,46 @@ internal class OperationRegistry(
     private val spriteRendezvous = SpriteRendezvous()
     private val spritePairJoin = SuspendJoin<SpriteGroupKey, SpriteAtlasManifest?>()
 
+    private val spriteManifestMutex = Mutex()
+    private var latchedSpriteManifest: SpriteAtlasManifest? = null
+
+    /**
+     * The sprite atlas this invocation's style declared, as [spritePairJointManifest] parsed it, or
+     * `null` when this invocation never held both members of a pair or the pair was not jointly valid.
+     *
+     * **It is the only route by which `LabelIconRef.imageName` becomes atlas pixels.** Rentile exposes
+     * no public sprite atlas -- the name is an opaque key into resources the consumer owns -- so a
+     * consumer that wants to draw an icon has to have kept the manifest it proxied. The gate above
+     * parses one anyway to decide whether the pair may be cached, which is why this costs nothing
+     * beyond a reference.
+     *
+     * A copy taken under the same lock the writer takes, exactly as [refusedGlyphLookupDigests] is, so
+     * the reader gets a happens-before edge on it. Read after the invocation's work has completed and
+     * before its [OperationRegistry] is discarded (ADR 0016): the manifest lives for one preparation,
+     * which is the same lifetime as the frame that uses it.
+     */
+    suspend fun spriteAtlasManifest(): SpriteAtlasManifest? =
+        spriteManifestMutex.withLock { latchedSpriteManifest }
+
+    /**
+     * Runs the pair's joint gate exactly once per group and keeps what it returned.
+     *
+     * Both callers reach the same latch: [approveSpriteMemberWrite], which needs the verdict, and
+     * [observeSpritePairFromStore], which needs nothing and exists only so that a pair served entirely
+     * out of the consumer's Store still produces a manifest. Without the second one an icon would
+     * resolve on the first frame after a cold start and on no frame after that, which is the failure
+     * mode a reader would blame on placement rather than on caching.
+     */
+    private suspend fun jointSpriteManifest(
+        member: SpriteMemberKey,
+        json: SpriteMemberContent,
+        image: SpriteMemberContent,
+    ): SpriteAtlasManifest? {
+        val manifest = spritePairJoin.run(member.group) { spritePairJointManifest(json.bytes, image.bytes) }
+        if (manifest != null) spriteManifestMutex.withLock { latchedSpriteManifest = manifest }
+        return manifest
+    }
+
     /**
      * Declares the static prelookup routes this invocation may need. Idempotent for an identical
      * repeat registration (two occurrences joining the same route); throws if a second, genuinely
@@ -656,14 +696,37 @@ internal class OperationRegistry(
         // Latched per pair, so both members reach the same verdict and neither re-derives it -- and what
         // is latched is the pair's parsed manifest rather than a bare verdict, so the geometry is parsed
         // exactly once per pair. This path reads only whether one came back.
-        return spritePairJoin.run(member.group) {
-            spritePairJointManifest(jsonMember.bytes, imageMember.bytes)
-        } != null
+        return jointSpriteManifest(member, jsonMember, imageMember) != null
     }
 
     private suspend fun contributeSpriteMember(route: ResourceRouteKey, validated: StoredRawResource) {
         val member = spriteMemberKeyOf(route) ?: return
         spriteRendezvous.contribute(member, SpriteMemberContent(validated.contentDigest, validated.bytes))
+        observeSpritePairFromStore(member, validated)
+    }
+
+    /**
+     * Runs the joint gate for a pair whose members both came out of the consumer's Store, so that
+     * [spriteAtlasManifest] has something to hand back on a frame that fetched nothing.
+     *
+     * **It peeks at the sibling and never waits for it**, which is the whole of why it is safe here.
+     * [approveSpriteMemberWrite] may park at the rendezvous because a write is always preceded by a
+     * fetch that its sibling's fetch is running concurrently with; a store *read* has no such
+     * guarantee -- Rentile may serve one member from the Store and fetch the other, or read them one
+     * after the other -- so a read that parked could wait for an arrival that only its own return
+     * would cause. Peeking makes the *later* of the two contributors compute the manifest and the
+     * earlier one do nothing, which covers every interleaving without a wait.
+     *
+     * Nothing here can fail the read: a `null` sibling, a `null` manifest and a pair that never
+     * completes are all simply an invocation with no icon geometry.
+     */
+    private suspend fun observeSpritePairFromStore(member: SpriteMemberKey, validated: StoredRawResource) {
+        val sibling = SpriteMemberKey(member.group, siblingSpriteClassOf(member.resourceClass))
+        val theirs = spriteRendezvous.peekContent(sibling) ?: return
+        val mine = SpriteMemberContent(validated.contentDigest, validated.bytes)
+        val jsonMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_JSON) mine else theirs
+        val imageMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_IMAGE) mine else theirs
+        jointSpriteManifest(member, jsonMember, imageMember)
     }
 
     /** Latches a sprite member as one that will contribute no content, releasing a parked sibling. */
@@ -1118,6 +1181,16 @@ private class SpriteRendezvous {
         }
         signal?.complete(Unit)
     }
+
+    /**
+     * [member]'s content if it has already arrived, without waiting for it if it has not.
+     *
+     * The non-blocking counterpart of [awaitContent], for a caller that may not park -- see
+     * [OperationRegistry.observeSpritePairFromStore]. A `null` covers both "not latched yet" and
+     * "latched as contributing none", because neither gives the caller a pair to work with.
+     */
+    suspend fun peekContent(member: SpriteMemberKey): SpriteMemberContent? =
+        mutex.withLock { slots[member]?.content }
 
     /** Suspends until [member] is latched either way; `null` means no content will ever arrive. */
     suspend fun awaitContent(member: SpriteMemberKey): SpriteMemberContent? {

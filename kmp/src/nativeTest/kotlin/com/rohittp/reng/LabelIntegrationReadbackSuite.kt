@@ -5,6 +5,7 @@ import com.rohittp.reng.internal.firewall.LABEL_MVT_BYTES
 import com.rohittp.reng.internal.firewall.LABEL_SANS_STACK
 import com.rohittp.reng.internal.firewall.LABEL_SERIF_STACK
 import com.rohittp.reng.internal.firewall.LABEL_TILE_TEMPLATE
+import com.rohittp.reng.internal.firewall.VALID_TILE_PNG
 import com.rohittp.reng.internal.firewall.labelGlyphRange
 import com.rohittp.reng.internal.firewall.labelGlyphUrls
 import com.rohittp.reng.internal.gl.GL_COLOR_ATTACHMENT0
@@ -80,6 +81,7 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
         assertAStyleWithNoSymbolLayersDrawsNothing(binding, probe, target)
         assertDrawLabelsFalseDrawsNothing(binding, probe, target)
         assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
+        assertAnIconClaimsTheScreenSpaceItsSymbolOccupies(binding, probe, target)
     } finally {
         binding.deleteFramebuffers(1, intArrayOf(target))
     }
@@ -336,6 +338,78 @@ private fun assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(
     }
 }
 
+/**
+ * E-labels task 12's own end-to-end gate: **an icon takes screen space, and the text that wanted that
+ * space loses it.**
+ *
+ * Nothing here draws the icon -- RenG has no pipeline that samples a sprite atlas, and that gap is
+ * recorded rather than hidden -- so the icon's *effect* is the only evidence available, and it is
+ * exactly the evidence that matters. Placement, geometry and the coupling all have unit cases of their
+ * own; what those cannot show is that the manifest the firewall parsed while the style compiled
+ * actually reaches the pass. Six things have to be alive in sequence for this case to pass: the style
+ * declaring a sprite, the firewall proxying and jointly gating the pair, the registry retaining what it
+ * parsed, the host handing it out before the invocation is discarded, `prepare()` carrying it to
+ * placement, and placement resolving `imageName` against it. Any one of them dead and the town label
+ * survives.
+ *
+ * **The control is the same style with `icon-image` removed and nothing else changed** -- the sprite is
+ * still declared, still fetched and still gated, and the place layer still carries the sort key that
+ * puts it first. So the case is a statement about the icon rather than about the sprite, the priority
+ * or the fixture: without `icon-image` both labels are in the frame, and the only edit that removes the
+ * town one is the icon that claims its pixels.
+ *
+ * The icon is 120 screen pixels across a 128-pixel frame -- a two-pixel sprite entry at `icon-size: 60`
+ * -- because the town label sits 40 pixels east of the place anchor and a 60-pixel icon would stop just
+ * short of it. The place label must still be in the frame, which is what distinguishes "the icon
+ * claimed space" from "the whole symbol collapsed": neither half is optional here, so a symbol that
+ * lost its icon would take its own text with it and the assertion below would fail rather than pass
+ * for the wrong reason.
+ */
+private fun assertAnIconClaimsTheScreenSpaceItsSymbolOccupies(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+) {
+    val withoutIcon = labelRenderer(binding, probe, SPRITE_WITHOUT_ICON_STYLE_JSON)
+    try {
+        val renderTarget = withoutIcon.mintRenderTarget(FramebufferName(target.toUInt()))
+        var frame = clearAndDraw(binding, withoutIcon, renderTarget, target, labelPlan(0L))
+        for (frameIndex in 1L until LABEL_FADE_RAMP.toLong()) {
+            frame = clearAndDraw(binding, withoutIcon, renderTarget, target, labelPlan(frameIndex))
+        }
+        assertTrue(
+            frame.nearest(PLACE_COLOUR) != null && frame.nearest(TOWN_COLOUR) != null,
+            "the control must draw both labels, or the icon case proves nothing\n" + frame.asciiMap(),
+        )
+    } finally {
+        withoutIcon.close()
+    }
+
+    val withIcon = labelRenderer(binding, probe, ICON_STYLE_JSON)
+    try {
+        val renderTarget = withIcon.mintRenderTarget(FramebufferName(target.toUInt()))
+        var frame = clearAndDraw(binding, withIcon, renderTarget, target, labelPlan(0L))
+        for (frameIndex in 1L until LABEL_FADE_RAMP.toLong()) {
+            frame = clearAndDraw(binding, withIcon, renderTarget, target, labelPlan(frameIndex))
+        }
+        val placeSample = frame.nearest(PLACE_COLOUR)
+            ?: throw AssertionError(
+                "the symbol carrying the icon must still draw its own text -- neither half is " +
+                    "optional, so a symbol that failed to resolve its icon would be absent entirely" +
+                    "\n" + frame.asciiMap(),
+            )
+        assertNear(placeSample, PLACE_ANCHOR_X, ANCHOR_Y, "the icon-bearing place label")
+        assertEquals(
+            null,
+            frame.nearest(TOWN_COLOUR)?.describe(),
+            "the town label must lose its place to the icon's collision box, but a pixel carrying " +
+                TOWN_COLOUR.describe() + " is still in the frame\n" + frame.asciiMap(),
+        )
+    } finally {
+        withIcon.close()
+    }
+}
+
 // ---- the fixture ---------------------------------------------------------------------------------
 
 internal const val LABEL_INTEGRATION_PIXELS: Int = 128
@@ -435,9 +509,10 @@ private fun symbolLayer(
     stack: String,
     colour: String,
     translateX: Int,
+    extraLayout: String = "",
 ): String =
     """{"id":"$id","type":"symbol","source":"v","source-layer":"$sourceLayer",""" +
-        """"layout":{"text-field":"{name}","text-font":["$stack"],"text-size":16},""" +
+        """"layout":{"text-field":"{name}","text-font":["$stack"],"text-size":16$extraLayout},""" +
         """"paint":{"text-color":"$colour","text-translate":[$translateX,0]}}"""
 
 /**
@@ -447,9 +522,9 @@ private fun symbolLayer(
  * than drawing it -- which is what makes a background layer the difference between a ground case that
  * discriminates and one that cannot.
  */
-private fun integrationStyle(layers: List<String>): String =
+private fun integrationStyle(layers: List<String>, sprite: String = ""): String =
     """{"version":8,"name":"reng-label-integration",""" +
-        """"glyphs":"$LABEL_GLYPH_TEMPLATE",""" +
+        """"glyphs":"$LABEL_GLYPH_TEMPLATE",""" + sprite +
         """"sources":{"v":{"type":"vector","tiles":["$LABEL_TILE_TEMPLATE"],"minzoom":0,"maxzoom":14}},""" +
         """"layers":[{"id":"bg","type":"background","paint":{"background-color":"#1040c0"}}""" +
         layers.joinToString("") { ",$it" } + """]}"""
@@ -469,6 +544,48 @@ private val ONE_LAYER_STYLE_JSON: String = integrationStyle(listOf(PLACE_LAYER))
  * source, its glyphs and the shared background -- only the thing that produces candidates is missing.
  */
 private val NO_SYMBOL_STYLE_JSON: String = integrationStyle(emptyList())
+
+/** The sprite base Rentile appends `.json` and `.png` to, exactly as `appendSpriteExtension` does. */
+private const val INTEGRATION_SPRITE_BASE: String = "https://sprites.example/integration"
+
+private val SPRITE_MEMBER: String = """"sprite":"$INTEGRATION_SPRITE_BASE","""
+
+/**
+ * One entry filling the whole 2-by-2 atlas image, which is what lets `icon-size` alone decide the
+ * icon's screen extent: a 2-pixel entry at `pixelRatio` 1 and `icon-size` 60 is 120 screen pixels
+ * across a 128-pixel frame, wide enough to reach the town label 40 pixels east of it.
+ */
+private val INTEGRATION_SPRITE_JSON: ByteArray =
+    """{"marker":{"x":0,"y":0,"width":2,"height":2}}""".encodeToByteArray()
+
+/**
+ * `symbol-sort-key` puts the place layer's symbol first, ahead of the town layer that is declared
+ * after it, so the icon reaches the collision index before the label it is meant to displace does. It
+ * is in the control as well as in the icon style, so the case turns on `icon-image` and nothing else.
+ */
+private const val PLACE_SORT_KEY_LAYOUT: String = ""","symbol-sort-key":10"""
+
+private const val ICON_LAYOUT: String = ""","icon-image":"marker","icon-size":60"""
+
+private val SPRITE_WITHOUT_ICON_STYLE_JSON: String = integrationStyle(
+    listOf(symbolLayer("place", "place", LABEL_SANS_STACK, "#ff00ff", 0, PLACE_SORT_KEY_LAYOUT), TOWN_LAYER),
+    SPRITE_MEMBER,
+)
+
+private val ICON_STYLE_JSON: String = integrationStyle(
+    listOf(
+        symbolLayer(
+            "place",
+            "place",
+            LABEL_SANS_STACK,
+            "#ff00ff",
+            0,
+            PLACE_SORT_KEY_LAYOUT + ICON_LAYOUT,
+        ),
+        TOWN_LAYER,
+    ),
+    SPRITE_MEMBER,
+)
 
 /**
  * The fixture's three Glyph Ranges with a **saturated** distance field.
@@ -503,6 +620,8 @@ private class IntegrationTransport(private val styleJson: String) : Transport {
             url == labelGlyphUrls()[0] -> SANS_RANGE_0
             url == labelGlyphUrls()[1] -> SANS_RANGE_256
             url == labelGlyphUrls()[2] -> SERIF_RANGE_0
+            url == "$INTEGRATION_SPRITE_BASE.json" -> INTEGRATION_SPRITE_JSON
+            url == "$INTEGRATION_SPRITE_BASE.png" -> VALID_TILE_PNG
             else -> null
         } ?: return TransportResponse(statusCode = 404, body = ByteArray(0))
         return TransportResponse(
