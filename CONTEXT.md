@@ -23,7 +23,17 @@ The view of a **Frame Plan**, with geographic latitude, unwrapped longitude, zoo
 Latitude and longitude are finite degrees; latitude lies in `[-90, 90]`, while longitude preserves the
 selected world copy and is never wrapped or clamped by RenG. `MERCATOR` preparation further requires
 latitude in `[-85.0511287798066, 85.0511287798066]` and a derived world-copy index in
-`[-16384, 16384]`; `copyIndex = floor((unwrappedLongitude + 180) / 360)`. Zoom is a finite fractional
+`[-16384, 16384]`; `copyIndex = floor((unwrappedLongitude + 180) / 360)`.
+
+On a globe the winding count is **carried and inert**: a sphere has no seam and no world copies, so a camera
+at longitude 400 sees exactly what one at 40 sees. The turns survive anyway, because they are what makes a
+consumer's own interpolation continuous — a camera animated from 170 to 190 pans smoothly east in either
+projection precisely because the number keeps counting, where a normalised field would ask the consumer to
+handle the wrap that Mercator handles for them. A consequence worth knowing rather than rediscovering: two
+globe frames differing only in winding render identically and still carry different frame identities, since
+a **Frame Plan**'s identity is a digest of the plan and never of the picture.
+
+Zoom is a finite fractional
 value in `[0, 22]`; Mercator has `512` logical pixels at zoom zero and scales by `2^zoom`, independently of tile
 image resolution. Bearing is finite clockwise degrees from true north in `[0, 360)`. Pitch is finite degrees
 in `[0, 90)`, where `0` looks straight down and increasing values tilt toward the horizon. RenG uses a

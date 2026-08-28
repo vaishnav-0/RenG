@@ -306,9 +306,17 @@ note already sized for 512 instances.
    identical; the cost is bounded by the viewport rather than by the input.
 
    This is the same shape as the ground: a tile set is chosen from the camera, not from the world.
-3. **`Camera.unwrappedLongitude` on a sphere.** Longitude is genuinely periodic on a globe and the
-   antimeridian is not a seam, so "unwrapped" buys nothing there — but it costs nothing either, and whether
-   the two modes should agree on what a longitude of 400° means is unsettled.
+3. **`Camera.unwrappedLongitude` on a sphere — settled 2026-08-29.** The field keeps its meaning, its name
+   and its value in both modes. A globe renders `longitude mod 360`, so the winding count is **inert** to the
+   picture; it survives because it is what keeps a *consumer's* interpolation continuous. A camera animated
+   from 170° to 190° pans smoothly east in either projection precisely because the number keeps counting,
+   where normalising would turn that into 170° → −170° and leave a naive tween spinning the long way round
+   the planet — in the one product this renderer exists for.
+
+   Recorded in `CONTEXT.md`'s **Camera** entry rather than left to be re-derived, including the consequence
+   that two globe frames differing only in winding render identically and still carry different frame
+   identities. That is not new and not wrong: a Frame Plan's identity is a digest of the plan, never of the
+   picture, and LOD hysteresis already made two identically-identified frames render differently.
 4. **The gate.** `docs/decomposition.md` gives G "golden baselines at both projection modes", and Cycle J
    delivers baselines *after* G. E8 settled the analogous question for E-labels by keeping J last, so G
    inherits the same treatment and its gate row needs rewriting. A measured number bears on the replacement:
