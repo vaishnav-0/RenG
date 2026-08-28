@@ -236,6 +236,46 @@ internal class ResourceKeyDeriver(
         )
     }
 
+    /**
+     * The identity of one **packed glyph atlas**: the single texture a Rentile
+     * `LabelCandidateBatch` hands over, assembled out of the Glyph Ranges the firewall fetched for it.
+     *
+     * **Keyed on [atlasContentKey] alone, and that is a content input rather than an index.** The
+     * distinction [basemapTile] draws applies here too and lands the other way round: RenG must never
+     * *index* by an engine key, because an engine release that changed its derivation would silently
+     * invalidate the whole cache -- but feeding one in as content is exactly what `styleDigest` already
+     * does for a rendered tile. `LabelGlyphAtlas.contentKey` is a digest over the packed glyph set, its
+     * metrics, its decoded SDF bitmaps and the atlas dimensions, so it is a complete description of the
+     * texture's bytes, and two frames whose atlases carry the same glyphs genuinely are the same
+     * upload.
+     *
+     * **No style digest, deliberately.** A rendered tile takes one because two styles paint the same
+     * ground differently; an atlas does not, because the same font stack packed for two styles is the
+     * same pixels. Adding one would only stop two styles sharing a texture they could have shared.
+     *
+     * The resulting key is `EXTERNAL`/[ResourceClass.BASEMAP_GLYPH_RANGE] rather than a kind of its
+     * own: [com.rohittp.reng.ResourceKind] is public API and an atlas is the GPU residency of exactly
+     * that class of bytes. There is no [RawResourceKey] -- nothing fetches an atlas.
+     */
+    internal fun glyphAtlas(atlasContentKey: String): DerivedResourceKey {
+        val identity = derive(
+            CanonicalBinary.root(CanonicalRootKind.GLYPH_ATLAS) {
+                field(1, CanonicalBinary.u16(ResourceKind.EXTERNAL.wireValue))
+                field(2, CanonicalBinary.u16(ResourceClass.BASEMAP_GLYPH_RANGE.wireValue))
+                field(3, CanonicalBinary.exactUtf8(atlasContentKey))
+            },
+        )
+        return DerivedResourceKey(
+            key = ResourceKey(
+                kind = ResourceKind.EXTERNAL,
+                stableId = identity.digest.lowercaseHex,
+                resourceClass = ResourceClass.BASEMAP_GLYPH_RANGE,
+            ),
+            rawKey = null,
+            identity = identity,
+        )
+    }
+
     private fun derive(canonicalBytes: CanonicalBytes): HashedCanonicalBytes = HashedCanonicalBytes(
         digest = sha256.digest(canonicalBytes),
         canonicalBytes = canonicalBytes,
