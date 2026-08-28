@@ -11,7 +11,14 @@ import com.rohittp.rentile.LabelLayerStyle
 import com.rohittp.rentile.LabelPlacement
 import com.rohittp.rentile.SymbolOverlap
 import com.rohittp.rentile.TileId
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.asinh
+import kotlin.math.atan
+import kotlin.math.floor
+import kotlin.math.round
+import kotlin.math.sinh
+import kotlin.math.tan
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -79,23 +86,87 @@ class LabelFadeTest {
     }
 
     @Test
+    fun aLabelKeepsItsIdentityWhenTheSelectedLevelOfDetailChanges() {
+        // The defect the harness pass found, in the smallest shape that shows it: one place on the
+        // earth, delivered by the pyramid's z13 tile and then by its z14 tile, as `observeMercatorLod`
+        // crosses a boundary under a camera that is merely zooming. Task 13 scoped the identity by
+        // `sourceTile`, so every label in view was renamed at every crossing and the whole text layer
+        // restarted its fade from zero.
+        val coarse = deliveredAt(COARSE_LOD)
+        val fine = deliveredAt(FINE_LOD)
+
+        // **Three things the fixture has to be, and the second is the one that matters.** The tile
+        // has to change, or the case passes against the field set it exists to replace. The anchor
+        // has to change *too* -- a generator quantises each zoom's geometry to that zoom's own grid, so
+        // dropping the tile and comparing the two anchors exactly would leave the map blinking on
+        // every label whose coordinates were re-rounded, which is most of them. And the change has
+        // to be a re-rounding rather than a different place, or the case is asking the identity to
+        // merge two labels instead of to recognise one.
+        assertNotEquals(coarse.tile, fine.tile)
+        val latitudeDrift = abs(coarse.position.latitude - fine.position.latitude)
+        val longitudeDrift = abs(coarse.position.unwrappedLongitude - fine.position.unwrappedLongitude)
+        assertTrue(latitudeDrift > 0.0, "the fixture's latitude survived the re-rounding unchanged")
+        assertTrue(longitudeDrift > 0.0, "the fixture's longitude survived the re-rounding unchanged")
+        assertTrue(
+            latitudeDrift <= FINE_TILE_UNIT_DEGREES && longitudeDrift <= FINE_TILE_UNIT_DEGREES,
+            "drifted $latitudeDrift, $longitudeDrift degrees, which is more than a re-rounding",
+        )
+
+        val before = fadeBatch(placementCandidate(position = coarse.position, sourceTile = coarse.tile))
+        val after = fadeBatch(placementCandidate(position = fine.position, sourceTile = fine.tile))
+
+        assertEquals(
+            deriveLabelIdentity(before, 0, lineRepeat = null),
+            deriveLabelIdentity(after, 0, lineRepeat = null),
+        )
+
+        // And read through the fade at a step where a carried opacity and a restarted one differ:
+        // three frames at the coarse LOD and one at the fine one, so a label whose identity survived
+        // the crossing reads 0.4 and one that was renamed by it reads 0.1.
+        val camera = resolvedPlacementCamera()
+        var state = LabelFadeState.EMPTY
+        repeat(3) { state = advanceLabelFade(state, before, placeLabels(camera, before)).nextState }
+        val crossed = advanceLabelFade(state, after, placeLabels(camera, after))
+
+        assertEquals(0.4f, crossed.labels.single().opacity)
+        assertEquals(1, crossed.nextState.entryCount)
+    }
+
+    @Test
     fun identitySeparatesLabelsThatDifferInWhatTheyAre() {
         // The other silent failure: identities that collide, so one label inherits another's
         // opacity. Each variant below changes exactly one thing a human would call a different
-        // label, and all eight must land on eight identities.
+        // label, and all seven must land on seven identities.
+        //
+        // **Three variants that used to be here have gone, and their absence is the fix.** They
+        // varied the source tile's z, x and y with the anchor held fixed, and under the field set
+        // this file now derives they collapse onto one identity -- which is the point: a place is
+        // the same place whichever tile of whichever LOD delivered it. What separates two labels in
+        // two tiles is that they are in different *places*, and
+        // `sameNamedFeaturesInAdjacentTilesKeepSeparateIdentities` is where that is asserted.
         val base = fadeBatch(placementCandidate())
         val variants = listOf(
             base,
             fadeBatch(placementCandidate(), layers = listOf(labelLayer("place-town"))),
-            fadeBatch(placementCandidate(sourceTile = TileId(z = 14, x = 4237, y = 2887))),
-            fadeBatch(placementCandidate(sourceTile = TileId(z = 13, x = 4238, y = 2887))),
-            fadeBatch(placementCandidate(sourceTile = TileId(z = 13, x = 4237, y = 2888))),
             fadeBatch(placementCandidate(position = OTHER_ANCHOR)),
+            // The next two pair with the one above rather than only with `base`: one differs from it
+            // in latitude alone and the other in longitude alone, so a derivation that read one
+            // coordinate and dropped the other would still separate every variant from `base` and
+            // would collide here.
             fadeBatch(
                 placementCandidate(
                     position = GeographicPosition(
                         latitude = PLACEMENT_ANCHOR.latitude,
                         unwrappedLongitude = OTHER_ANCHOR.unwrappedLongitude,
+                        altitudeMetres = 0.0,
+                    ),
+                ),
+            ),
+            fadeBatch(
+                placementCandidate(
+                    position = GeographicPosition(
+                        latitude = OTHER_ANCHOR.latitude,
+                        unwrappedLongitude = PLACEMENT_ANCHOR.unwrappedLongitude,
                         altitudeMetres = 0.0,
                     ),
                 ),
@@ -106,6 +177,34 @@ class LabelFadeTest {
 
         val identities = variants.map { assertNotNull(deriveLabelIdentity(it, 0, lineRepeat = null)) }
         assertEquals(variants.size, identities.toSet().size)
+    }
+
+    @Test
+    fun sameNamedFeaturesInAdjacentTilesKeepSeparateIdentities() {
+        // The paired half of the LOD case above, and the one that stops that fix from overshooting.
+        // Dropping the source tile leaves the anchor doing all of the separating, so the question
+        // this case asks is the one the tile used to answer: two features with one name, one layer
+        // and one LOD, delivered by neighbouring tiles, must still be two labels.
+        val west = deliveredAt(COARSE_LOD, longitude = WEST_OF_SEAM_LONGITUDE)
+        val east = deliveredAt(COARSE_LOD, longitude = EAST_OF_SEAM_LONGITUDE)
+
+        // Non-vacuity: they really are in adjacent tiles at one zoom, which is the arrangement the
+        // old field set separated by provenance and this one has to separate by position.
+        assertEquals(west.tile.z, east.tile.z)
+        assertEquals(west.tile.x + 1, east.tile.x)
+        assertEquals(west.tile.y, east.tile.y)
+
+        assertNotEquals(identityOf(west), identityOf(east))
+
+        // And the other side of the same statement, without which the assertion above is satisfied
+        // by any derivation that reads the anchor at full precision -- including the one that leaves
+        // the map blinking. The identity resolves places to a grid, so a pair well inside one cell
+        // of it is deliberately **one** label; 2.5 m apart at this latitude, in the same tile.
+        val near = deliveredAt(COARSE_LOD, longitude = NEAR_PAIR_FIRST_LONGITUDE)
+        val alsoNear = deliveredAt(COARSE_LOD, longitude = NEAR_PAIR_SECOND_LONGITUDE)
+        assertEquals(near.tile, alsoNear.tile)
+        assertNotEquals(near.position.unwrappedLongitude, alsoNear.position.unwrappedLongitude)
+        assertEquals(identityOf(near), identityOf(alsoNear))
     }
 
     @Test
@@ -454,9 +553,9 @@ class LabelFadeTest {
 
     @Test
     fun twoCopiesOfOneLabelShareOneFadeRatherThanRunningItTwice() {
-        // A feature a source duplicates, or one a tile buffer repeats, derives one identity. If the
-        // rise were read from the map being built rather than from the previous state, the fade
-        // would run at twice speed on exactly the labels that are duplicated.
+        // A feature a source duplicates, or a namesake inside the same cell of the anchor grid,
+        // derives one identity. If the rise were read from the map being built rather than from the
+        // previous state, the fade would run at twice speed on exactly the labels that collide.
         val camera = resolvedPlacementCamera()
         val batch = fadeBatch(
             placementCandidate(overlap = SymbolOverlap.ALWAYS, ignorePlacement = true),
@@ -506,6 +605,97 @@ class LabelFadeTest {
         assertEquals(5, next.nextState.stepOf(identity))
         assertEquals(0, next.labels.size)
     }
+}
+
+/**
+ * The two levels of detail the case crosses. Adjacent, because that is the only crossing
+ * `observeMercatorLod` can make: it moves the selected LOD one step at a time.
+ */
+private const val COARSE_LOD: Int = 13
+
+private const val FINE_LOD: Int = 14
+
+/** Every vector tile in the corpus this cycle measured carries `extent = 4096`. */
+private const val TILE_EXTENT: Int = 4096
+
+/**
+ * One tile-extent unit at [FINE_LOD], in degrees of longitude, and the exact bound on how far a
+ * re-rounding can move an anchor: the two zooms' grids are nested, so an anchor rounded to each of
+ * them independently lands at most one **fine** unit apart.
+ */
+private const val FINE_TILE_UNIT_DEGREES: Double = 360.0 / ((1 shl FINE_LOD) * TILE_EXTENT).toDouble()
+
+/**
+ * A true position a few metres from [PLACEMENT_ANCHOR], chosen so that the re-rounding below moves
+ * **both** coordinates and so that neither of them lands on a cell centre or a cell edge of the
+ * identity's own anchor grid. A centred fixture is the symmetry point this suite keeps finding
+ * vacuous checks at, and an edge one would be measuring the residual rather than the rule.
+ */
+private const val TRUE_ANCHOR_LATITUDE: Double = 48.856877
+
+private const val TRUE_ANCHOR_LONGITUDE: Double = 2.309967
+
+/**
+ * The seam between [COARSE_LOD] tiles 4148 and 4149 -- and, because the identity's anchor grid is
+ * nested inside every tile grid from zoom 8 up, exactly a cell boundary of that grid as well. So a
+ * pair straddling it is in two tiles *and* in two cells, which is what makes the two halves of
+ * `sameNamedFeaturesInAdjacentTilesKeepSeparateIdentities` the same statement read both ways.
+ */
+private const val TILE_SEAM_LONGITUDE: Double = 4149.0 / 8192.0 * 360.0 - 180.0
+
+/** One cell of the identity's anchor grid, in degrees of longitude: 38 m at the equator, 25 m here. */
+private const val ANCHOR_CELL_DEGREES: Double = 360.0 / 1_048_576.0
+
+private const val WEST_OF_SEAM_LONGITUDE: Double = TILE_SEAM_LONGITUDE - 0.75 * ANCHOR_CELL_DEGREES
+
+private const val EAST_OF_SEAM_LONGITUDE: Double = TILE_SEAM_LONGITUDE + 0.75 * ANCHOR_CELL_DEGREES
+
+/** A tenth of a cell apart, and placed around a cell's middle rather than against its edge. */
+private const val NEAR_PAIR_FIRST_LONGITUDE: Double = TILE_SEAM_LONGITUDE + 1.45 * ANCHOR_CELL_DEGREES
+
+private const val NEAR_PAIR_SECOND_LONGITUDE: Double = TILE_SEAM_LONGITUDE + 1.55 * ANCHOR_CELL_DEGREES
+
+/** One delivered anchor's identity, as a batch carrying it and nothing else would derive it. */
+private fun identityOf(delivered: DeliveredAnchor): LabelIdentity? = deriveLabelIdentity(
+    fadeBatch(placementCandidate(position = delivered.position, sourceTile = delivered.tile)),
+    candidateIndex = 0,
+    lineRepeat = null,
+)
+
+/** The source tile and the anchor a vector tile at one zoom delivers for one true position. */
+private class DeliveredAnchor(val tile: TileId, val position: GeographicPosition)
+
+/**
+ * What the pyramid hands Rentile at [zoom], derived rather than pasted so that a reviewer can check
+ * it against `LabelCandidateAssembler`'s own two lines: a feature's geometry is stored as integers
+ * in `[0, extent)` of its tile, and the anchor Rentile reports is that integer converted back --
+ * `(tileX + x / extent) / 2^zoom * 360 - 180`, and the Mercator inverse of the same in y. Each zoom
+ * of the pyramid rounds the same true position to its own grid, so the anchor RenG sees for one
+ * place is a different number at every LOD. Measured on real tiles over San Francisco, 70% to 85%
+ * of anchors move across an adjacent-LOD crossing, by at most one tile-extent unit at the finer of
+ * the two -- 0.6 m at z13, 0.3 m at z14.
+ */
+private fun deliveredAt(
+    zoom: Int,
+    latitude: Double = TRUE_ANCHOR_LATITUDE,
+    longitude: Double = TRUE_ANCHOR_LONGITUDE,
+): DeliveredAnchor {
+    val dimension = (1 shl zoom).toDouble()
+    val worldX = (longitude + 180.0) / 360.0 * dimension
+    val worldY = (1.0 - asinh(tan(latitude * PI / 180.0)) / PI) / 2.0 * dimension
+    val tileX = floor(worldX)
+    val tileY = floor(worldY)
+    val pixelX = round((worldX - tileX) * TILE_EXTENT).coerceIn(0.0, TILE_EXTENT - 1.0)
+    val pixelY = round((worldY - tileY) * TILE_EXTENT).coerceIn(0.0, TILE_EXTENT - 1.0)
+    return DeliveredAnchor(
+        tile = TileId(z = zoom, x = tileX.toInt(), y = tileY.toInt()),
+        position = GeographicPosition(
+            latitude = atan(sinh(PI * (1.0 - 2.0 * (tileY + pixelY / TILE_EXTENT) / dimension))) *
+                180.0 / PI,
+            unwrappedLongitude = (tileX + pixelX / TILE_EXTENT) / dimension * 360.0 - 180.0,
+            altitudeMetres = 0.0,
+        ),
+    )
 }
 
 private const val FRAMES_SWEPT: Int = 200
