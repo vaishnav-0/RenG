@@ -39,8 +39,10 @@ import kotlin.math.sin
  *     placed one. Every map renderer resolves it the same way, and a style that does not want it
  *     says `text-overlap: always`.
  *
- * What is *not* dropped silently is the count: task 14's `LABEL_CONTENT_EXCLUDED` diagnostic reports
- * engine-side exclusions, and this pass's own losses are visible in the placed list's length. This
+ * What is *not* dropped silently is the *fact*: `LABEL_CONTENT_EXCLUDED` reports that the engine excluded
+ * label content, carrying a code and a severity and nothing more -- no count, no layer, no reason, because
+ * ADR 0036 lets only those two fields cross the boundary. This pass's own losses are separate and are
+ * visible only in the placed list's length. This
  * comment exists because a reader who knows the house rule will otherwise read the `continue` in
  * [placeLabels] as a bug.
  *

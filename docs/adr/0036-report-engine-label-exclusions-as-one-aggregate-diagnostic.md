@@ -58,3 +58,29 @@ deferring that question once the version pin moved, and it stays deferred: what 
 covering label exclusion and nothing else. A second engine-derived diagnostic, for any other class of engine
 observation, is a new decision made under this ADR's rule — engine data yes, engine vocabulary no, `details`
 never — rather than an application of a precedent already set.
+
+## Erratum, 2026-08-28: severity is capped, and three engine codes that name text are not exclusions
+
+Two things this ADR did not anticipate, both settled while implementing it and recorded here rather than
+left in the code alone.
+
+**Severity is capped at `WARNING`.** This ADR says severity is one of the two fields that cross the
+boundary, and it also says an exclusion is never a failure — `Diagnostic`'s `init` enforces the second by
+refusing `ERROR` outright. Those two collide the moment an engine emits an `ERROR`-severity exclusion:
+forwarding it faithfully would throw out of `prepare()`, turning a report that some labels are missing into
+a frame that does not render. The firewall therefore maps `ERROR` to `WARNING`, documented at both ends.
+
+No engine exclusion code is documented at `ERROR` today — the engine's only `ERROR` diagnostic accompanies
+a thrown style-preparation failure and never reaches a batch — so this is a ceiling rather than a live path.
+It exists because the alternative is a future engine release silently converting a cosmetic report into a
+render failure.
+
+**Three engine codes name a text exclusion and are not one.** `TEXT_ONLY_LAYER_EXCLUDED`,
+`TEXT_COMPONENT_REMOVED_ICON_RETAINED` and `TEXT_COUPLED_ICON_LAYER_EXCLUDED` describe what the engine left
+out of its own *raster tile*. RenG admits such a layer to the label pipeline independently and still draws
+those labels, so counting them would fire this diagnostic on nearly every labelled style and teach a
+consumer to ignore it. `ICON_FEATURE_SKIPPED` **is** counted, because a label's paired icon is label
+content and on a label batch that code is the label-side one.
+
+The classification is an `else`-less `when` over the engine's enum inside the firewall, so a new engine
+code fails compilation rather than defaulting to either answer.
