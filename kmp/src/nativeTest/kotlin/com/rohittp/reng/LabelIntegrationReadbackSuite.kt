@@ -59,6 +59,13 @@ import kotlinx.coroutines.runBlocking
  * stopped declaring. The one-layer style must keep [PLACE_COLOUR] and lose [TOWN_COLOUR] entirely,
  * which no constant-output pass can satisfy.
  *
+ * **`drawLabels` itself is gated over a ground that paints**, and that took a second attempt worth
+ * recording. The both-switches-off frame does not gate the flag at all: with `drawBasemap` off too,
+ * no style is traversed and no tile selected, so the frame is empty before `drawLabels` is read.
+ * [assertTheTwoSwitchesAreIndependentOverAGroundThatPaints] is the case that does, and its assertion
+ * has to be "nothing but ground reached the frame" rather than "no pure label colour is present" --
+ * a first frame carries a tenth of the fade, so the weaker form passes with the switch dead.
+ *
  * **What this does not claim.** Not legibility: the fixture's glyphs are saturated distance fields,
  * so each draws as a solid block of its cell rather than as a letter, and legibility stays unverified
  * until Cycle J. Not line placement, not icons, not the ground -- every frame here draws
@@ -72,6 +79,7 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
         assertDroppingALayerDropsExactlyThatLabel(binding, probe, target)
         assertAStyleWithNoSymbolLayersDrawsNothing(binding, probe, target)
         assertDrawLabelsFalseDrawsNothing(binding, probe, target)
+        assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
     } finally {
         binding.deleteFramebuffers(1, intArrayOf(target))
     }
@@ -179,7 +187,7 @@ private fun assertDroppingALayerDropsExactlyThatLabel(
         assertNear(placeSample, PLACE_ANCHOR_X, ANCHOR_Y, "the surviving place label")
         assertEquals(
             null,
-            frame.nearest(TOWN_COLOUR),
+            frame.nearest(TOWN_COLOUR)?.describe(),
             "a style that declares no town layer must draw no town label, but a pixel carrying " +
                 TOWN_COLOUR.describe() + " is still in the frame",
         )
@@ -217,11 +225,15 @@ private fun assertAStyleWithNoSymbolLayersDrawsNothing(
 }
 
 /**
- * `drawLabels = false` over the style that does draw them: the switch, in pixels.
+ * Both switches off over the style that does draw labels: the frame must come back exactly as the
+ * target was left.
  *
- * Deliberately the last case, and deliberately over [TWO_LAYER_STYLE_JSON] rather than a style that
- * would have drawn nothing anyway -- this is the one case whose fixture is identical to the positive
- * case's in every respect but the flag.
+ * **What this gates is narrower than its name suggests, and saying so is the point.** With
+ * `drawBasemap` off too, no style is traversed and no tile is selected at all (task 8b's rule reads
+ * *either* flag), so this frame is empty before `drawLabels` is ever consulted -- measured, by
+ * removing the `drawLabels` guard on the label tile list and watching this case still pass. The flag
+ * itself is gated by [assertTheTwoSwitchesAreIndependentOverAGroundThatPaints]; this case is the
+ * both-off pairing, which is worth its own line and is not the same claim.
  */
 private fun assertDrawLabelsFalseDrawsNothing(binding: GlBinding, probe: RenderContextProbe, target: Int) {
     val renderer = labelRenderer(binding, probe, TWO_LAYER_STYLE_JSON)
@@ -244,6 +256,80 @@ private fun assertDrawLabelsFalseDrawsNothing(binding: GlBinding, probe: RenderC
             frame.drawnCount(),
             "drawLabels = false must draw no label, but ${frame.drawnCount()} pixels changed\n" +
                 frame.asciiMap(),
+        )
+    } finally {
+        renderer.close()
+    }
+}
+
+/**
+ * E7's orthogonality in pixels: the same style and the same camera, with `drawBasemap` on throughout
+ * and `drawLabels` moving.
+ *
+ * **This is the case that gates the `drawLabels` flag, and it needs a ground that paints.** The
+ * fixture's style carries a `background` layer for exactly that reason: without one, a frame drawing
+ * the basemap of a symbol-only style is empty -- measured, 0 drawn pixels -- and "no label drew" would
+ * then be indistinguishable from "nothing drew", which is the vacuity this whole suite is built to
+ * avoid. With it, `drawBasemap = true, drawLabels = false` must be a frame **full** of ground and
+ * carrying neither text colour, and turning only the flag back on must add them over that same ground.
+ *
+ * Order matters: the labelless frame runs first, on a renderer whose fade has never advanced, so its
+ * emptiness of text cannot be a fade artefact. The ramp then follows on the same renderer.
+ */
+private fun assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+) {
+    val renderer = labelRenderer(binding, probe, TWO_LAYER_STYLE_JSON)
+    try {
+        val renderTarget = renderer.mintRenderTarget(FramebufferName(target.toUInt()))
+        val groundOnly = clearAndDraw(
+            binding,
+            renderer,
+            renderTarget,
+            target,
+            FramePlan(frameIndex = 0L, camera = labelCamera(), drawBasemap = true, drawLabels = false),
+        )
+        // Exactly every pixel, not merely most of them, and the exactness is the assertion's whole
+        // power. A `nearest(PLACE_COLOUR) == null` check here would be satisfied by a label drawn at
+        // the tenth of its opacity a first frame carries -- measured: removing the `drawLabels` guard
+        // on the label tile list leaves 286 pixels of dim magenta in this frame and no pure one, so
+        // that weaker check passes with the switch dead. "Nothing but ground reached the frame" does
+        // not, at any opacity.
+        assertEquals(
+            0,
+            groundOnly.countOfNot(GROUND_COLOUR),
+            "drawLabels = false must leave a frame of nothing but ground, but " +
+                groundOnly.countOfNot(GROUND_COLOUR) + " of " +
+                (LABEL_INTEGRATION_PIXELS * LABEL_INTEGRATION_PIXELS) +
+                " pixels are not " + GROUND_COLOUR.describe() + "\n" + groundOnly.asciiMap(),
+        )
+
+        var withLabels = groundOnly
+        for (frameIndex in 1L..LABEL_FADE_RAMP.toLong()) {
+            withLabels = clearAndDraw(
+                binding,
+                renderer,
+                renderTarget,
+                target,
+                FramePlan(
+                    frameIndex = frameIndex,
+                    camera = labelCamera(),
+                    drawBasemap = true,
+                    drawLabels = true,
+                ),
+            )
+        }
+        val place = withLabels.nearest(PLACE_COLOUR)
+            ?: throw AssertionError(
+                "turning drawLabels back on over the same ground must add the place label, but no " +
+                    "pixel carries " + PLACE_COLOUR.describe() + "\n" + withLabels.asciiMap(),
+            )
+        assertNear(place, PLACE_ANCHOR_X, ANCHOR_Y, "the place label over the ground")
+        assertTrue(
+            withLabels.countOf(GROUND_COLOUR) > MINIMUM_GROUND_PIXELS,
+            "and must not cost the ground its own pixels",
         )
     } finally {
         renderer.close()
@@ -277,6 +363,21 @@ private val PLACE_COLOUR: IntArray = intArrayOf(255, 0, 255, 255)
 
 /** The town layer's. */
 private val TOWN_COLOUR: IntArray = intArrayOf(255, 170, 0, 255)
+
+/**
+ * The style's `background` colour, which is the only thing its ground paints. Distinct from [ABSENT]
+ * and from both text colours in every channel that matters, so a frame can be read as ground, text, or
+ * neither with no ambiguity.
+ */
+private val GROUND_COLOUR: IntArray = intArrayOf(16, 64, 192, 255)
+
+/**
+ * How much ground has to survive a frame that also draws labels. The camera sits at a tile's centre at
+ * zoom 4, so one tile covers the whole frame with no seam in it -- which is why the labelless frame
+ * above can demand *every* pixel rather than a budget -- and the labels themselves cover a few hundred
+ * pixels of it. This is the floor that says the ground is still there underneath them.
+ */
+private const val MINIMUM_GROUND_PIXELS: Int = LABEL_INTEGRATION_PIXELS * LABEL_INTEGRATION_PIXELS / 2
 
 /**
  * `text-translate` for the town layer, in screen pixels. Large enough that the two labels cannot
@@ -339,11 +440,19 @@ private fun symbolLayer(
         """"layout":{"text-field":"{name}","text-font":["$stack"],"text-size":16},""" +
         """"paint":{"text-color":"$colour","text-translate":[$translateX,0]}}"""
 
+/**
+ * Every fixture style shares one `background` layer, first, so that the ground has something to paint.
+ * It is the *only* thing the ground paints: measured, a style whose only other layers are symbol ones
+ * rasterises to a fully transparent tile, because Rentile hands its text over as candidates rather
+ * than drawing it -- which is what makes a background layer the difference between a ground case that
+ * discriminates and one that cannot.
+ */
 private fun integrationStyle(layers: List<String>): String =
     """{"version":8,"name":"reng-label-integration",""" +
         """"glyphs":"$LABEL_GLYPH_TEMPLATE",""" +
         """"sources":{"v":{"type":"vector","tiles":["$LABEL_TILE_TEMPLATE"],"minzoom":0,"maxzoom":14}},""" +
-        """"layers":[""" + layers.joinToString(",") + """]}"""
+        """"layers":[{"id":"bg","type":"background","paint":{"background-color":"#1040c0"}}""" +
+        layers.joinToString("") { ",$it" } + """]}"""
 
 private val PLACE_LAYER: String =
     symbolLayer("place", "place", LABEL_SANS_STACK, "#ff00ff", 0)
@@ -356,11 +465,10 @@ private val TWO_LAYER_STYLE_JSON: String = integrationStyle(listOf(PLACE_LAYER, 
 private val ONE_LAYER_STYLE_JSON: String = integrationStyle(listOf(PLACE_LAYER))
 
 /**
- * The same document with both symbol layers replaced by a background one, so the style is still legal
- * and still declares its source and its glyphs -- only the thing that produces candidates is gone.
+ * The same document with both symbol layers gone, so the style is still legal and still declares its
+ * source, its glyphs and the shared background -- only the thing that produces candidates is missing.
  */
-private val NO_SYMBOL_STYLE_JSON: String =
-    integrationStyle(listOf("""{"id":"bg","type":"background"}"""))
+private val NO_SYMBOL_STYLE_JSON: String = integrationStyle(emptyList())
 
 /**
  * The fixture's three Glyph Ranges with a **saturated** distance field.
@@ -504,6 +612,17 @@ private class LabelFrame(private val bytes: ByteArray) {
         return total
     }
 
+    /** How many pixels do **not** carry [colour] within [CHANNEL_TOLERANCE]. */
+    fun countOfNot(colour: IntArray): Int =
+        LABEL_INTEGRATION_PIXELS * LABEL_INTEGRATION_PIXELS - countOf(colour)
+
+    /** How many pixels carry [colour] within [CHANNEL_TOLERANCE]. */
+    fun countOf(colour: IntArray): Int {
+        var total = 0
+        forEachPixel { _, _, pixel -> if (pixel.isCloseTo(colour)) total += 1 }
+        return total
+    }
+
     /** The pixel matching [colour] within [CHANNEL_TOLERANCE] and nearest it, or `null` if none does. */
     fun nearest(colour: IntArray): Sample? {
         var best: Sample? = null
@@ -532,6 +651,7 @@ private class LabelFrame(private val bytes: ByteArray) {
                         pixel.isCloseTo(ABSENT) -> '.'
                         pixel.isCloseTo(PLACE_COLOUR) -> 'P'
                         pixel.isCloseTo(TOWN_COLOUR) -> 'T'
+                        pixel.isCloseTo(GROUND_COLOUR) -> 'g'
                         else -> '?'
                     },
                 )
