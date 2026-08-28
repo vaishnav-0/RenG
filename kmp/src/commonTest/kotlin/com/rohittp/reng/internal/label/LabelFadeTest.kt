@@ -95,9 +95,9 @@ class LabelFadeTest {
         val coarse = deliveredAt(COARSE_LOD)
         val fine = deliveredAt(FINE_LOD)
 
-        // **Three halves of the non-vacuity, and the second is the one that matters.** The tile has
-        // to change, or the case passes against the field set it exists to replace. The anchor has
-        // to change *too* -- a generator quantises each zoom's geometry to that zoom's own grid, so
+        // **Three things the fixture has to be, and the second is the one that matters.** The tile
+        // has to change, or the case passes against the field set it exists to replace. The anchor
+        // has to change *too* -- a generator quantises each zoom's geometry to that zoom's own grid, so
         // dropping the tile and comparing the two anchors exactly would leave the map blinking on
         // every label whose coordinates were re-rounded, which is most of them. And the change has
         // to be a re-rounding rather than a different place, or the case is asking the identity to

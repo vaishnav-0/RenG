@@ -151,8 +151,10 @@ internal fun deriveLabelIdentity(
     // `exactUtf8` refuses an unpaired surrogate and `binary64` refuses a non-finite Double. Both are
     // reachable from a style document and from the engine respectively, so they are checked here
     // rather than caught: a derivation that throws is a frame that fails over a cosmetic ease. The
-    // anchor is checked on the same terms even though it no longer reaches `binary64`, because
-    // `Double.toLong()` maps every non-finite value onto one cell index instead of refusing it.
+    // anchor's own check has become load-bearing rather than belt-and-braces now that it reaches a
+    // cell index instead of a `binary64`: nothing downstream refuses a non-finite anchor, because
+    // `Double.toLong()` maps every one of them onto cell zero and would hand a whole class of broken
+    // labels one shared fade.
     if (!containsOnlyUnicodeScalars(layerId)) return null
     if (!candidate.latitude.isFinite() || !candidate.longitude.isFinite()) return null
     if (lineRepeat != null && !lineRepeat.anchorDistancePixels.isFinite()) return null
@@ -163,14 +165,14 @@ internal fun deriveLabelIdentity(
             altitudeMetres = 0.0,
         ),
     )
+    // No second finiteness check on the projected cell, deliberately: `tan`, `asinh` and the divisions
+    // between them carry a finite latitude and longitude to a finite Mercator position for every
+    // input, so the check above is what stops `floor(NaN).toLong()` from collapsing a non-finite
+    // anchor onto cell zero. A guard here would be one no test could ever fail -- the mutation run
+    // for this task confirmed exactly that, by deleting each of the two in turn and watching the
+    // other keep the suite green.
     val cellX = anchor.x * ANCHOR_GRID_CELLS
     val cellY = anchor.y * ANCHOR_GRID_CELLS
-    // A finite latitude and longitude can still project outside the range a `Long` cell index means
-    // anything in -- a longitude a consumer unwrapped far enough, a latitude at the projection's own
-    // pole. An identity is refused there rather than saturated onto a shared cell, which is the same
-    // rule the two checks above follow: no identity is a full-opacity label, a wrong one is a label
-    // wearing somebody else's fade.
-    if (!cellX.isFinite() || !cellY.isFinite()) return null
     val codepoints = candidate.codepoints(batch) ?: return null
 
     return LabelIdentity(
