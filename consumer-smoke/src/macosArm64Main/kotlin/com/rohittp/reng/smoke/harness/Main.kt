@@ -63,9 +63,15 @@ fun main(arguments: Array<String>) {
     var failed = 0
 
     try {
-        framePlans(options.groundless, options.modelUrl).take(options.frameCount).forEach { plan ->
-            if (renderOneFrame(renderer, target, plan, options.outputDirectory)) written += 1 else failed += 1
-        }
+        framePlans(options.groundless, options.modelUrl, options.labelless)
+            .take(options.frameCount)
+            .forEach { plan ->
+                if (renderOneFrame(renderer, target, plan, options.outputDirectory)) {
+                    written += 1
+                } else {
+                    failed += 1
+                }
+            }
     } finally {
         target.destroy()
         renderer.close()
@@ -167,6 +173,7 @@ private class HarnessOptions(
     val outputDirectory: String,
     val frameCount: Int,
     val groundless: Boolean,
+    val labelless: Boolean,
     val verbose: Boolean,
 )
 
@@ -176,6 +183,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     var outputDirectory = ""
     var frameCount = FRAME_COUNT
     val groundless = arguments.contains("--no-basemap")
+    val labelless = arguments.contains("--no-labels")
     val verbose = arguments.contains("--verbose")
     var index = 0
     while (index + 1 < arguments.size) {
@@ -199,7 +207,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
         println("No output directory. Pass --out <directory>.")
         return null
     }
-    return HarnessOptions(styleUrl, modelUrl, outputDirectory, frameCount, groundless, verbose)
+    return HarnessOptions(styleUrl, modelUrl, outputDirectory, frameCount, groundless, labelless, verbose)
 }
 
 /** Counts diagnostics by code and keeps the first few, so a warning storm prints as one line. */
