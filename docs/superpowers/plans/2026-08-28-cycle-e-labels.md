@@ -290,6 +290,43 @@ hit this, so it is a safety net — but it must not surface as opaque `BASEMAP_R
 
 ---
 
+## Wave 4b — connect the path
+
+### Task 20 — wire the label path end to end
+
+**Added mid-cycle, and it exists because the plan had a hole.** Tasks 6, 9, 10 and 13 each built a piece
+and each stopped at the scope boundary this plan gave it — correctly. Nobody owned the seams *between*
+them, so at the close of Wave 4 every component works in isolation and **no code path runs them in
+sequence**: nothing calls `BasemapEngineHost.acquireLabelCandidates` or `placeLabels` from `prepare()`, and
+`Scene.labels` is never populated. The cycle would otherwise reach its verification wave drawing nothing,
+with every unit test green.
+
+Depends on tasks 6, 9, 10 and 13. The sequence to connect, all of which already exists:
+
+1. `prepare()` — when `plan.drawLabels` and a basemap style is configured — hands the planned tile list to
+   `BasemapEngineHost.acquireLabelCandidates`, which owns the two-round preregistration.
+2. `placeLabels(camera, batch)` resolves point placement, collision and priority.
+3. `advanceLabelFade` folds in the previous frame's state, keyed by `LabelIdentity`, and its result is
+   committed beside `previousSelectedLod` **only on success**.
+4. The surviving faded labels become `Scene.labels`, which the phase-5 draw already consumes.
+
+**Where the label tile list comes from is the one real decision here.** Task 8b made tile selection run
+whenever either draw flag is set, so the tiles exist on a `drawBasemap = false, drawLabels = true` frame.
+Use that selection rather than deriving a second one — `labelCandidateRequestKey` deliberately does not
+canonicalise `x`, so a divergent tile set is a different set of routes and a different cache key.
+
+**Failure posture** is already decided and must not be re-litigated here: an unroutable label source fails
+the frame by name (Task 15), and an engine-side exclusion emits one aggregate diagnostic (Task 14). This
+task wires; it does not invent policy.
+
+**Verification.** The discriminating test is the one nothing has today: a frame that goes in as a
+`FramePlan` and comes out with drawn label pixels. Everything below that is already covered by the unit
+suites, so a call-log assertion that the four stages ran in order adds little — assert the **output**.
+
+*Vacuity warning:* a test asserting "labels drew" against a fixture whose collision drops every candidate
+passes for the wrong reason, and so does one whose fade starts every label at opacity zero. Assert a
+specific non-zero pixel, and assert the count changes when the fixture's candidate set changes.
+
 ## Wave 5 — verification
 
 ### Task 16 — the label readback suite
