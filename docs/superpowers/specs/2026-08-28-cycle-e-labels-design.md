@@ -118,6 +118,14 @@ Two defects the spike found by running rather than reading, both of which this c
 1. An unpreregistered glyph URL is refused by the **store** index, not the transport index, because
    Rentile's glyph acquirer reads its raw store first. The refusal is complete — no byte reaches the
    consumer — but surfaces as opaque `BASEMAP_RENDER_FAILED` rather than a route failure.
+
+   **Corrected during Task 6, and the correction is the useful half.** *Which* index refuses depends on
+   *why*. The store index is keyed on the **redacted** digest and the transport index on the **exact** URL —
+   so an unpreregistered route is caught at the store, while a **stale credential passes the store gate and
+   is refused at transport**. Measured: the consumer's `Store` is asked for all three glyph ranges, its
+   `Transport` sees none, and no glyph bytes are written. The handover spike could not see this because its
+   fixture carried no credential; it listed the case as unmeasured. The two refusals share one public code
+   and are distinguished internally.
 2. `GlyphTemplateMismatchException` and `LabelCandidatePlanClosedException` **escape RenG unwrapped**,
    because `glyphUrls` is a plan method rather than a call through `engineCall`. An engine exception type
    crossing the public boundary breaches the sanitized-failure contract.
@@ -246,10 +254,14 @@ The fixture problem is **solved and cheap**, contrary to the renderer-gap docume
 `Glyphs` and `Glyph` types are public in its published KLIB ABI despite their `internal` package names, so
 RenG's test sources compile against them with **no build-file change and no added dependency**.
 
-**Target reachability, measured:** `macosArm64Test` and `iosSimulatorArm64Test` run the whole thing;
-`testAndroidHostTest` runs everything except the atlas case, which fails on Skia's missing host library
-*after* every glyph range is fetched. So the routing half gates on `commonTest` across all four
-context-holding targets; only candidate geometry and atlas pixels need `nativeTest`.
+**Target reachability, measured — and the line sits one step earlier than the handover spike reported.**
+`LabelCandidateAssembler.emptyBatch` packs a 1×1 placeholder atlas through Skia, so **even a no-glyphs
+style's batch cannot be read on the Android host**. The split is "everything except *reading the batch*",
+not "everything except candidate geometry and atlas pixels".
+
+So the routing half — closure exactness, both refusal paths, URL composition, preregistration rounds —
+gates on `commonTest` across all four context-holding targets. Anything that touches the returned
+`LabelCandidateBatch` goes in `nativeTest`.
 
 Assertions the suite owes:
 
