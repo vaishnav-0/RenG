@@ -201,8 +201,16 @@ is the one that is broken today.
 Depends on tasks 3 and 8.
 
 Project each anchor, apply the pixel translate, place label-local quads. Then collision: `sortKey` and layer
-priority ascending, larger wins; `boundingBox` expanded by `padding`; `overlap` in its two used states
-(`never`, `always`) — **cooperative is out of scope, zero corpus occurrences**.
+priority ascending, larger wins; the candidate's `boundingBox` **as given**; `overlap` in its two used
+states (`never`, `always`) — **cooperative is out of scope, zero corpus occurrences**. Honour
+`text-ignore-placement`, which is a text-candidate field and not only an icon one: without it a
+`text-overlap: always` label blocks everything placed after it.
+
+**Corrected during execution — this instruction originally said "expanded by `padding`", and that was
+wrong.** Rentile's `LabelLayout.bounds` **already** expands the box by `text-padding` on all four sides, and
+`LabelCandidate.padding` is that same evaluated value carried for the consumer's information. Re-applying it
+doubles every style's padding — a silent, plausible-looking defect, because every label then claims twice
+the space it should, which reads as an over-aggressive collision policy rather than as a bug.
 
 `translateAlignment` decides whether the pixel translate rotates with the map or stays viewport-fixed; 60
 layers across 12 styles use it, so it is not hypothetical.
@@ -323,7 +331,10 @@ in the cycle's completion record.
 ## Closing obligations
 
 - `CLAUDE.md` and `HANDOFF.md` updated with what shipped, what it costs, and both limits of it.
-- `CONTEXT.md` gains the label vocabulary, with `_Avoid_:` lists.
+- `CONTEXT.md` gains the label vocabulary, with `_Avoid_:` lists. **A live clash found in Task 9:**
+  `CONTEXT.md`'s only current use of "Collision" is *resource-key* collision under ADR 0018's identity
+  rules. Label collision is unrelated, and the glossary must separate them rather than let one word carry
+  both.
 - `docs/decomposition.md`'s E-labels row updated — its gate says "legible", which this cycle does not claim.
 - The ABI dump's delta is exactly **four** enum entries — `ResourceClass`, `DiagnosticCode`, `RenGErrorCode`,
   `PipelineStage` — plus one `FramePlan` parameter. Anything else is a defect.
