@@ -64,15 +64,63 @@ class RendererBasemapStyleTest {
     }
 
     @Test
-    fun aPlanThatDrawsNoBasemapAcquiresNoStyleAtAll() = runTest {
+    fun aPlanThatDrawsNeitherBasemapNorLabelsAcquiresNoStyleAtAll() = runTest {
         val transport = StyleTransport()
         val renderer = styleRenderer(transport)
 
         renderer.prepare(
-            FramePlan(frameIndex = 0L, camera = styleCamera(), drawBasemap = false),
+            FramePlan(
+                frameIndex = 0L,
+                camera = styleCamera(),
+                drawBasemap = false,
+                drawLabels = false,
+            ),
         )
 
-        assertEquals(emptyList(), transport.requestedUrls(), "drawBasemap = false acquires nothing")
+        assertEquals(
+            emptyList(),
+            transport.requestedUrls(),
+            "a frame that asks for neither the basemap nor its labels acquires nothing",
+        )
+    }
+
+    /**
+     * E-labels task 8b, and the pairing that was broken: the labels are *in* the style, so a frame that
+     * draws them without the ground still has to fetch it.
+     *
+     * **Read the fixture before reading the assertion.** The style is deliberately unparseable, so the
+     * frame fails immediately after acquisition — which is what keeps this case in `commonTest` and
+     * therefore covering Android, whose host runtime cannot complete any successful basemap preparation
+     * (see the class KDoc). The failure is the *evidence* that the acquisition happened at all: before
+     * the split this exact plan requested no url and prepared successfully.
+     *
+     * **The unmixed pairings would prove nothing.** `drawBasemap = true` acquires the style today, and
+     * both switches false acquires nothing today; only `false/true` separates the two guards. Its
+     * companion `true/false` — the basemap still acquiring its style with labels switched off — is
+     * `nativeTest`'s `RendererBasemapTileTest`, where a successful preparation is expressible.
+     */
+    @Test
+    fun aPlanThatDrawsLabelsWithoutTheBasemapStillAcquiresTheStyle() = runTest {
+        val transport = StyleTransport(styleJson = "{ not a style }")
+        val renderer = styleRenderer(transport)
+
+        val failure = kotlin.test.assertFailsWith<RenGException> {
+            renderer.prepare(
+                FramePlan(
+                    frameIndex = 0L,
+                    camera = styleCamera(),
+                    drawBasemap = false,
+                    drawLabels = true,
+                ),
+            )
+        }
+
+        assertEquals(RenGErrorCode.RESOURCE_PARSE_FAILED, failure.code)
+        assertEquals(
+            listOf(STYLE_URL),
+            transport.requestedUrls(),
+            "labels without a basemap must still acquire the style the labels come from",
+        )
     }
 }
 

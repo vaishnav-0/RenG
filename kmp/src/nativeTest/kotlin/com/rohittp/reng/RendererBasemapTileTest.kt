@@ -437,16 +437,82 @@ class RendererBasemapTileTest {
     }
 
     @Test
-    fun aFrameThatDrawsNoBasemapRendersNoGroundAtAll() = runTest {
+    fun aFrameThatDrawsNeitherBasemapNorLabelsRendersNoGroundAndAcquiresNothing() = runTest {
         val transport = TileTransport()
         val renderer = styleRenderer(transport)
 
         val frame = renderer.prepare(
-            FramePlan(frameIndex = 0L, camera = styleCamera(), drawBasemap = false),
+            FramePlan(
+                frameIndex = 0L,
+                camera = styleCamera(),
+                drawBasemap = false,
+                drawLabels = false,
+            ),
         ) as RenGPreparedFrame
 
-        assertEquals(emptyList(), frame.basemapTiles, "drawBasemap = false renders no ground")
+        assertEquals(emptyList(), frame.basemapTiles, "neither switch renders no ground")
         assertEquals(emptyList(), transport.requestedUrls(), "and acquires nothing at all")
+    }
+
+    /**
+     * E-labels task 8b's whole point, in one frame: the *ground draw* stays gated on `drawBasemap`
+     * alone while the style and the tile selection follow either switch.
+     *
+     * The three assertions are one claim each, and each fails for its own reason. The style url proves
+     * the acquisition was widened (before the split this frame fetched nothing at all). The absent tile
+     * urls and the empty `basemapTiles` prove the widening stopped short of the ground: nothing was
+     * rasterized, so there is no ground texture and `groundInstances` is empty, which is exactly what
+     * "labels over a caller-drawn background" has to mean.
+     *
+     * **`drawBasemap = true, drawLabels = true` is the symmetry point and is deliberately not the
+     * subject here** — it renders the four tiles today and would keep doing so under either version of
+     * the guard. `true/false` is asserted alongside, because a fix that read `drawLabels` where it
+     * should have read `drawBasemap` would leave the labels working and take the ground away.
+     */
+    @Test
+    fun aFrameThatDrawsLabelsWithoutTheBasemapAcquiresTheStyleAndStillRendersNoGround() = runTest {
+        val transport = TileTransport()
+        val renderer = styleRenderer(transport)
+
+        val labelsOnly = renderer.prepare(
+            FramePlan(
+                frameIndex = 0L,
+                camera = styleCamera(),
+                drawBasemap = false,
+                drawLabels = true,
+            ),
+        ) as RenGPreparedFrame
+
+        assertTrue(
+            STYLE_URL in transport.requestedUrls(),
+            "labels without a basemap still acquire the style they come from",
+        )
+        assertEquals(
+            emptyList(),
+            transport.requestedUrls().filter { it.startsWith("https://tiles.example/") },
+            "but no ground tile is rendered, so the engine fetches none",
+        )
+        assertEquals(
+            emptyList(),
+            labelsOnly.basemapTiles,
+            "the ground draw follows drawBasemap alone",
+        )
+        assertEquals(emptyList(), labelsOnly.groundInstances, "and it has nothing to draw")
+
+        val basemapOnly = renderer.prepare(
+            FramePlan(
+                frameIndex = 1L,
+                camera = styleCamera(),
+                drawBasemap = true,
+                drawLabels = false,
+            ),
+        ) as RenGPreparedFrame
+
+        assertEquals(
+            4,
+            basemapOnly.basemapTiles.size,
+            "and switching the labels off takes nothing away from the ground",
+        )
     }
 }
 
