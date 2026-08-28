@@ -77,6 +77,8 @@ import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.image.DecodedImage
 import com.rohittp.reng.internal.image.PngDecodeResult
 import com.rohittp.reng.internal.image.decodePng
+import com.rohittp.reng.internal.label.LabelFadeState
+import com.rohittp.reng.internal.label.advanceLabelFade
 import com.rohittp.reng.internal.lifecycle.GpuLedger
 import com.rohittp.reng.internal.lifecycle.PreparedFrameFact
 import com.rohittp.reng.internal.lifecycle.RendererLifecycleOperation
@@ -504,6 +506,22 @@ internal class RenGRenderer(
     private var previousEncodedPlan: EncodedFramePlan? = null
     private var previousSelectedLod: Int? = null
 
+    /**
+     * ADR 0035's label fade: the fourth member of Frame History, on exactly [previousSelectedLod]'s
+     * terms — read by preparation, fed to a pure function as inert data, committed only after every
+     * fallible step of a `prepare` has succeeded, and cleared by the public `clearFrameHistory()`.
+     * `prepareBatch` needs no rule of its own because it is `plans.map { prepare(it, accessMode) }`,
+     * so a fade commits at the same boundary a LOD does.
+     *
+     * **What it is not is a cache.** Every other cross-frame mechanism in this renderer — decoded
+     * images, uploaded textures, parsed GLBs, compiled shaders, resident tiles — changes how fast a
+     * frame is produced and never how it looks. This one changes pixels: two frames carrying the same
+     * plan can paint a label at different opacities, which is the whole point of it, and
+     * `clearFrameHistory()` is the public call that takes a consumer back to a render that is a pure
+     * function of the plan.
+     */
+    private var previousLabelFade: LabelFadeState = LabelFadeState.EMPTY
+
     /** Once per renderer, never per frame — see the design spec's `drawBasemap` decision. */
     private var basemapWarningEmitted: Boolean = false
 
@@ -677,8 +695,25 @@ internal class RenGRenderer(
                 prepareModel(model, modelGlbReferences[index], modelTextureReferences[index], decodedByKey)
             }
 
+            // ADR 0035's fade, advanced exactly once per `prepare` that gets this far and committed
+            // with the LOD immediately below. Its two inputs are the acquired
+            // `LabelCandidateBatch` and `placeLabels(planned.spatialPlan.camera, batch)`'s survivors;
+            // **neither is wired into preparation yet** -- the handover
+            // (`BasemapEngineHost.acquireLabelCandidates`) and the placement pass both exist and
+            // neither is called from here -- so every frame today takes the `drawLabels = false`
+            // path through this call. That path is not a placeholder standing in for the real one: a
+            // frame that places no label is a frame in which every label is absent, so every carried
+            // entry decays toward zero and the map empties itself, which is exactly what this
+            // returns.
+            val labelFade = advanceLabelFade(
+                previous = previousLabelFade,
+                batch = null,
+                placed = emptyList(),
+            )
+
             previousEncodedPlan = planned.encodedPlan
             previousSelectedLod = planned.spatialPlan.lodObservation.selectedLod
+            previousLabelFade = labelFade.nextState
 
             return RenGPreparedFrame(
                 owner = this,
@@ -1084,6 +1119,7 @@ internal class RenGRenderer(
             if (operation == RendererLifecycleOperation.ClearFrameHistory) {
                 previousEncodedPlan = null
                 previousSelectedLod = null
+                previousLabelFade = LabelFadeState.EMPTY
                 identityRegistry = CanonicalIdentityRegistry()
                 framePlanningCore = newFramePlanningCore(identityRegistry)
                 null
