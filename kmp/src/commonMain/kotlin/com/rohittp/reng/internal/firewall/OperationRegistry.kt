@@ -216,9 +216,12 @@ internal class OperationRegistry(
     // *before* compiling the pair, so without this a pair RenG can already prove will never compile is
     // persisted into a consumer Store that has no remove operation, and fails identically on every later
     // prepare(). [spriteRendezvous] carries each member's arrival; [spritePairJoin] runs the joint
-    // verdict exactly once per pair and replays it to whichever member did not run it.
+    // verdict exactly once per pair and replays it to whichever member did not run it. What it latches
+    // is that pair's parsed [SpriteAtlasManifest] rather than a bare verdict -- `null` is the verdict
+    // "declined" -- so the geometry every entry declared survives the gate that proved it, bounded by
+    // this registry's own operation lifetime and by the one sprite pair a style may declare.
     private val spriteRendezvous = SpriteRendezvous()
-    private val spritePairJoin = SuspendJoin<SpriteGroupKey, Boolean>()
+    private val spritePairJoin = SuspendJoin<SpriteGroupKey, SpriteAtlasManifest?>()
 
     /**
      * Declares the static prelookup routes this invocation may need. Idempotent for an identical
@@ -593,10 +596,12 @@ internal class OperationRegistry(
 
         val jsonMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_JSON) mine else theirs
         val imageMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_IMAGE) mine else theirs
-        // Latched per pair, so both members reach the same verdict and neither re-derives it.
+        // Latched per pair, so both members reach the same verdict and neither re-derives it -- and what
+        // is latched is the pair's parsed manifest rather than a bare verdict, so the geometry is parsed
+        // exactly once per pair. This path reads only whether one came back.
         return spritePairJoin.run(member.group) {
-            spritePairIsJointlyValid(jsonMember.bytes, imageMember.bytes)
-        }
+            spritePairJointManifest(jsonMember.bytes, imageMember.bytes)
+        } != null
     }
 
     private suspend fun contributeSpriteMember(route: ResourceRouteKey, validated: StoredRawResource) {
@@ -869,11 +874,52 @@ private fun spriteBaseUrl(url: String, extension: String): String {
 }
 
 /**
- * The cross-member checks Rentile's own `SpriteResourceAcquirer.compile` performs, and only those that
- * are unconditional and independent of Rentile's configuration: the manifest is an object of entry
- * objects, each entry carries integer `x`/`y`/`width`/`height`, each rect is non-degenerate and lies
- * wholly inside the atlas image, a present `pixelRatio` is finite and positive, and no entry carries the
- * `stretchX`/`stretchY`/`content` fields Rentile refuses.
+ * One atlas entry as the manifest declared it: a rect already proved non-degenerate and wholly inside
+ * the atlas image, and the `pixelRatio` Rentile's compiler would read for it -- which for an absent or
+ * unreadable one is the 1.0 Rentile itself falls back to, recorded here rather than left for every later
+ * reader to re-derive.
+ */
+internal data class SpriteAtlasEntry(
+    val x: Int,
+    val y: Int,
+    val width: Int,
+    val height: Int,
+    val pixelRatio: Double,
+)
+
+/**
+ * A jointly valid sprite pair's contents: the atlas image's own dimensions, read from its `IHDR`, and
+ * every entry the manifest named, keyed by that name and in the manifest's own member order. It exists
+ * only for a pair that passed [spritePairJointManifest]'s checks, so every rect it holds is already known
+ * to lie inside [atlasWidth] x [atlasHeight].
+ */
+internal data class SpriteAtlasManifest(
+    val atlasWidth: Int,
+    val atlasHeight: Int,
+    val entries: Map<String, SpriteAtlasEntry>,
+)
+
+/**
+ * Runs the cross-member checks Rentile's own `SpriteResourceAcquirer.compile` performs -- and only those
+ * that are unconditional and independent of Rentile's configuration -- then hands back what the pair
+ * actually contained. The checks: the manifest is an object of entry objects, each entry carries integer
+ * `x`/`y`/`width`/`height`, each rect is non-degenerate and lies wholly inside the atlas image, a present
+ * `pixelRatio` is finite and positive, and no entry carries the `stretchX`/`stretchY`/`content` fields
+ * Rentile refuses.
+ *
+ * **`null` is the whole of "not jointly valid", and it is a cache verdict rather than a failure.** This
+ * function throws nothing and reports nothing; a `null` means one member's bytes lost the pair its cache,
+ * exactly as the `false` it replaces did. Nullable rather than a two-case result type precisely so the
+ * write path is not made to care about the payload -- [approveSpriteMemberWrite] asks only whether a
+ * manifest came back -- and because `null`-means-declined is already this seam's idiom, as in
+ * [spriteMemberKeyOf] and [SpriteRendezvous.awaitContent]. **The returned manifest is the point**: this
+ * geometry was always parsed here and always discarded, and an icon name cannot be resolved to atlas
+ * pixels without it.
+ *
+ * An empty manifest object is jointly valid and yields an empty [SpriteAtlasManifest.entries] --
+ * vacuously, since there is no entry left to fail a check -- so a reader resolving a name against a
+ * manifest must distinguish "no such entry" from "no manifest", and must not read a non-null return as
+ * evidence that any entry exists.
  *
  * Rentile's two limit-shaped checks are deliberately not mirrored, and **not** because RenG cannot know
  * them -- it can, exactly, at the pinned version: `MAX_SPRITE_ENTRIES` is a hardcoded `100_000` in
@@ -888,32 +934,48 @@ private fun spriteBaseUrl(url: String, extension: String): String {
  * broken style cost less than repeated network on a working one, and an atlas above either bound is far
  * outside anything a real basemap style ships.
  *
+ * That omission was a caching decision, and it now has a second consequence worth stating plainly, since
+ * a returned manifest can be read where a cache verdict could not: **a manifest is not a promise that
+ * Rentile compiled this atlas.** A pair above either omitted bound returns a manifest here and still
+ * fails the engine's own compile, so a reader that needs pixels must take them from the atlas image it
+ * decoded, never from this having been non-null.
+ *
  * Only the image's IHDR is needed, so this scans the container ([scanPng]) rather than decoding it; the
  * member gate already proved the same bytes decode in full.
  */
-private fun spritePairIsJointlyValid(jsonBytes: ByteArray, imageBytes: ByteArray): Boolean {
-    val header = (scanPng(imageBytes) as? PngScan.Admitted)?.header ?: return false
+internal fun spritePairJointManifest(jsonBytes: ByteArray, imageBytes: ByteArray): SpriteAtlasManifest? {
+    val header = (scanPng(imageBytes) as? PngScan.Admitted)?.header ?: return null
     val parsed = parseJson(jsonBytes, 0, jsonBytes.size, SPRITE_JSON_MAXIMUM_DEPTH) as? JsonParse.Parsed
-    val root = parsed?.value as? JsonValue.Obj ?: return false
-    return root.members.values.all { entry -> spriteEntryFitsAtlas(entry, header.width, header.height) }
+    val root = parsed?.value as? JsonValue.Obj ?: return null
+    val entries = LinkedHashMap<String, SpriteAtlasEntry>(root.members.size)
+    for ((name, entry) in root.members) {
+        // One bad entry still rejects the whole pair, as the `all` this replaces did: Rentile compiles
+        // the manifest as a unit, so a pair with one unusable entry is a pair that cannot compile.
+        entries[name] = spriteEntryWithinAtlas(entry, header.width, header.height) ?: return null
+    }
+    return SpriteAtlasManifest(atlasWidth = header.width, atlasHeight = header.height, entries = entries)
 }
 
-private fun spriteEntryFitsAtlas(entry: JsonValue, imageWidth: Int, imageHeight: Int): Boolean {
-    val members = (entry as? JsonValue.Obj)?.members ?: return false
-    if (members.keys.any { it in UNSUPPORTED_SPRITE_ENTRY_FIELDS }) return false
-    val x = spriteEntryInt(members["x"]) ?: return false
-    val y = spriteEntryInt(members["y"]) ?: return false
-    val width = spriteEntryInt(members["width"]) ?: return false
-    val height = spriteEntryInt(members["height"]) ?: return false
-    if (x < 0 || y < 0 || width <= 0 || height <= 0) return false
+/** The entry's own geometry when it passes every check above, `null` when it does not. */
+private fun spriteEntryWithinAtlas(entry: JsonValue, imageWidth: Int, imageHeight: Int): SpriteAtlasEntry? {
+    val members = (entry as? JsonValue.Obj)?.members ?: return null
+    if (members.keys.any { it in UNSUPPORTED_SPRITE_ENTRY_FIELDS }) return null
+    val x = spriteEntryInt(members["x"]) ?: return null
+    val y = spriteEntryInt(members["y"]) ?: return null
+    val width = spriteEntryInt(members["width"]) ?: return null
+    val height = spriteEntryInt(members["height"]) ?: return null
+    if (x < 0 || y < 0 || width <= 0 || height <= 0) return null
     // Widened deliberately: two in-range Ints can overflow their sum, and an overflowed rect would
     // compare as comfortably inside the atlas.
-    if (x.toLong() + width.toLong() > imageWidth.toLong()) return false
-    if (y.toLong() + height.toLong() > imageHeight.toLong()) return false
+    if (x.toLong() + width.toLong() > imageWidth.toLong()) return null
+    if (y.toLong() + height.toLong() > imageHeight.toLong()) return null
     // Absent, or present but unreadable as a number, is not a rejection: Rentile falls back to 1.0 in
-    // both cases, so refusing here would refuse a pair the engine compiles.
-    val pixelRatio = spriteEntryDouble(members["pixelRatio"]) ?: return true
-    return pixelRatio.isFinite() && pixelRatio > 0.0
+    // both cases, so refusing here would refuse a pair the engine compiles. That fallback is recorded on
+    // the entry rather than left implicit, so a later reader sees the ratio the engine would have used.
+    val pixelRatio = spriteEntryDouble(members["pixelRatio"])
+        ?: return SpriteAtlasEntry(x, y, width, height, ABSENT_SPRITE_PIXEL_RATIO)
+    if (!pixelRatio.isFinite() || pixelRatio <= 0.0) return null
+    return SpriteAtlasEntry(x, y, width, height, pixelRatio)
 }
 
 /** Rentile reads these through `JsonPrimitive.intOrNull`, which parses a quoted primitive's content
@@ -1000,6 +1062,9 @@ private class SpriteRendezvous {
         var withoutContent: Boolean = false
     }
 }
+
+/** What Rentile's own compiler reads for an entry that declares no readable `pixelRatio`. */
+private const val ABSENT_SPRITE_PIXEL_RATIO: Double = 1.0
 
 private const val SPRITE_JSON_EXTENSION = ".json"
 private const val SPRITE_IMAGE_EXTENSION = ".png"

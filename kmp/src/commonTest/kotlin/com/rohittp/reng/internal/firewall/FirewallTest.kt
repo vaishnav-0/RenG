@@ -582,6 +582,74 @@ class FirewallTest {
         assertEquals(0, store.writeCalls)
     }
 
+    // ---- What the joint sprite gate retains ------------------------------------------------------
+    //
+    // The gate parses every entry's geometry to decide whether the pair may be cached, and used to throw
+    // all of it away. These cases are about the payload rather than the verdict, so they call the gate
+    // directly: the firewall cases above already pin the verdict, and nothing observable on the write
+    // path could distinguish a correct manifest from an empty one.
+    //
+    // Every fixture below is asymmetric on purpose. The atlas is 16x8 rather than square, and no entry
+    // repeats a number across x, y, width and height, so a transposed pair -- x for y, width for height,
+    // or the atlas's own dimensions -- cannot pass.
+
+    @Test
+    fun retainsEveryDeclaredSpriteEntrysGeometryFromAJointlyValidPair() {
+        val manifest = assertNotNull(
+            spritePairJointManifest(TWO_ENTRY_SPRITE_JSON, ASYMMETRIC_SPRITE_ATLAS_PNG),
+            "a jointly valid pair yields its manifest",
+        )
+        assertEquals(16, manifest.atlasWidth)
+        assertEquals(8, manifest.atlasHeight)
+        assertContentEquals(
+            listOf("harbour", "quay"),
+            manifest.entries.keys.toList(),
+            "entries keep the manifest's own member order",
+        )
+        assertEquals(
+            SpriteAtlasEntry(x = 3, y = 1, width = 9, height = 5, pixelRatio = 2.5),
+            manifest.entries["harbour"],
+        )
+        // Flush against the atlas's right and bottom edges, which the gate admits, and with no
+        // `pixelRatio` of its own -- recorded as the 1.0 Rentile's compiler falls back to.
+        assertEquals(
+            SpriteAtlasEntry(x = 11, y = 6, width = 5, height = 2, pixelRatio = 1.0),
+            manifest.entries["quay"],
+        )
+    }
+
+    @Test
+    fun recordsAnUnreadablePixelRatioAsRentilesOwnFallback() {
+        // Present but not a number: Rentile reads it through `doubleOrNull` and falls back to 1.0 exactly
+        // as it does for an absent one, so the pair is admitted and the entry carries the same 1.0.
+        val json = """{"quay":{"x":11,"y":6,"width":5,"height":2,"pixelRatio":true}}""".encodeToByteArray()
+        val manifest = assertNotNull(spritePairJointManifest(json, ASYMMETRIC_SPRITE_ATLAS_PNG))
+        assertEquals(
+            SpriteAtlasEntry(x = 11, y = 6, width = 5, height = 2, pixelRatio = 1.0),
+            manifest.entries["quay"],
+        )
+    }
+
+    @Test
+    fun yieldsNoManifestWhenOneEntryOfSeveralLeavesTheAtlas() {
+        // All or nothing, exactly as the verdict this replaced was: a pair Rentile cannot compile must not
+        // come back as a manifest missing the entry that broke it, because the caller would then cache a
+        // pair the engine rejects. The offending entry is out of bounds on the *vertical* axis only --
+        // x + width is 5 of 16 -- so an axis-confused bound check admits it and this case fails.
+        val json = """{"harbour":{"x":3,"y":1,"width":9,"height":5},"spill":{"x":1,"y":5,"width":4,"height":6}}"""
+        assertNull(spritePairJointManifest(json.encodeToByteArray(), ASYMMETRIC_SPRITE_ATLAS_PNG))
+    }
+
+    @Test
+    fun admitsAnEmptySpriteManifestAsAPairThatNamesNothing() {
+        // Vacuously valid -- there is no entry left to fail a check -- and the distinction matters to
+        // whoever resolves a name against it: this is "no such entry", not "no manifest".
+        val manifest = assertNotNull(
+            spritePairJointManifest("{}".encodeToByteArray(), ASYMMETRIC_SPRITE_ATLAS_PNG),
+        )
+        assertEquals(emptyMap(), manifest.entries)
+    }
+
     // ---- Gap 3: DEM terrain-encoding validation on the write path -------------------------------
 
     @Test
@@ -1084,6 +1152,28 @@ private val OUT_OF_BOUNDS_SPRITE_JSON: ByteArray =
     """{"icon":{"x":1,"y":0,"width":2,"height":2}}""".encodeToByteArray()
 
 private val UNPARSEABLE_SPRITE_JSON: ByteArray = "{".encodeToByteArray()
+
+// A real 16x8 eight-bit truecolour PNG. Deliberately not square, and deliberately not the 2x2 atlas the
+// verdict fixtures share: a 2x2 atlas cannot tell a width bound checked against the height apart from a
+// correct one, and neither can a square entry.
+private val ASYMMETRIC_SPRITE_ATLAS_PNG: ByteArray = Base64.decode(
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAABa0lEQVR42gXBAYQQURAA0FHKRvSVsk" +
+        "fcKGUj+krZiEanbERfKRvRKJ2N6CuXjWh0ijhKKSIapYgopYholCKilCKORrmI6FyKiHoPACBAgRAi" +
+        "lASYoGKIGWoBOgeNQroLrQG/gc4hT0IP0xHmYbEYwyoshxC3Y7UP4xGsR5EuYHMd031snyG/w+4L5p" +
+        "/Yw0yCBVQspbCGyk2EO6kapniU6tNEl6i5SekhtS+IP1D3lfJv6mEWwwAXyzis5XIz4y6uDnA8xvUZ" +
+        "psvc3OL0iNuXzB+5+8b5D/cwW2ChFMslrJNyi+BuqQ5KPC71mNAVaW5LeiztK+Fx6b5L/is9zFEY1G" +
+        "KFhvVablXco9UhjSe0Pqt0VZs7mp5o+1r5k3Y/NP/THuYaLLJipYUNVm4z3GvVYYsnrT5vdM2ae5ae" +
+        "WvvW+LN1U5anWQ/zHZZ4sdrDRi93OO73asTjKa8vOt3w5oGn596+d57w7pfnGd7/By15lUGnbXIhAA" +
+        "AAAElFTkSuQmCC",
+)
+
+// Two entries whose four numbers are all distinct from one another, so no transposition survives. The
+// first carries an explicit non-integral `pixelRatio`; the second declares none and sits flush against
+// both far edges of the atlas, which the gate admits.
+private val TWO_ENTRY_SPRITE_JSON: ByteArray = (
+    """{"harbour":{"x":3,"y":1,"width":9,"height":5,"pixelRatio":2.5},""" +
+        """"quay":{"x":11,"y":6,"width":5,"height":2}}"""
+    ).encodeToByteArray()
 
 // A real 2x2 colour-type-6 PNG whose last pixel carries alpha 0x80: it decodes, so generic image
 // validation admits it, but its alpha channel carries data, so it is not an eight-bit RGB terrain
