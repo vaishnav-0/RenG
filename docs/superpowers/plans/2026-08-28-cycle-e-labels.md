@@ -172,10 +172,24 @@ make `drawBasemap = false, drawLabels = true` render nothing at all:
   acquisition of `ResourceClass.BASEMAP_STYLE`, so that pairing acquires no style — and labels come *from*
   the style.
 
-Both are independent `if`s over the plan rather than one shared branch, so splitting them is contained.
+**Corrected during execution: the split is three sites, not two, and the two named guards are not
+independent.** Nothing downstream of them consults `drawBasemap` again — the ground instances are derived
+from the tile selection — so widening those two alone drags the ground along with them. Measured, not
+reasoned: a `drawBasemap = false` frame then draws **15,876** ground pixels on Apple's Metal path and
+**12,871** on `Apple Software Renderer`. A third edit gives the ground draw its own gate, which is what
+makes the rule below true.
+
+And `PlannedFrameCore` requires `basemapStyleRoutes == 0 || spatialPlan.tileSelection != null`, so widening
+only one of the two guards does not half-work — it throws out of the planner. That invariant is a safety
+net rather than an obstacle; both conditions must be the same expression.
 
 The rule after the split: **tile selection and style acquisition are needed when either flag is set**;
 only the *ground draw* is gated on `drawBasemap` alone.
+
+**One consequence worth knowing:** `drawLabels` defaults to `true`, so existing `drawBasemap = false`
+callers that meant "no basemap at all" now acquire a style and select tiles. Seven test sites had to say
+`drawLabels = false` explicitly. Label tile selection also shares `maximumBasemapTileInstances` with the
+ground, which is left as-is and is worth an explicit sentence in the spec when task 9 lands.
 
 **Vacuity warning:** a test asserting the split with both flags true passes without the change, and so does
 one with both false. The discriminating cases are exactly the two mixed pairings, and the `false/true` one
