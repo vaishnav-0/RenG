@@ -124,6 +124,7 @@ class CanonicalBinaryTest {
             CanonicalRootKind.MODEL_GEOMETRY to "524e47430107",
             CanonicalRootKind.MODEL_IMAGE to "524e47430108",
             CanonicalRootKind.LABEL to "524e47430109",
+            CanonicalRootKind.GLYPH_ATLAS to "524e4743010a",
         )
 
         assertEquals(

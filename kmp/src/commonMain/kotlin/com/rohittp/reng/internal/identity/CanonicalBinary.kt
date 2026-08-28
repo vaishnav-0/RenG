@@ -19,6 +19,13 @@ internal enum class CanonicalRootKind(internal val wireByte: Int) {
      * -- see `deriveLabelIdentity`, which keys on these exact bytes.
      */
     LABEL(9),
+
+    /**
+     * One packed glyph atlas, identified by the content it packs. Named here rather than derived
+     * from a locator because an atlas is not fetched: it is assembled by the engine out of the
+     * Glyph Ranges the firewall did fetch, so it has no url of its own to be the identity of.
+     */
+    GLYPH_ATLAS(10),
 }
 
 internal class CanonicalFieldWriter internal constructor() {

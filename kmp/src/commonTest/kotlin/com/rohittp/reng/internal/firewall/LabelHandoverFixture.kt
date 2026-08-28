@@ -189,7 +189,7 @@ internal class LabelRecordingStore : Store {
  * The six protobuf wire constructs the MVT and glyph schemas need, and nothing else. No format
  * knowledge lives here -- [labelMvtLayer] and [labelGlyphRange] supply all of it.
  */
-private class ProtoBuffer {
+internal class ProtoBuffer {
     private val out = mutableListOf<Byte>()
 
     fun bytes(): ByteArray = out.toByteArray()
@@ -268,10 +268,22 @@ internal val LABEL_MVT_BYTES: ByteArray = ProtoBuffer()
  * One glyph, at a declared extent whose buffered bitmap is exactly `(width + 6) * (height + 6)` bytes
  * -- Rentile's decoder rejects any other size, and the three-pixel signed-distance-field buffer on
  * every side is what makes the packed cell larger than the declared glyph.
+ *
+ * [field] is the signed distance at each texel of that buffered cell. The default ramps across
+ * `64..191`, which is what the routing cases here want: distinct, asymmetric bytes that survive a
+ * round trip. It is a **parameter** because the fill edge sits at `0.75` of the byte range (191.25),
+ * so that default never reaches full coverage in the fragment shader -- a suite that needs an
+ * unambiguously opaque glyph pixel on a real driver passes a saturated field instead. See
+ * `runLabelIntegrationReadbackSuite`.
  */
-private fun ProtoBuffer.labelGlyph(codepoint: Int, width: Int, height: Int) {
+internal fun ProtoBuffer.labelGlyph(
+    codepoint: Int,
+    width: Int,
+    height: Int,
+    field: (Int) -> Byte = { index -> (64 + index % 128).toByte() },
+) {
     varintField(1, codepoint.toLong())
-    bytesField(2, ByteArray((width + 6) * (height + 6)) { index -> (64 + index % 128).toByte() })
+    bytesField(2, ByteArray((width + 6) * (height + 6), field))
     varintField(3, width.toLong())
     varintField(4, height.toLong())
     varintField(5, zigZag(1))
@@ -280,13 +292,18 @@ private fun ProtoBuffer.labelGlyph(codepoint: Int, width: Int, height: Int) {
 }
 
 /** One Glyph Range protobuf: exactly one font stack, whose `range` the decoder checks against the url. */
-private fun labelGlyphRange(stack: String, range: String, codepoints: List<Int>): ByteArray =
+internal fun labelGlyphRange(
+    stack: String,
+    range: String,
+    codepoints: List<Int>,
+    field: (Int) -> Byte = { index -> (64 + index % 128).toByte() },
+): ByteArray =
     ProtoBuffer()
         .apply {
             messageField(1) {
                 stringField(1, stack)
                 stringField(2, range)
-                codepoints.forEach { codepoint -> messageField(3) { labelGlyph(codepoint, 8, 10) } }
+                codepoints.forEach { codepoint -> messageField(3) { labelGlyph(codepoint, 8, 10, field) } }
             }
         }
         .bytes()
