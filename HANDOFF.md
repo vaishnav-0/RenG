@@ -624,6 +624,21 @@ remains manual.
 **G — globe projection.** The second projection mode, re-projecting mercator tiles and every placement, so
 that it re-projects a complete scene rather than a partial one.
 
+**E-labels — complete, unreleased.** RenG draws map text. What it owes is in `CLAUDE.md`; what is *not*
+done and has no task is here:
+
+- **The hosted-CI hazard.** `assertTheTwoSwitchesAreIndependentOverAGroundThatPaints` asserts *exactly*
+  zero non-ground pixels while drawing real ground quads, and asks for `MacosGlRenderer.DEFAULT` — which on
+  a hosted runner **is `Apple Software Renderer`**, the rasteriser that measurably drops large quads and
+  cost `0.3.0` a publication. The glyph probe gates that case; the large-quad probe does not, and it is
+  `private` to `BasemapReadbackSuite` with a fixture-specific signature. **This will fail the first time
+  anything is pushed.**
+- **`labelCandidateRequestKey` caches one entry.** Deliberate — a moving camera evicts any bounded cache
+  every frame — but an A→B→A oscillation misses every time.
+- **Cycle J is still behind E-terrain and G**, and both their gate rows still promise golden baselines.
+  E-labels solved this for itself by gating on analytical readback plus a recorded harness pass; neither of
+  the other two has an answer yet.
+
 **I — macOS harness — withdrawn 2026-08-28.** The harness pulled forward into the basemap cycle (see "The
 visual harness") is the whole of it. `FramePlan` JSON and a self-contained AVFoundation encoder were
 withdrawn on the argument that the harness is verification code, so an encoder inside it is bug surface that
