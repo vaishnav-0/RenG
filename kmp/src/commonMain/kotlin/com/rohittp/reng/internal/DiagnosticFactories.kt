@@ -112,6 +112,33 @@ internal fun renGFailure(
         diagnostics = failureContext?.let(::listOf) ?: emptyList(),
     )
 
+/**
+ * A label layer reads a source RenG derived no route for, so this frame's labels cannot be asked for
+ * at all (E-labels task 15). Raised **before** the engine is called: Rentile's `planLabelCandidates`
+ * reports acquisition failures over the whole batch, so one unroutable source throws the entire plan
+ * and per-layer granularity is not expressible after the fact -- and the failure that came back
+ * instead was the opaque [RenGErrorCode.BASEMAP_RENDER_FAILED], which sends a consumer to look at
+ * their tiles for a fault that is in their style's sources.
+ *
+ * It names no source. There is no [ResourceKey] to name one with: a route was never derived, which is
+ * the fault itself, and a style's own source id is not an identity RenG has ever put in a diagnostic.
+ * The `resource` field with no identity behind it is the same shape [RenGErrorCode.AMBIGUOUS_RESOURCE_ROUTE]
+ * already uses for a route fault RenG cannot attribute, and the allowlist admits nothing more here.
+ *
+ * Offered as a factory rather than as a `renGFailure` call spelled out at the throw site, because the
+ * allowlist requires a diagnostic for this pair and a call site that omitted it would raise an
+ * `IllegalArgumentException` out of a frame that was merely being refused.
+ */
+internal fun unroutableLabelSourceFailure(): RenGException =
+    renGFailure(
+        code = RenGErrorCode.UNROUTABLE_LABEL_SOURCE,
+        stage = PipelineStage.LABEL_PREPARATION,
+        failureContext = failureContextDiagnostic(
+            stage = PipelineStage.LABEL_PREPARATION,
+            fieldName = DiagnosticField.RESOURCE,
+        ),
+    )
+
 internal fun isAllowedDiagnosticFieldName(fieldName: String): Boolean =
     DiagnosticField.entries.any { it.wireName == fieldName }
 
@@ -184,6 +211,11 @@ private val diagnosticFieldsByStage: Map<PipelineStage, Set<DiagnosticField>> = 
     // failure; without this entry the only reportable shape would be a bare GPU_OPERATION_FAILED,
     // which sends a consumer to inspect GL state for a fault that is in their resource limits.
     PipelineStage.DRAW to setOf(DiagnosticField.RESOURCE),
+    // The label stage carries the same bare `resource` field the route failures do, and for the same
+    // reason: the only failure allowlisted here is one about a source RenG could not route, and it
+    // has no identity to name. Nothing about a label -- its text, its layer, its script -- is a
+    // diagnostic field at all, here or anywhere (ADR 0036).
+    PipelineStage.LABEL_PREPARATION to setOf(DiagnosticField.RESOURCE),
 )
 
 private sealed interface FailureRule {
@@ -487,7 +519,22 @@ private fun failureRule(code: RenGErrorCode, stage: PipelineStage): FailureRule?
             else -> null
         }
 
-        RenGErrorCode.BASEMAP_RENDER_FAILED -> noDiagnosticAt(stage, PipelineStage.BASEMAP_RENDER)
+        // Two stages, one code. The engine draws the ground and plans the labels, and when its
+        // failure carries nothing RenG can honestly restate, the only thing left to report is which
+        // half of the frame stopped. `BASEMAP_RENDER` says the ground did not draw;
+        // `LABEL_PREPARATION` says the label plan did not survive, which until this cycle RenG could
+        // not say at all -- see `classifyEngineFailure`, whose three swept label codes moved here.
+        RenGErrorCode.BASEMAP_RENDER_FAILED -> noDiagnosticAt(
+            stage,
+            PipelineStage.BASEMAP_RENDER,
+            PipelineStage.LABEL_PREPARATION,
+        )
+
+        RenGErrorCode.UNROUTABLE_LABEL_SOURCE -> ruleAt(
+            stage,
+            PipelineStage.LABEL_PREPARATION,
+            FailureRule.Context(setOf(DiagnosticField.RESOURCE)),
+        )
     }
 
 private val establishedResourceRule: FailureRule.Context = FailureRule.Context(

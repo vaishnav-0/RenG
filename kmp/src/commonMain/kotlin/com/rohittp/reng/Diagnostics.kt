@@ -23,6 +23,7 @@ public enum class PipelineStage {
     RENDERER_CLOSE,
     CONTEXT_ADOPTION,
     BASEMAP_RENDER,
+    LABEL_PREPARATION,
 }
 
 public enum class DiagnosticSeverity {

@@ -34,6 +34,7 @@ public enum class RenGErrorCode {
     GPU_OPERATION_FAILED,
     IDENTITY_COLLISION,
     BASEMAP_RENDER_FAILED,
+    UNROUTABLE_LABEL_SOURCE,
 }
 
 public class RenGException internal constructor(
