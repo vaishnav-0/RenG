@@ -289,4 +289,5 @@ in the cycle's completion record.
 - `CLAUDE.md` and `HANDOFF.md` updated with what shipped, what it costs, and both limits of it.
 - `CONTEXT.md` gains the label vocabulary, with `_Avoid_:` lists.
 - `docs/decomposition.md`'s E-labels row updated — its gate says "legible", which this cycle does not claim.
-- The ABI dump's delta is exactly five enum entries and one `FramePlan` parameter. Anything else is a defect.
+- The ABI dump's delta is exactly **four** enum entries — `ResourceClass`, `DiagnosticCode`, `RenGErrorCode`,
+  `PipelineStage` — plus one `FramePlan` parameter. Anything else is a defect.

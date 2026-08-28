@@ -142,15 +142,23 @@ a batch**, where a switch costs a flush.
 **The frame's phase order becomes:**
 
 ```
-map regime (depth tested)
+map regime (depth tested throughout, per ADR 0027)
   1  ground              test, no write
   2  geometries          test, no write
   3  models              test AND write     (ADR 0030)
   4  map-anchored stickers   test, no write
-  5  LABELS              depth test OFF     <-- new
+
+  5  LABELS              depth test OFF     <-- new, and OUTSIDE both regimes
+
 screen regime (no depth)
   6  consumer screen-anchored stickers, by z
 ```
+
+**Labels sit between the two regimes rather than inside either.** ADR 0027 says *every* map-regime pass
+enables `GL_DEPTH_TEST` and sets `glDepthMask(GL_FALSE)`, and ADR 0030 amends that for the model pass alone.
+A label pass that *disables* the test would read as a third exception if labels were called part of the map
+regime — so they are not. Stating membership this way is what keeps ADR 0034 from contradicting ADR 0027;
+putting labels inside the map regime would require superseding 0027 rather than adding an ADR.
 
 So a consumer's screen sticker covers a label, and a label covers a map-anchored sticker. **ADR 0024 never
 answered where an engine-derived stack sits; this ADR answers it.**
