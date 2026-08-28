@@ -1,11 +1,14 @@
 package com.rohittp.reng
 
+import com.rohittp.reng.internal.firewall.LABEL_GLYPH_KEY
 import com.rohittp.reng.internal.firewall.LABEL_GLYPH_TEMPLATE
 import com.rohittp.reng.internal.firewall.LABEL_MVT_BYTES
 import com.rohittp.reng.internal.firewall.LABEL_SANS_STACK
 import com.rohittp.reng.internal.firewall.LABEL_SERIF_STACK
 import com.rohittp.reng.internal.firewall.LABEL_TILE_TEMPLATE
+import com.rohittp.reng.internal.firewall.ProtoBuffer
 import com.rohittp.reng.internal.firewall.VALID_TILE_PNG
+import com.rohittp.reng.internal.firewall.labelGlyph
 import com.rohittp.reng.internal.firewall.labelGlyphRange
 import com.rohittp.reng.internal.firewall.labelGlyphUrls
 import com.rohittp.reng.internal.firewall.labelMvtBytes
@@ -28,6 +31,8 @@ import com.rohittp.reng.internal.gl.RenderContextProbe
 import com.rohittp.reng.internal.gl.adoptRenderContext
 import com.rohittp.reng.internal.gl.measureGlyphQuadRasterisation
 import kotlin.math.abs
+import kotlin.math.min
+import kotlin.math.sqrt
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -72,18 +77,46 @@ import kotlinx.coroutines.runBlocking
  * has to be "nothing but ground reached the frame" rather than "no pure label colour is present" --
  * a first frame carries a tenth of the fade, so the weaker form passes with the switch dead.
  *
- * **The driver is measured before four of these six cases are believed.** [measureGlyphQuadRasterisation]
+ * **Task 16 added the three assertions section 8 lists that nothing else here made.**
+ * [assertCollisionRejectsTheLowerPriorityLabelAndKeepsTheHigher] is the one section 8 calls "the case
+ * with real discriminating power": two labels placed on top of each other draw fewer pixels than the
+ * same two apart, and the survivor is the one `symbol-sort-key` names -- asserted in **both**
+ * directions, because the higher-priority label being also the first-declared one is a second way to
+ * pass under the wrong rule. [assertEveryDrawnPixelFallsInsideTheProjectedLabelBox] bounds the ink by
+ * a box composed from the fixture's own declared glyph metrics through Rentile's layout formula,
+ * which is what catches a runaway anchor projection: every other case here asks whether a colour is
+ * *present* near a point, and a second copy of the label elsewhere satisfies all of them. And
+ * [assertLineLabelGlyphsFollowTheProjectedPolyline] puts a label on a genuinely curved,
+ * genuinely asymmetric arc -- a straight horizontal line is the symmetry point of the whole feature
+ * and passes with the tangent computation deleted -- and requires every glyph pixel to sit on it.
+ *
+ * **The driver is measured before eight of these ten cases are believed.** [measureGlyphQuadRasterisation]
  * draws the two labels' own glyph cells at the label pass's constant clip `w` of 1 and counts the
  * pixels that disagree with the analytic rectangle -- 0 on `Apple M3 Max`. Where it distrusts a
- * driver, the four cases whose evidence is a drawn label pixel skip out loud and the two that require
- * an empty frame still run. That matters here more than the printed driver name suggests: this test
+ * driver, the eight cases whose evidence is a drawn label pixel skip out loud and the two that
+ * require an empty frame still run. **The guard is why those two are not written behind it**: Cycle
+ * H's most recent catch is that a guard which fires first masks every rule beneath it, so the cases
+ * that need no rasterised glyph deliberately sit outside it. That matters here more than the printed
+ * driver name suggests: this test
  * asks for `MacosGlRenderer.DEFAULT`, and on a hosted runner the default *is* `Apple Software
  * Renderer` -- the rasteriser that failed `0.3.0`'s publication on the ground's much larger quads.
  *
- * **What this does not claim.** Not legibility: the fixture's glyphs are saturated distance fields,
- * so each draws as a solid block of its cell rather than as a letter, and legibility stays unverified
- * until Cycle J. Not line placement, not icons, not the ground -- every frame here draws
- * `drawBasemap = false` precisely so that the only thing in it is text.
+ * **What this gate does not cover, stated plainly because a gate that claims more than it verifies is
+ * worse than none.** **Legibility is unverified until Cycle J**, and that is the whole of the
+ * "how it looks" half of this cycle: nothing here measures antialiasing quality, halo contrast
+ * against the ground beneath it, the sharpness of the signed-distance field's iso-line, kerning,
+ * hinting, or whether a reader could tell one glyph from another. The fixture's glyphs are
+ * **saturated** distance fields, so each draws as a solid block of its own cell rather than as a
+ * letter, and every assertion here is a relationship between pixels and analytically derived
+ * numbers -- present, absent, inside a box, near a line, fewer than before. Cycle J's pixel
+ * verification is what can answer the other question, and E-labels' own harness pass is the only
+ * thing in this cycle that *looks* at a frame.
+ *
+ * Not covered either: the ground beneath the labels, which every frame here draws
+ * `drawBasemap = false` for except the one case that needs it; icons, which nothing in RenG draws at
+ * all; complex scripts, which produce no glyph quads to assert about; occlusion of labels by 3D
+ * scene content, which does not exist; and any real mobile GPU, since ADR 0033 runs the mobile
+ * targets in simulation only and this suite's only home is `macosArm64Test`.
  */
 internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderContextProbe) {
     val target = createLabelIntegrationTarget(binding)
@@ -101,7 +134,7 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
             rasterisation.describe(),
     )
     try {
-        // The five cases whose evidence is a drawn label pixel. On a driver that will not rasterise
+        // The eight cases whose evidence is a drawn label pixel. On a driver that will not rasterise
         // this pass's own quads they would measure the driver rather than RenG, so they say so and
         // stand down; see `measureGlyphQuadRasterisation` for why that is a measurement and not a
         // driver-name check, and `theLabelIntegrationReadbackSuitePassesOnARealAppleCoreProfileContext`
@@ -112,9 +145,12 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
             assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
             assertOneAggregateDiagnosticWhateverTheEngineExcluded(binding, probe, target)
             assertAnIconClaimsTheScreenSpaceItsSymbolOccupies(binding, probe, target)
+            assertCollisionRejectsTheLowerPriorityLabelAndKeepsTheHigher(binding, probe, target)
+            assertEveryDrawnPixelFallsInsideTheProjectedLabelBox(binding, probe, target)
+            assertLineLabelGlyphsFollowTheProjectedPolyline(binding, probe, target)
         } else {
             println(
-                "RenG label integration readback SKIPPED [the five cases that assert a drawn label " +
+                "RenG label integration readback SKIPPED [the eight cases that assert a drawn label " +
                     "pixel] " + rasterisation.describe() +
                     ": this driver does not rasterise the label pass's own quads. The two cases that " +
                     "assert an empty frame still ran.",
@@ -806,6 +842,7 @@ private class IntegrationTransport(
             url == labelGlyphUrls()[0] -> SANS_RANGE_0
             url == labelGlyphUrls()[1] -> SANS_RANGE_256
             url == labelGlyphUrls()[2] -> SERIF_RANGE_0
+            url == LINE_GLYPH_URL -> LINE_GLYPH_RANGE_BYTES
             url == "$INTEGRATION_SPRITE_BASE.json" -> INTEGRATION_SPRITE_JSON
             url == "$INTEGRATION_SPRITE_BASE.png" -> VALID_TILE_PNG
             else -> null
@@ -924,6 +961,17 @@ private class LabelFrame(private val bytes: ByteArray) {
         return total
     }
 
+    /**
+     * Every pixel that is not the cleared background, as samples rather than as a count -- which is
+     * what an assertion about *where* the ink landed needs, and what [drawnCount] deliberately
+     * throws away.
+     */
+    fun drawn(): List<Sample> {
+        val samples = ArrayList<Sample>()
+        forEachPixel { x, y, pixel -> if (!pixel.isCloseTo(ABSENT)) samples += Sample(x, y, pixel) }
+        return samples
+    }
+
     /** How many pixels do **not** carry [colour] within [CHANNEL_TOLERANCE]. */
     fun countOfNot(colour: IntArray): Int =
         LABEL_INTEGRATION_PIXELS * LABEL_INTEGRATION_PIXELS - countOf(colour)
@@ -949,8 +997,13 @@ private class LabelFrame(private val bytes: ByteArray) {
         return best
     }
 
-    /** One character per 4x4 block, keyed by nearest fixture colour: the message a human reads. */
-    fun asciiMap(): String {
+    /**
+     * One character per 4x4 block, keyed by nearest fixture colour: the message a human reads.
+     *
+     * [extra] adds colours a single case brings with it -- the line fixture's road colour is in no
+     * other frame -- so that a failure there prints a map rather than a row of question marks.
+     */
+    fun asciiMap(vararg extra: Pair<IntArray, Char>): String {
         val builder = StringBuilder()
         for (row in 0 until LABEL_INTEGRATION_PIXELS / MAP_GLYPH_PIXELS) {
             for (column in 0 until LABEL_INTEGRATION_PIXELS / MAP_GLYPH_PIXELS) {
@@ -964,7 +1017,7 @@ private class LabelFrame(private val bytes: ByteArray) {
                         pixel.isCloseTo(PLACE_COLOUR) -> 'P'
                         pixel.isCloseTo(TOWN_COLOUR) -> 'T'
                         pixel.isCloseTo(GROUND_COLOUR) -> 'g'
-                        else -> '?'
+                        else -> extra.firstOrNull { pixel.isCloseTo(it.first) }?.second ?: '?'
                     },
                 )
             }
@@ -998,3 +1051,639 @@ private fun IntArray.isCloseTo(other: IntArray): Boolean = distanceTo(other) <= 
 private fun IntArray.distanceTo(other: IntArray): Int = indices.maxOf { abs(this[it] - other[it]) }
 
 private fun IntArray.describe(): String = "(${this[0]},${this[1]},${this[2]},${this[3]})"
+
+// ---- task 16: the three assertions section 8 lists that nothing else in the tree makes ------------
+
+/**
+ * **Collision genuinely rejects, and the survivor is the one priority names.** Section 8 calls this
+ * "the case with real discriminating power" and until this task nothing anywhere asserted it through
+ * pixels: `LabelPlacementTest` pins the rule against hand-built candidates, which is a statement
+ * about a comparator rather than about a frame.
+ *
+ * **Three frames, and the pair at the end is what makes it a statement about priority.** Section 8's
+ * own vacuity trap is that "two labels at equal priority pass under either ordering rule"; the trap
+ * one step past it is that two labels at *different* priorities still pass under the wrong rule when
+ * the higher-priority one is also the one declared first. `LabelLayerStyle.priority` is the layer's
+ * position in the style, larger winning, so a pass that ignored `symbol-sort-key` entirely would let
+ * the **town** layer -- declared second -- win every collision. So the two overlapping frames give
+ * the sort keys to opposite layers and require the survivor to swap with them:
+ *
+ *  - `place` at `symbol-sort-key: 10`, `town` at `0` -- the place label must survive, which the
+ *    layer-order rule alone cannot produce;
+ *  - `town` at `10`, `place` at `0` -- the town label must survive, which a *reversed* comparator
+ *    cannot produce.
+ *
+ * No single ordering rule other than "larger `symbol-sort-key` wins" satisfies both.
+ *
+ * **The control is the same style with the town label's `text-translate` back at
+ * [TOWN_TRANSLATE_X].** Both sort keys are already in it, so the only thing that changes between the
+ * control and either case is *whether the two boxes overlap* -- the case turns on collision and on
+ * nothing about the fixture, the priority or the declaration order.
+ *
+ * **Fewer pixels, and the specific loser gone.** A count alone would be satisfied by a pass that
+ * dropped both labels, and a colour check alone would be satisfied by a pass that never drew the
+ * loser at any spacing; the pair is what says one label was rejected *by* the other.
+ *
+ * **The two labels overlap by [COLLISION_OVERLAP_TRANSLATE_X] rather than exactly, and that number
+ * is a vacuity this case had to be broken to find.** Written first with both labels on the same
+ * anchor, the place-wins direction **passed with collision deleted outright** -- measured, by making
+ * `textPlaceable` ignore the index. The place label's cell is 17.33 pixels wide and the town's is
+ * 9.33, both centred on the same point, so the survivor's ink is a strict superset of the loser's
+ * and the winner simply paints over it: "no pixel carries the town colour" is then true whether the
+ * town label was rejected or merely hidden, and the pixel count falls to the winner's own ink either
+ * way. Only the town-wins direction caught the deleted collision. Ten pixels of `text-translate`
+ * leaves each label six pixels of screen the other cannot reach, so a label that drew and lost is
+ * visible as itself; both directions catch it now.
+ */
+private fun assertCollisionRejectsTheLowerPriorityLabelAndKeepsTheHigher(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+) {
+    val apart = drawSaturatedFrame(binding, probe, target, COLLISION_CONTROL_STYLE_JSON)
+    if (apart.nearest(PLACE_COLOUR) == null || apart.nearest(TOWN_COLOUR) == null) {
+        throw AssertionError(
+            "the control must draw both labels side by side, or neither collision case proves " +
+                "anything\n" + apart.asciiMap(),
+        )
+    }
+    val apartDrawn = apart.drawnCount()
+
+    val placeWins = drawSaturatedFrame(binding, probe, target, COLLISION_PLACE_WINS_STYLE_JSON)
+    val townWins = drawSaturatedFrame(binding, probe, target, COLLISION_TOWN_WINS_STYLE_JSON)
+    println(
+        "RenG label integration readback collision: apart=" + apartDrawn +
+            " placeWins=" + placeWins.drawnCount() + " townWins=" + townWins.drawnCount(),
+    )
+
+    assertTrue(
+        placeWins.drawnCount() < apartDrawn,
+        "two labels placed on top of each other must draw fewer pixels than the same two apart, " +
+            "but the overlapping frame drew " + placeWins.drawnCount() + " against " + apartDrawn +
+            "\n" + placeWins.asciiMap(),
+    )
+    assertTrue(
+        townWins.drawnCount() < apartDrawn,
+        "and the same with the sort keys exchanged: " + townWins.drawnCount() + " against " +
+            apartDrawn + "\n" + townWins.asciiMap(),
+    )
+
+    val survivingPlace = placeWins.nearest(PLACE_COLOUR)
+        ?: throw AssertionError(
+            "the place label carries the higher symbol-sort-key, so it must be the one that keeps " +
+                "its place; nothing in the frame carries " + PLACE_COLOUR.describe() + "\n" +
+                placeWins.asciiMap(),
+        )
+    assertNear(survivingPlace, PLACE_ANCHOR_X, ANCHOR_Y, "the higher-priority place label")
+    assertEquals(
+        null,
+        placeWins.nearest(TOWN_COLOUR)?.describe(),
+        "and the town label must lose its place entirely, but a pixel carrying " +
+            TOWN_COLOUR.describe() + " is still in the frame\n" + placeWins.asciiMap(),
+    )
+
+    val survivingTown = townWins.nearest(TOWN_COLOUR)
+        ?: throw AssertionError(
+            "with the sort keys exchanged the town label is the higher-priority one and must " +
+                "survive instead; nothing in the frame carries " + TOWN_COLOUR.describe() + "\n" +
+                townWins.asciiMap(),
+        )
+    assertNear(survivingTown, COLLIDING_TOWN_ANCHOR_X, ANCHOR_Y, "the higher-priority town label")
+    assertEquals(
+        null,
+        townWins.nearest(PLACE_COLOUR)?.describe(),
+        "and the place label must now be the one that loses, but a pixel carrying " +
+            PLACE_COLOUR.describe() + " is still in the frame\n" + townWins.asciiMap(),
+    )
+}
+
+/**
+ * **Coverage is bounded: every drawn pixel falls inside a box projected analytically from the
+ * label's own quad extents.**
+ *
+ * This is the case that catches a runaway anchor projection -- the failure the forward-projection
+ * task called "invisible in a rendered frame until labels are already in the wrong place". Every
+ * other pixel assertion in this suite asks whether a colour is *present* somewhere near a predicted
+ * point, and a pass that also painted a second copy of the label somewhere else entirely satisfies
+ * all of them.
+ *
+ * **The box is derived, not measured.** [projectedLabelBox] composes the fixture's own declared
+ * numbers -- the glyph's width, height, bearings and advance as [labelGlyphRange] encodes them, the
+ * three-pixel SDF buffer Rentile's packer adds, the style's `text-size` over the 24-pixel em, and
+ * the default 1.2-em line height -- through Rentile's documented layout formula. Nothing in it comes
+ * from a frame, so a frame cannot agree with it by construction. Its predictions were checked
+ * against the ink a real `Apple M3 Max` draws: x 54.7..72 and 98.7..108 by y 60.4..71.1, against the
+ * 55..71 / 99..107 by 60..70 recorded in [labelIntegrationFootprints].
+ *
+ * **The lower bound is in this case rather than beside it, and it has to be.** "Every drawn pixel is
+ * inside the box" is an upper bound, and an empty frame satisfies it perfectly --
+ * `ModelReadbackSuite` measured exactly that failure mode, where a no-op draw passed two of its six
+ * cases. So the case asserts a floor on the ink first and bounds it second, and a no-op label draw
+ * fails on the floor.
+ *
+ * **Two labels, not one, and the second one is load-bearing.** A single box centred on the frame's
+ * own centre is symmetric in both axes: a transposed or mirrored viewport transform would move the
+ * ink onto itself. The town label sits [TOWN_TRANSLATE_X] pixels east of the frame's centre and
+ * nowhere near the vertical axis, so its box is disjoint from its own mirror in x, and the vertical
+ * asymmetry of the glyph cell -- 3.6 pixels above the anchor against 7.1 below it -- is what closes
+ * the same question in y.
+ */
+private fun assertEveryDrawnPixelFallsInsideTheProjectedLabelBox(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+) {
+    val frame = drawSaturatedFrame(binding, probe, target, TWO_LAYER_STYLE_JSON)
+    val boxes = listOf(
+        projectedLabelBox(PLACE_ANCHOR_X.toDouble(), PLACE_LABEL_GLYPHS),
+        projectedLabelBox(TOWN_ANCHOR_X.toDouble(), TOWN_LABEL_GLYPHS),
+    )
+    val drawn = frame.drawn()
+    println(
+        "RenG label integration readback coverage: drawn=" + drawn.size + " boxes=" +
+            boxes.joinToString { it.describe() },
+    )
+    assertTrue(
+        drawn.size >= MINIMUM_LABEL_INK_PIXELS,
+        "the two labels must actually cover the screen space their quads claim: only " + drawn.size +
+            " pixels drew, against a floor of " + MINIMUM_LABEL_INK_PIXELS + "\n" + frame.asciiMap(),
+    )
+
+    val outside = drawn.filter { sample -> boxes.none { box -> box.containsPixel(sample) } }
+    assertEquals(
+        emptyList(),
+        outside.map { it.describe() },
+        "every drawn pixel must fall inside a label's own analytically projected box (" +
+            boxes.joinToString { it.describe() } + ", each with a " + COVERAGE_MARGIN_PIXELS +
+            "-pixel rasterisation margin), but " + outside.size + " of " + drawn.size +
+            " did not\n" + frame.asciiMap(),
+    )
+}
+
+/**
+ * **Line placement puts the glyphs on the line**, in 31 of the 34 corpus styles' most common
+ * placement mode, which until this task nothing verified through pixels at all.
+ *
+ * **The trap this fixture exists to avoid.** A straight horizontal line is the symmetry point of the
+ * entire feature: every tangent along it is identical, so a tangent computation that had been
+ * deleted, transposed or replaced by a constant produces exactly the correct frame. [LINE_MVT_POINTS]
+ * is a circular arc turning 68 degrees over its 110 projected pixels, asymmetric in both axes and
+ * never horizontal anywhere along it, sampled at 12 vertices so that no single vertex turns more
+ * than 6.4 degrees.
+ *
+ * **The glyph is deliberately wide and short**, 26 by 8 packed texels against the rest of the
+ * fixture's 14 by 16, and that shape is what gives the distance assertion its power. A glyph drawn
+ * in the polyline's own frame lies *along* the line, so its cell reaches 8.7 pixels along the
+ * tangent and only 2.9 across it; the same cell drawn unrotated reaches 8.7 pixels **across** a line
+ * running at 50 to 70 degrees. Measured on `Apple M3 Max`, as the worst drawn pixel's own distance
+ * from the polyline: **2.92** as this stands, **8.46** with the glyph frames taking a constant
+ * horizontal axis instead of the sampled tangent, and **10.59** with the label drawn as a rigid row
+ * along the tangent it has at its anchor -- the bug a straight fixture is definitionally blind to.
+ * [MAXIMUM_LINE_OFFSET_PIXELS] sits between the first and the second with margin on both sides. A
+ * near-square cell -- the shape every other label fixture here uses -- separates those same cases by
+ * 5.3 against 7.0, which no tolerance can distinguish from rasterisation.
+ *
+ * **And the ink has to climb.** The distance bound alone is satisfied by a label whose glyphs all
+ * collapsed onto one anchor, since that anchor is itself on the line. The arc rises 64 pixels over
+ * the span the label occupies, against the 5.3-pixel height of one glyph cell, so requiring the ink
+ * to span [MINIMUM_LINE_INK_HEIGHT_PIXELS] vertically is a statement that the glyphs were
+ * distributed along the curve rather than stacked at its midpoint. Sampling every glyph at the
+ * label's own anchor leaves 92 drawn pixels of the 433 this draws, so the floor is what reports that
+ * one first; the climb is the assertion that stays true of a collapse which somehow kept its ink.
+ *
+ * **Every number the assertion compares against is derived from the fixture's own tile coordinates**
+ * -- see [LINE_SCREEN_POINTS] -- rather than from `projectGeographicPosition`, which is the function
+ * a wrong answer here would live in.
+ */
+private fun assertLineLabelGlyphsFollowTheProjectedPolyline(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+) {
+    val frame = drawSaturatedFrame(binding, probe, target, LINE_STYLE_JSON, LINE_MVT_BYTES)
+    val ink = frame.drawn()
+    val worst = ink.maxByOrNull { distanceToProjectedLine(it) }
+    println(
+        "RenG label integration readback line placement: ink=" + ink.size +
+            " worstOffset=" + (worst?.let { distanceToProjectedLine(it) } ?: -1.0) +
+            " at " + (worst?.describe() ?: "nothing"),
+    )
+    assertTrue(
+        ink.size >= MINIMUM_LINE_INK_PIXELS,
+        "a line-placed label must reach the frame: only " + ink.size + " pixels drew, against a " +
+            "floor of " + MINIMUM_LINE_INK_PIXELS + "\n" + frame.asciiMap(ROAD_COLOUR to 'R'),
+    )
+    assertEquals(
+        ink.size,
+        frame.countOf(ROAD_COLOUR),
+        "and every one of them must carry the road layer's own text colour " +
+            ROAD_COLOUR.describe() + "\n" + frame.asciiMap(ROAD_COLOUR to 'R'),
+    )
+
+    val worstOffset = distanceToProjectedLine(requireNotNull(worst) { "the floor above found ink" })
+    assertTrue(
+        worstOffset <= MAXIMUM_LINE_OFFSET_PIXELS,
+        "every glyph pixel must sit on the projected polyline, but " + worst.describe() +
+            " is " + worstOffset + " pixels from it, over a budget of " +
+            MAXIMUM_LINE_OFFSET_PIXELS + "\n" + frame.asciiMap(ROAD_COLOUR to 'R'),
+    )
+
+    val climb = ink.maxOf { it.y } - ink.minOf { it.y }
+    assertTrue(
+        climb >= MINIMUM_LINE_INK_HEIGHT_PIXELS,
+        "and the glyphs must be distributed along the curve rather than stacked at its anchor: the " +
+            "ink spans " + climb + " rows against the " + MINIMUM_LINE_INK_HEIGHT_PIXELS +
+            " the arc rises over the label's own extent\n" + frame.asciiMap(ROAD_COLOUR to 'R'),
+    )
+}
+
+// ---- task 16's fixture ---------------------------------------------------------------------------
+
+/**
+ * One renderer, one style, and [LABEL_FADE_RAMP] prepares of the same plan, returning the last
+ * frame: the shape every case here that reads a saturated colour needs, so that "the fade had not
+ * finished" is never an explanation for a missing pixel.
+ */
+private fun drawSaturatedFrame(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+    styleJson: String,
+    tileBytes: ByteArray = LABEL_MVT_BYTES,
+): LabelFrame {
+    val renderer = labelRenderer(binding, probe, styleJson, tileBytes)
+    try {
+        val renderTarget = renderer.mintRenderTarget(FramebufferName(target.toUInt()))
+        var frame = clearAndDraw(binding, renderer, renderTarget, target, labelPlan(0L))
+        for (frameIndex in 1L until LABEL_FADE_RAMP.toLong()) {
+            frame = clearAndDraw(binding, renderer, renderTarget, target, labelPlan(frameIndex))
+        }
+        return frame
+    } finally {
+        renderer.close()
+    }
+}
+
+private fun sortKeyLayout(sortKey: Int): String = ""","symbol-sort-key":$sortKey"""
+
+/**
+ * The two ordinary layers with explicit and unequal `symbol-sort-key`s, and the town label's
+ * `text-translate` as the only other free variable. Both keys are present in the control as well as
+ * in the two overlapping cases, so nothing but the overlap changes between them.
+ */
+private fun collisionStyle(placeSortKey: Int, townSortKey: Int, townTranslateX: Int): String =
+    integrationStyle(
+        listOf(
+            symbolLayer("place", "place", LABEL_SANS_STACK, "#ff00ff", 0, sortKeyLayout(placeSortKey)),
+            symbolLayer(
+                "town",
+                "town_label",
+                LABEL_SERIF_STACK,
+                "#ffaa00",
+                townTranslateX,
+                sortKeyLayout(townSortKey),
+            ),
+        ),
+    )
+
+private val COLLISION_CONTROL_STYLE_JSON: String =
+    collisionStyle(placeSortKey = 10, townSortKey = 0, townTranslateX = TOWN_TRANSLATE_X)
+
+private val COLLISION_PLACE_WINS_STYLE_JSON: String =
+    collisionStyle(placeSortKey = 10, townSortKey = 0, townTranslateX = COLLISION_OVERLAP_TRANSLATE_X)
+
+private val COLLISION_TOWN_WINS_STYLE_JSON: String =
+    collisionStyle(placeSortKey = 0, townSortKey = 10, townTranslateX = COLLISION_OVERLAP_TRANSLATE_X)
+
+/**
+ * How far apart the two colliding labels' anchors sit, in screen pixels.
+ *
+ * **Not zero, and the reason is measured rather than aesthetic** -- see this case's own KDoc. Ten
+ * pixels puts the place label's ink at x 54.67..72 and the town label's at 68.67..78, so the two
+ * overlap over the 7.3 pixels of collision geometry that decide the case while each label keeps six
+ * pixels of screen the other cannot paint. Their collision boxes, which carry the default two-pixel
+ * `text-padding` on every side, are 52.67..74 and 66.67..80 and intersect comfortably.
+ */
+private const val COLLISION_OVERLAP_TRANSLATE_X: Int = 10
+
+/** Where the town label's ink sits in the two colliding frames. */
+private const val COLLIDING_TOWN_ANCHOR_X: Int = LABEL_INTEGRATION_PIXELS / 2 + COLLISION_OVERLAP_TRANSLATE_X
+
+/** `AĀ`: the place layer's feature text is two codepoints, one from each of the two sans ranges. */
+private const val PLACE_LABEL_GLYPHS: Int = 2
+
+/** `B`, in the serif stack. */
+private const val TOWN_LABEL_GLYPHS: Int = 1
+
+/**
+ * How much ink the two labels together must put on screen. Their two cells are 17.3 by 10.7 and 9.3
+ * by 10.7 output pixels, which is 285 whole pixels before any boundary is lost to the fill rule;
+ * this floor is well under that and well over anything a partially wired pass produces. Measured at
+ * 286 on `Apple M3 Max`.
+ */
+private const val MINIMUM_LABEL_INK_PIXELS: Int = 220
+
+/**
+ * How far outside its analytic box a drawn pixel may sit. A glyph quad is rasterised by the pixel-centre
+ * rule with no multisampling anywhere in this fixture, so a covered pixel's centre is inside the quad
+ * exactly; one pixel of slack absorbs the `Float` the quad's corners reach the GPU as and nothing more.
+ */
+private const val COVERAGE_MARGIN_PIXELS: Double = 1.0
+
+/**
+ * The box the fixture's own declarations say a label of [glyphCount] glyphs centred on
+ * `(anchorX, ANCHOR_Y)` must fall inside, in `CONTEXT.md`'s continuous output-pixel screen space.
+ *
+ * Rentile's `LabelLayout` places glyph *i* of a single-line, centre-anchored label at
+ * `x = (i * advance - blockWidth / 2 + left - buffer) * scale` and every glyph of it at
+ * `y = (-lineHeight / 2 - top - buffer) * scale`, each cell then spanning the packed entry's own
+ * buffered extent. Substituting this fixture's numbers -- [labelGlyph]'s advance of 12, left bearing
+ * of 1 and top bearing of -12 over an 8-by-10 glyph, Rentile's 3-pixel SDF buffer, the style's
+ * `text-size` of 16 over the 24-pixel em, and the specification's default 1.2-em line height --
+ * gives a two-glyph label spanning x -9.33..8 and y -3.6..7.07 about its anchor.
+ *
+ * The vertical extent is deliberately **not** symmetric about the anchor, and that is the fixture's
+ * own doing rather than an approximation: a glyph's cell hangs 7.07 pixels below the anchor row and
+ * reaches only 3.6 above it, so a box that had been centred instead would be wrong in a way a
+ * y-flipped projection could hide.
+ */
+private fun projectedLabelBox(anchorX: Double, glyphCount: Int): AnalyticBox {
+    val advance = GLYPH_ADVANCE_UNITS
+    val blockWidth = glyphCount * advance
+    val firstX = (0 * advance - blockWidth / 2.0 + GLYPH_LEFT_UNITS - SDF_BUFFER_TEXELS) * GLYPH_SCALE
+    val lastX =
+        ((glyphCount - 1) * advance - blockWidth / 2.0 + GLYPH_LEFT_UNITS - SDF_BUFFER_TEXELS) * GLYPH_SCALE
+    val cellWidth = (GLYPH_WIDTH_TEXELS + 2.0 * SDF_BUFFER_TEXELS) * GLYPH_SCALE
+    val cellHeight = (GLYPH_HEIGHT_TEXELS + 2.0 * SDF_BUFFER_TEXELS) * GLYPH_SCALE
+    val topY = (-LINE_HEIGHT_EM * EM_TEXELS / 2.0 - GLYPH_TOP_UNITS - SDF_BUFFER_TEXELS) * GLYPH_SCALE
+    return AnalyticBox(
+        left = anchorX + firstX,
+        top = ANCHOR_Y + topY,
+        right = anchorX + lastX + cellWidth,
+        bottom = ANCHOR_Y + topY + cellHeight,
+    )
+}
+
+/** A rectangle in continuous output-pixel screen space, with [COVERAGE_MARGIN_PIXELS] built into the test. */
+private class AnalyticBox(val left: Double, val top: Double, val right: Double, val bottom: Double) {
+    /**
+     * Whether [sample]'s own **centre** is inside this box. A pixel indexed `(x, y)` has its centre
+     * at `(x + 0.5, y + 0.5)`, which is the point the rasteriser tested against the quad.
+     */
+    fun containsPixel(sample: Sample): Boolean {
+        val centreX = sample.x + 0.5
+        val centreY = sample.y + 0.5
+        return centreX >= left - COVERAGE_MARGIN_PIXELS && centreX <= right + COVERAGE_MARGIN_PIXELS &&
+            centreY >= top - COVERAGE_MARGIN_PIXELS && centreY <= bottom + COVERAGE_MARGIN_PIXELS
+    }
+
+    fun describe(): String = "[" + left + ", " + top + " .. " + right + ", " + bottom + "]"
+}
+
+/** Rentile's `GlyphRangeDecoder.EM_PX`: every glyph bearing and advance in a range is in these units. */
+private const val EM_TEXELS: Double = 24.0
+
+/** Rentile's `GlyphRangeDecoder.BUFFER_PX`, added by its packer on all four sides of every cell. */
+private const val SDF_BUFFER_TEXELS: Double = 3.0
+
+/** The style's `text-size` over [EM_TEXELS]. Every fixture style here declares 16. */
+private const val GLYPH_SCALE: Double = 16.0 / EM_TEXELS
+
+/** `text-line-height`'s specification default, which decides where a single line's top edge sits. */
+private const val LINE_HEIGHT_EM: Double = 1.2
+
+/** [labelGlyph]'s own declared glyph, and the three bearings it encodes. */
+private const val GLYPH_WIDTH_TEXELS: Double = 8.0
+private const val GLYPH_HEIGHT_TEXELS: Double = 10.0
+private const val GLYPH_LEFT_UNITS: Double = 1.0
+private const val GLYPH_TOP_UNITS: Double = -12.0
+private const val GLYPH_ADVANCE_UNITS: Double = 12.0
+
+// ---- the line-placement fixture ------------------------------------------------------------------
+
+/** The road layer's `text-color`. Distinct in every channel from [ABSENT] and from both other labels. */
+private val ROAD_COLOUR: IntArray = intArrayOf(0, 255, 0, 255)
+
+private const val LINE_SOURCE_LAYER: String = "road"
+
+private const val LINE_STACK: String = "Label Line Regular"
+
+/** Five glyphs, `ABCDE`, all in the `0-255` block of [LINE_STACK]. */
+private val LINE_CODEPOINTS: List<Int> = listOf(65, 66, 67, 68, 69)
+
+private val LINE_TEXT: String = LINE_CODEPOINTS.map { it.toChar() }.joinToString("")
+
+/**
+ * `symbol-spacing`, chosen so the fixture's own arc has room for **exactly one** repeat.
+ *
+ * The walk anchors a repeat at half a spacing from the run's start and every spacing after it, so a
+ * spacing of 112 puts the only anchor at 56 along a 109.95-pixel run: the label's own extent is
+ * -41.33..40 about its anchor, which is 14.67..96 and comfortably inside the run, and the next
+ * anchor would be at 168 and off the end of it. One repeat is what makes the ink a single readable
+ * ribbon rather than several overlapping ones, and what lets the assertions below name a single
+ * expected shape.
+ */
+private const val LINE_SYMBOL_SPACING: Int = 112
+
+private val LINE_LAYER: String =
+    """{"id":"road","type":"symbol","source":"v","source-layer":"$LINE_SOURCE_LAYER",""" +
+        """"layout":{"text-field":"{name}","text-font":["$LINE_STACK"],"text-size":16,""" +
+        """"symbol-placement":"line","symbol-spacing":$LINE_SYMBOL_SPACING},""" +
+        """"paint":{"text-color":"#00ff00"}}"""
+
+private val LINE_STYLE_JSON: String = integrationStyle(listOf(LINE_LAYER))
+
+/**
+ * A circular arc of radius 92.5 output pixels turning 68 degrees, in the tile coordinates the
+ * fixture's vector tile declares it in.
+ *
+ * **Asymmetric in both axes, curved everywhere, and horizontal nowhere.** It runs from a heading of
+ * -16.7 degrees to one of -84.8, so no two of its eleven segments share a tangent and none of them is
+ * axis-aligned. A straight line -- the obvious fixture -- is the symmetry point of the whole feature
+ * and would pass with the tangent computation deleted.
+ *
+ * Twelve vertices rather than five, so that no single vertex turns more than 6.4 degrees: a glyph
+ * cell drawn in the frame of a sample near a sharp vertex overhangs the polyline by its own
+ * half-length times the sine of that turn, and a coarse arc would spend the distance budget below on
+ * the polyline's own corners rather than on the thing being measured.
+ */
+private val LINE_MVT_POINTS: List<Pair<Int, Int>> = listOf(
+    1744 to 2368, 1819 to 2341, 1891 to 2306, 1959 to 2263, 2021 to 2214, 2078 to 2158,
+    2129 to 2096, 2173 to 2029, 2209 to 1957, 2237 to 1882, 2257 to 1805, 2269 to 1726,
+)
+
+/**
+ * The same arc in output pixels, derived from the tile coordinates above by arithmetic that involves
+ * no camera code at all.
+ *
+ * At pitch 0 and bearing 0 the map-to-screen transform is a uniform scale: RenG's world is
+ * `512 * 2^zoom` logical pixels across ([com.rohittp.reng.internal.projection] composes exactly
+ * that), so one tile is 512 pixels at every zoom and one unit of a 4096-extent tile is
+ * [MVT_UNITS_PER_PIXEL] of them. Web Mercator's y is linear in a tile's own y for the same reason it
+ * is linear in the tile grid, so both axes take the same constant. [labelCamera] sits at the centre
+ * of the tile these coordinates are in, which puts tile `(2048, 2048)` at the frame's centre.
+ *
+ * Deriving the expectation this way rather than through `projectGeographicPosition` is deliberate:
+ * that function is where a wrong answer would live, and an expectation computed with it would agree
+ * with any answer at all.
+ */
+private val LINE_SCREEN_POINTS: List<Pair<Double, Double>> = LINE_MVT_POINTS.map { (x, y) ->
+    LABEL_INTEGRATION_PIXELS / 2.0 + (x - TILE_CENTRE_MVT) / MVT_UNITS_PER_PIXEL to
+        LABEL_INTEGRATION_PIXELS / 2.0 + (y - TILE_CENTRE_MVT) / MVT_UNITS_PER_PIXEL
+}
+
+/** The mid-tile coordinate every fixture feature is placed relative to; see [labelCamera]. */
+private const val TILE_CENTRE_MVT: Double = 2048.0
+
+/** A 4096-unit tile extent over the 512 output pixels one tile covers at any zoom. */
+private const val MVT_UNITS_PER_PIXEL: Double = 4096.0 / 512.0
+
+/** The distance from one drawn pixel's centre to the nearest point of [LINE_SCREEN_POINTS]. */
+private fun distanceToProjectedLine(sample: Sample): Double {
+    val pointX = sample.x + 0.5
+    val pointY = sample.y + 0.5
+    var best = Double.MAX_VALUE
+    for (index in 0 until LINE_SCREEN_POINTS.size - 1) {
+        val (startX, startY) = LINE_SCREEN_POINTS[index]
+        val (endX, endY) = LINE_SCREEN_POINTS[index + 1]
+        val runX = endX - startX
+        val runY = endY - startY
+        val along = ((pointX - startX) * runX + (pointY - startY) * runY) / (runX * runX + runY * runY)
+        val clamped = along.coerceIn(0.0, 1.0)
+        val offsetX = pointX - (startX + clamped * runX)
+        val offsetY = pointY - (startY + clamped * runY)
+        best = min(best, sqrt(offsetX * offsetX + offsetY * offsetY))
+    }
+    return best
+}
+
+/**
+ * How far a glyph pixel may sit from the projected polyline.
+ *
+ * Derived from the fixture's own cell, not chosen: a 26-by-8 packed cell at [GLYPH_SCALE] is 17.33
+ * by 5.33 output pixels, so a cell centred on the line and rotated into its frame reaches 2.67
+ * pixels across it, plus up to 0.94 more where the cell overhangs a vertex the polyline turns 6.4
+ * degrees at. The worst corner of the fixture's five cells is 3.26 pixels out. The same five cells
+ * drawn unrotated reach 9.15, and drawn as one horizontal row at the anchor reach 34.8.
+ */
+private const val MAXIMUM_LINE_OFFSET_PIXELS: Double = 5.5
+
+/**
+ * How much ink the line label must put on screen: five 17.33-by-5.33 cells, overlapping their
+ * neighbours by 1.33 pixels of advance, is about 430 whole pixels. Measured at 435 on `Apple M3 Max`.
+ */
+private const val MINIMUM_LINE_INK_PIXELS: Int = 300
+
+/**
+ * How many rows the ink must span. The arc rises 64.5 output pixels over the extent the label
+ * occupies; one glyph cell is 5.33 tall, so a label whose glyphs had collapsed onto a single anchor
+ * -- which the distance bound alone permits, that anchor being on the line -- cannot reach half of
+ * this.
+ */
+private const val MINIMUM_LINE_INK_HEIGHT_PIXELS: Int = 40
+
+/**
+ * The vector tile the line style reads: one `road` layer holding one LineString feature whose `name`
+ * is [LINE_TEXT].
+ *
+ * The protobuf *encoder* is [ProtoBuffer], shared with the handover fixture; what is here is the
+ * two constructs a LineString needs that a point feature does not -- geometry type 2, and a `MoveTo`
+ * followed by a single `LineTo` run.
+ */
+private val LINE_MVT_BYTES: ByteArray = ProtoBuffer()
+    .apply {
+        messageField(3) {
+            varintField(15, 2L)
+            stringField(1, LINE_SOURCE_LAYER)
+            messageField(2) {
+                varintField(1, 1L)
+                packedVarints(2, listOf(0L, 0L))
+                varintField(3, LINE_GEOMETRY_TYPE)
+                packedVarints(4, lineStringGeometry(LINE_MVT_POINTS))
+            }
+            stringField(3, "name")
+            messageField(4) { stringField(1, LINE_TEXT) }
+            varintField(5, MVT_EXTENT)
+        }
+    }
+    .bytes()
+
+/** MVT's `GeomType.LINESTRING`. */
+private const val LINE_GEOMETRY_TYPE: Long = 2L
+
+private const val MVT_EXTENT: Long = 4096L
+
+/**
+ * One `MoveTo` of a single point followed by one `LineTo` of every point after it, with every
+ * coordinate a zig-zag delta from the cursor's previous position.
+ */
+private fun lineStringGeometry(points: List<Pair<Int, Int>>): List<Long> {
+    val commands = ArrayList<Long>(2 * points.size + 2)
+    commands += mvtCommand(MVT_MOVE_TO, 1)
+    commands += mvtZigZag(points[0].first)
+    commands += mvtZigZag(points[0].second)
+    commands += mvtCommand(MVT_LINE_TO, points.size - 1)
+    for (index in 1 until points.size) {
+        commands += mvtZigZag(points[index].first - points[index - 1].first)
+        commands += mvtZigZag(points[index].second - points[index - 1].second)
+    }
+    return commands
+}
+
+private fun mvtCommand(id: Int, count: Int): Long = ((count shl 3) or id).toLong()
+
+private fun mvtZigZag(value: Int): Long = ((value shl 1) xor (value shr 31)).toLong()
+
+private const val MVT_MOVE_TO: Int = 1
+private const val MVT_LINE_TO: Int = 2
+
+/**
+ * The line fixture's own Glyph Range: five saturated glyphs, each **wide and short** where the rest
+ * of this file's are nearly square.
+ *
+ * A 20-by-2 glyph packs into a 26-by-8 cell, which is 17.33 by 5.33 output pixels at this fixture's
+ * scale -- a cell more than three times as long as it is thick, so which way it is turned is
+ * measurable in a frame. The top bearing of -13 is what centres that cell on the line rather than
+ * hanging it below: Rentile places a single line's cell at `(-lineHeight / 2 - top - buffer) * scale`
+ * downward from the anchor, which for a 1.2-em line height and this bearing is -2.93, half the cell's
+ * own 5.33 height to within a third of a pixel. The rest of the fixture leaves that offset alone and
+ * is 3.6 above the anchor against 7.07 below.
+ *
+ * The advance of 24 is one em, so consecutive cells overlap by 1.33 pixels and the label's ink is one
+ * continuous ribbon along the arc.
+ */
+private val LINE_GLYPH_RANGE_BYTES: ByteArray = ProtoBuffer()
+    .apply {
+        messageField(1) {
+            stringField(1, LINE_STACK)
+            stringField(2, "0-255")
+            LINE_CODEPOINTS.forEach { codepoint ->
+                messageField(3) {
+                    varintField(1, codepoint.toLong())
+                    bytesField(
+                        2,
+                        ByteArray(
+                            ((LINE_GLYPH_WIDTH + 2 * SDF_BUFFER_TEXELS.toInt()) *
+                                (LINE_GLYPH_HEIGHT + 2 * SDF_BUFFER_TEXELS.toInt())),
+                        ) { 0xFF.toByte() },
+                    )
+                    varintField(3, LINE_GLYPH_WIDTH.toLong())
+                    varintField(4, LINE_GLYPH_HEIGHT.toLong())
+                    varintField(5, mvtZigZag(LINE_GLYPH_LEFT))
+                    varintField(6, mvtZigZag(LINE_GLYPH_TOP))
+                    varintField(7, LINE_GLYPH_ADVANCE)
+                }
+            }
+        }
+    }
+    .bytes()
+
+private const val LINE_GLYPH_WIDTH: Int = 20
+private const val LINE_GLYPH_HEIGHT: Int = 2
+private const val LINE_GLYPH_LEFT: Int = 1
+private const val LINE_GLYPH_TOP: Int = -13
+private const val LINE_GLYPH_ADVANCE: Long = 24L
+
+/** [LINE_STACK]'s own glyph url, composed the way [labelGlyphUrls] composes the other three. */
+private val LINE_GLYPH_URL: String =
+    "https://glyphs.example/Label%20Line%20Regular/0-255.pbf?key=$LABEL_GLYPH_KEY"
