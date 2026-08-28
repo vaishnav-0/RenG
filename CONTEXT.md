@@ -11,7 +11,9 @@ frames; it owns no window, no render loop, no capture path, and no encoder.
 **Frame Plan**:
 A complete, self-contained definition of one frame's content, drawn by whichever renderer prepared it.
 Its required non-negative `frameIndex` orders strict, history-aware preparation within that renderer;
-`drawBasemap`, defaulting to true, may suppress ground for that frame. Plan list inputs are snapshotted, and
+`drawBasemap`, defaulting to true, may suppress ground for that frame, and `drawLabels`, also defaulting to
+true, may suppress **Map Label**s. The two are fully orthogonal: all four pairings are legal, including a
+frame that draws labels over no ground at all. Plan list inputs are snapshotted, and
 every public list read returns a defensive copy whose platform mutation cannot change the plan, its equality,
 or its canonical identity.
 _Avoid_: Scene graph, render command, frame delta, mutation batch
@@ -36,10 +38,11 @@ different mode.
 _Avoid_: Anchoring mode, coordinate space, projection fallback
 
 **Frame History**:
-The renderer's clearable record of its last successfully prepared frame index, **Frame Plan**, and selected
-basemap tile LOD. Only one prepare invocation runs at a time. A batch's indices must be strictly increasing
-and above history; every item completes pure validation, projection, tile-budget, diff, and resource-reference
-planning in index order before any resource work begins. Independent resource work then runs in parallel.
+The renderer's clearable record of its last successfully prepared frame index, **Frame Plan**, selected
+basemap tile LOD, and label fade. Only one prepare invocation runs at a time. A batch's indices must be
+strictly increasing and above history; every item completes pure validation, projection, tile-budget, diff,
+and resource-reference planning in index order before any resource work begins. Independent resource work
+then runs in parallel.
 History commits only when the whole batch succeeds, and returned prepared frames preserve input order.
 Structural diffing uses the last successfully prepared plan as the first baseline and each immediately preceding
 input plan as the next baseline within a batch; missing history is an empty baseline.
@@ -48,10 +51,15 @@ from its own plan. Failure or cancellation exposes no partial history, though va
 remain cached. With prior selected integer LOD `L`, selection repeatedly increments while
 `zoom >= L + 0.75` and repeatedly decrements while `zoom < L - 0.75`, bounded to `[0, 22]`; this defines
 multi-level jumps as the same one-level hysteresis applied until stable. Without history, the nearest integer
-LOD is selected with midpoint ties downward. Every successfully prepared Mercator plan advances provisional
+LOD is selected with midpoint ties downward. Label fade is one opacity per label, easing toward opaque while
+the label is placed and back toward transparent while it is not, advanced one step per successful prepare and
+never by a draw; which labels are placed is recomputed from scratch every frame and is never carried (ADR
+0035), so a fade's duration in seconds is a function of the consumer's frame rate. An entry is retained only
+while its label is placed or still mid-fade. Every successfully prepared Mercator plan advances provisional
 LOD history even when no Basemap Style is configured or `drawBasemap` is false; those frames select and acquire
-no tiles. The context-free `clearFrameHistory()` clears the structural-diff and LOD baseline, permits a new
-sequence, and neither frees resources nor invalidates prepared frames. Drawing never changes history.
+no tiles. The context-free `clearFrameHistory()` clears the structural-diff, LOD and label-fade baseline,
+permits a new sequence, and neither frees resources nor invalidates prepared frames. Drawing never changes
+history.
 _Avoid_: Cache, draw order, partial batch commit, previous-frame mutation
 
 **Tile Budget**:
@@ -353,6 +361,42 @@ the viewer rather than by the world, which is wrong for something pinned to a co
 **Geometries** and the ground are unlit and unaffected — a **Geometry** is painted by its own shader pair,
 and lighting it would contradict that.
 _Avoid_: Sun, headlight, illumination, lighting model, shading mode
+
+### Map labels
+
+**Map Label**:
+Text the basemap style asks for, drawn by RenG as screen-space primitives from a **Label Candidate** the
+engine hands over. Rentile decides everything the style document says — which features are labelled, glyph
+identity and metrics, label-local layout, the atlas — and RenG owns everything that needs a camera:
+projecting the anchor, placing the quads, resolving **Label Collision**, and the draw. Labels are neither a
+map-regime nor a screen-regime **Drawn Thing**; they are engine-derived, have no **Frame Plan** entry, and
+draw in their own phase between the two regimes (ADR 0034).
+_Avoid_: Text layer, annotation, caption, POI label, symbol
+
+**Label Candidate**:
+One labellable feature as the engine reports it: a geographic anchor, laid-out glyph quads in label-local
+coordinates, per-feature paint, a collision box, and the style's placement intent. A candidate is an offer,
+not a placement — whether it reaches the screen is **Label Collision**'s answer.
+_Avoid_: Label instance, placed label, glyph run, symbol candidate
+
+**Label Collision**:
+The screen-space contest that decides which **Label Candidate**s are drawn, resolved during preparation and
+never during drawing. Higher `symbol-sort-key` wins, then style layer order. **This is the only thing in
+RenG that exists to drop content** — every other budget fails preparation rather than dropping, and the
+**Tile Budget**'s rule that RenG never drops required tiles does not extend here.
+_Avoid_: Label culling, overlap rejection, deconfliction, label budget
+
+Note this is unrelated to the *resource-key* collision that `IDENTITY_COLLISION` reports, which is two sets
+of canonical bytes claiming one digest. The two share a word and nothing else; prefer the qualified form
+whenever both could be meant.
+
+**Label Fade**:
+The only label state carried between frames: an opacity per label, eased so a label entering or leaving does
+not pop. *Which* labels are placed is recomputed from scratch every frame — there is no placement
+hysteresis, because the corpus never asks for a second candidate position and incumbency would only let a
+minor label block a major one. Fade lives in **Frame History**, advances once per successful preparation
+rather than on a clock, and is cleared by `clearFrameHistory` (ADR 0035).
+_Avoid_: Label animation, transition, hysteresis, label memory
 
 ### Resources
 

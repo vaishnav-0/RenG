@@ -1,6 +1,7 @@
 package com.rohittp.reng
 
 import com.rohittp.reng.internal.DiagnosticField
+import com.rohittp.reng.internal.basemap.BasemapStyleManifest
 import com.rohittp.reng.internal.basemap.BasemapStyleManifestOutcome
 import com.rohittp.reng.internal.basemap.completeBasemapStyleManifest
 import com.rohittp.reng.internal.basemap.tileTimeRoutes
@@ -10,9 +11,12 @@ import com.rohittp.reng.internal.driver.PreparationDriver
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
+import com.rohittp.reng.internal.firewall.AcquiredLabelCandidates
+import com.rohittp.reng.internal.firewall.reportLabelContentExclusions
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
 import com.rohittp.reng.internal.firewall.ProductionRentilePrivateKeyResolver
 import com.rohittp.reng.internal.firewall.RenderedBasemapTile
+import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
 import com.rohittp.reng.internal.gl.CompositePipeline
 import com.rohittp.reng.internal.gl.CompositePipelineResult
 import com.rohittp.reng.internal.gl.GeometryPipeline
@@ -26,6 +30,12 @@ import com.rohittp.reng.internal.gl.GlProgramCache
 import com.rohittp.reng.internal.gl.GpuTextureResidency
 import com.rohittp.reng.internal.gl.GroundPipeline
 import com.rohittp.reng.internal.gl.GroundPipelineResult
+import com.rohittp.reng.internal.gl.IconBatch
+import com.rohittp.reng.internal.gl.IconPipeline
+import com.rohittp.reng.internal.gl.IconPipelineResult
+import com.rohittp.reng.internal.gl.LabelBatch
+import com.rohittp.reng.internal.gl.LabelPipeline
+import com.rohittp.reng.internal.gl.LabelPipelineResult
 import com.rohittp.reng.internal.gl.OffscreenSurface
 import com.rohittp.reng.internal.gl.OffscreenSurfaceResult
 import com.rohittp.reng.internal.gl.RenderContextProfile
@@ -48,6 +58,9 @@ import com.rohittp.reng.internal.gl.allModelShaderVariants
 import com.rohittp.reng.internal.gl.createCompositePipeline
 import com.rohittp.reng.internal.gl.createGeometryPipeline
 import com.rohittp.reng.internal.gl.createGroundPipeline
+import com.rohittp.reng.internal.gl.ResolvedIconQuad
+import com.rohittp.reng.internal.gl.createIconPipeline
+import com.rohittp.reng.internal.gl.createLabelPipeline
 import com.rohittp.reng.internal.gl.createModelPipeline
 import com.rohittp.reng.internal.gl.createOffscreenSurface
 import com.rohittp.reng.internal.gl.createStickerPipeline
@@ -56,6 +69,8 @@ import com.rohittp.reng.internal.gl.deleteCompositePipeline
 import com.rohittp.reng.internal.gl.deleteGeometryPipeline
 import com.rohittp.reng.internal.gl.deleteGlObjects
 import com.rohittp.reng.internal.gl.deleteGroundPipeline
+import com.rohittp.reng.internal.gl.deleteIconPipeline
+import com.rohittp.reng.internal.gl.deleteLabelPipeline
 import com.rohittp.reng.internal.gl.deleteModelPipeline
 import com.rohittp.reng.internal.gl.deleteOffscreenSurface
 import com.rohittp.reng.internal.gl.deleteStickerPipeline
@@ -63,7 +78,9 @@ import com.rohittp.reng.internal.gl.drawFrame
 import com.rohittp.reng.internal.gl.jointMatricesForSkin
 import com.rohittp.reng.internal.gl.offscreenSurfaceDescriptorFor
 import com.rohittp.reng.internal.gl.requireResolvedAtDrawTime
+import com.rohittp.reng.internal.gl.uploadGlyphAtlas
 import com.rohittp.reng.internal.gl.uploadModelPrimitive
+import com.rohittp.reng.internal.gl.uploadSpriteAtlas
 import com.rohittp.reng.internal.gl.uploadTexture
 import com.rohittp.reng.internal.identity.CanonicalIdentityRegistry
 import com.rohittp.reng.internal.identity.EncodedFramePlan
@@ -73,6 +90,10 @@ import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.image.DecodedImage
 import com.rohittp.reng.internal.image.PngDecodeResult
 import com.rohittp.reng.internal.image.decodePng
+import com.rohittp.reng.internal.label.FadedLabel
+import com.rohittp.reng.internal.label.LabelFadeState
+import com.rohittp.reng.internal.label.advanceLabelFade
+import com.rohittp.reng.internal.label.placeLabels
 import com.rohittp.reng.internal.lifecycle.GpuLedger
 import com.rohittp.reng.internal.lifecycle.PreparedFrameFact
 import com.rohittp.reng.internal.lifecycle.RendererLifecycleOperation
@@ -201,6 +222,72 @@ internal class PreparedGroundInstance(
 )
 
 /**
+ * One frame's labels, everything CPU-shaped about them already done: placed, collided, faded, and
+ * with the atlas they sample already decoded to canonical RGBA8.
+ *
+ * **Every derivation here happened during `prepare()`, and ADR 0035 requires that rather than merely
+ * permitting it.** Collision resolves once per preparation and never during a draw, because a frame
+ * drawn twice must not fade twice; and the fade this carries was folded into `previousLabelFade`
+ * at the same moment, so these quads are already this frame's answer rather than an input to one.
+ *
+ * What is *not* done is the upload: the atlas reaches the GPU in [RenGRenderer.drawResolvedFrame],
+ * under [atlasKey], on exactly the terms a ground tile's texture does — `prepare()` holds no render
+ * context, and an atlas already resident from an earlier frame must cost neither a decode nor an
+ * upload. [atlas] is retained for the miss.
+ */
+internal class PreparedLabelFrame(
+    internal val atlasKey: ResourceKey,
+    internal val atlas: DecodedImage,
+    labels: List<FadedLabel>,
+    /**
+     * This frame's icons, already faded, or empty when no symbol kept one — because the style
+     * declares no sprite, because no icon resolved against the manifest, or because collision took
+     * every one of them.
+     *
+     * **Flattened here rather than left inside [labels], and that is what makes the draw's phase
+     * order expressible.** An icon is drawn out of the sprite atlas and a glyph out of the glyph
+     * atlas, so the two halves of one symbol are two batches whatever the data structure says; a
+     * draw that walked [labels] would have to re-separate them per frame. They are in
+     * [com.rohittp.reng.internal.label.placeLabels]' own order, so the flattening preserves exactly
+     * the precedence the glyph half is drawn in.
+     *
+     * The fade is applied at this point rather than by `advanceLabelFade`, which knows only about
+     * glyph quads: [FadedLabel.opacity] is one number per *symbol*, so multiplying it into the icon
+     * here is applying the same number to the same symbol's other half, not a second fade.
+     */
+    icons: List<ResolvedIconQuad> = emptyList(),
+    /**
+     * The sprite atlas those icons sample and the identity it is resident under, or `null` when
+     * [icons] is empty. Retained for the upload's miss on exactly [atlas]'s terms — `prepare()` holds
+     * no render context, and an atlas already on the GPU must cost neither a decode nor an upload.
+     */
+    internal val spriteAtlasKey: ResourceKey? = null,
+    internal val spriteAtlas: DecodedImage? = null,
+) {
+    private val labelSnapshot: List<FadedLabel> = ArrayList(labels)
+    private val iconSnapshot: List<ResolvedIconQuad> = ArrayList(icons)
+
+    init {
+        require(iconSnapshot.isEmpty() == (spriteAtlasKey == null)) {
+            "an icon can only be drawn out of an atlas, and an atlas is only retained for icons"
+        }
+        require((spriteAtlasKey == null) == (spriteAtlas == null)) {
+            "a retained sprite atlas is its bytes and its identity together"
+        }
+    }
+
+    /** This frame's icons, in the order they are drawn — see the constructor parameter. */
+    internal val icons: List<ResolvedIconQuad> get() = ArrayList(iconSnapshot)
+
+    /**
+     * This frame's surviving labels, lowest priority first — [placeLabels]' own order, which the
+     * label pass consumes verbatim so that where two labels do share pixels the one that would have
+     * won the collision paints last.
+     */
+    internal val labels: List<FadedLabel> get() = ArrayList(labelSnapshot)
+}
+
+/**
  * The concrete [PreparedFrame] this cycle's factory produces. Deliberately thin: it retains exactly
  * what [RenGRenderer.draw] needs to assemble a [Scene] — the raw [Camera] value, each sticker's
  * already-decoded image, and each geometry's already-snapshotted uniforms/textures — and nothing
@@ -220,6 +307,14 @@ internal class RenGPreparedFrame(
     override val frameIndex: Long,
     internal val camera: Camera,
     internal val drawBasemap: Boolean,
+    /**
+     * Carried beside [drawBasemap] because a Prepared Frame records the whole plan's draw switches,
+     * not the subset the current draw happens to consult, and orthogonal to [drawBasemap] rather than
+     * implied by it. The draw does not consult it: by the time a frame exists, `prepare()` has already
+     * answered the flag by leaving [labels] `null`, and re-reading a switch whose consequence is
+     * already decided is how two authorities on one rule get created.
+     */
+    internal val drawLabels: Boolean,
     stickers: List<PreparedSticker>,
     geometries: List<PreparedGeometry>,
     /**
@@ -247,6 +342,15 @@ internal class RenGPreparedFrame(
      * when [basemapTiles] is empty.
      */
     groundInstances: List<PreparedGroundInstance> = emptyList(),
+    /**
+     * This frame's labels, or `null` when it drew none — `drawLabels = false`, no configured style, no
+     * selected tile, a style that declares no text, or a frame every candidate of which lost its place.
+     *
+     * Unlike [basemapTiles] this is a *result* rather than raw material: ADR 0035 puts collision and
+     * fade inside `prepare()`, so by the time a frame exists its labels are already decided. The draw
+     * uploads the atlas and issues the batch; it places nothing.
+     */
+    internal val labels: PreparedLabelFrame? = null,
     /**
      * Which draw regime each of this frame's drawn things is in, and in what order — taken straight
      * off `MercatorSpatialPlan.mapEntries` / `.screenEntries` at `prepare()` time and carried, never
@@ -309,6 +413,59 @@ private class FrameAcquisition(
      * for a frame prepared earlier and drawn later, is a different style entirely.
      */
     val basemapStyleDigest: String?,
+    /**
+     * This frame's engine-derived label candidates, or `null` when the frame asked for no labels, had
+     * no style configured, or selected no tile to ask about. The batch is handed on unplaced: placement
+     * and collision are `prepare()`'s next step, and both are pure functions of it and the camera.
+     */
+    val labelCandidates: AcquiredLabelCandidates? = null,
+    /**
+     * The sprite atlas manifest this frame's style declared, as the firewall's own joint sprite gate
+     * parsed it, or `null` when this invocation held no jointly valid pair.
+     *
+     * **Carried out of acquisition because it cannot be read afterwards.** The `OperationRegistry`
+     * holding it is discarded when the invocation terminates (ADR 0016), which is also what guarantees
+     * one frame's icons can never resolve against another frame's atlas. It is the only route by which
+     * `LabelIconRef.imageName` -- an opaque key into resources Rentile deliberately does not expose --
+     * becomes atlas geometry.
+     */
+    val spriteAtlas: SpriteAtlasManifest? = null,
+)
+
+/**
+ * One Label handover held for reuse by a later frame, under the key Rentile itself published for the
+ * purpose ([BasemapEngineHost.labelCandidateRequestKey]).
+ *
+ * **The sprite manifest travels with it, and leaving it behind would be a visible defect rather than a
+ * missed optimisation.** [FrameAcquisition.spriteAtlas] can only be read from inside the invocation that
+ * proxied the sprite pair, and on a frame whose style was compiled earlier the Label acquisition is the
+ * only thing left that makes the engine ask for it. Reusing the batch without it would therefore hand
+ * every cached frame a `null` atlas and silently drop the frame's icons — a cache that changed how the
+ * map looks, which is the one thing a cache may not do.
+ */
+private class RetainedLabelHandover(
+    val requestKey: String,
+    val candidates: AcquiredLabelCandidates,
+    val spriteAtlas: SpriteAtlasManifest?,
+)
+
+/** One decoded glyph atlas held under the [ResourceKey] `ResourceKeyDeriver.glyphAtlas` named it with. */
+private class RetainedGlyphAtlas(
+    val key: ResourceKey,
+    val image: DecodedImage,
+)
+
+/**
+ * One decoded sprite atlas, the [SpriteAtlasManifest] it was decoded out of, and the [ResourceKey]
+ * `ResourceKeyDeriver.spriteAtlas` named it with.
+ *
+ * [manifest] is held for reference identity alone -- it is the memo's key, never read for content --
+ * which is what makes a cached label handover cost neither a decode nor a digest of the atlas.
+ */
+private class RetainedSpriteAtlas(
+    val manifest: SpriteAtlasManifest,
+    val key: ResourceKey,
+    val image: DecodedImage,
 )
 
 /** The concrete [RenderTarget] [RenGRenderer.mintRenderTarget] produces. */
@@ -324,6 +481,8 @@ internal class InternalGlState(
     val compositePipeline: CompositePipeline,
     val stickerPipeline: StickerPipeline,
     val groundPipeline: GroundPipeline,
+    val labelPipeline: LabelPipeline,
+    val iconPipeline: IconPipeline,
 )
 
 internal sealed interface InternalGlStateResult {
@@ -355,25 +514,37 @@ internal fun createInternalGlState(
     val compositeResult = createCompositePipeline(binding, profile.dialect, programs, deriver)
     val stickerResult = createStickerPipeline(binding, profile.dialect, programs, deriver)
     val groundResult = createGroundPipeline(binding, profile.dialect, programs, deriver)
+    val labelResult = createLabelPipeline(binding, profile.dialect, programs, deriver)
+    val iconResult = createIconPipeline(binding, profile.dialect, programs, deriver)
 
     val surface = (surfaceResult as? OffscreenSurfaceResult.Created)?.surface
     val composite = (compositeResult as? CompositePipelineResult.Created)?.pipeline
     val sticker = (stickerResult as? StickerPipelineResult.Created)?.pipeline
     val ground = (groundResult as? GroundPipelineResult.Created)?.pipeline
+    val label = (labelResult as? LabelPipelineResult.Created)?.pipeline
+    val icon = (iconResult as? IconPipelineResult.Created)?.pipeline
 
-    if (surface != null && composite != null && sticker != null && ground != null) {
-        return InternalGlStateResult.Created(InternalGlState(surface, composite, sticker, ground))
+    if (surface != null && composite != null && sticker != null && ground != null &&
+        label != null && icon != null
+    ) {
+        return InternalGlStateResult.Created(
+            InternalGlState(surface, composite, sticker, ground, label, icon),
+        )
     }
 
     surface?.let { deleteOffscreenSurface(binding, it) }
     composite?.let { deleteCompositePipeline(binding, programs, it) }
     sticker?.let { deleteStickerPipeline(binding, programs, it) }
     ground?.let { deleteGroundPipeline(binding, programs, it) }
+    label?.let { deleteLabelPipeline(binding, programs, it) }
+    icon?.let { deleteIconPipeline(binding, programs, it) }
 
     val failure = (surfaceResult as? OffscreenSurfaceResult.Failed)?.failure
         ?: (compositeResult as? CompositePipelineResult.Failed)?.failure
         ?: (stickerResult as? StickerPipelineResult.Failed)?.failure
         ?: (groundResult as? GroundPipelineResult.Failed)?.failure
+        ?: (labelResult as? LabelPipelineResult.Failed)?.failure
+        ?: (iconResult as? IconPipelineResult.Failed)?.failure
         ?: error("createInternalGlState: no result failed despite an incomplete allocation set")
     return InternalGlStateResult.Failed(failure)
 }
@@ -475,20 +646,105 @@ internal class RenGRenderer(
     private var stickerPipeline: StickerPipeline? = initialGlState.stickerPipeline
     private var groundPipeline: GroundPipeline? = initialGlState.groundPipeline
 
+    /**
+     * ADR 0034's phase 5, allocated at setup with the composite, sticker and ground pipelines rather
+     * than lazily with the model ones. There is exactly one label program with no variants, it needs
+     * nothing of the context the other three do not, and `FramePlan.drawLabels` defaults to `true` —
+     * so none of the three reasons `modelPipelines` is lazy (sixteen compilations, a
+     * `GL_MAX_UNIFORM_BLOCK_SIZE` refusal, and a renderer that may never draw one) applies here.
+     */
+    private var labelPipeline: LabelPipeline? = initialGlState.labelPipeline
+
+    /**
+     * Phase 5's first half, allocated beside the label pipeline and on the same terms: one program,
+     * no variants, and a `FramePlan.drawLabels` that defaults to `true`. A style declaring no sprite
+     * pair simply never hands it a batch.
+     */
+    private var iconPipeline: IconPipeline? = initialGlState.iconPipeline
+
     private var identityRegistry: CanonicalIdentityRegistry = CanonicalIdentityRegistry()
     private var framePlanningCore: FramePlanningCore = newFramePlanningCore(identityRegistry)
     private var previousEncodedPlan: EncodedFramePlan? = null
     private var previousSelectedLod: Int? = null
+
+    /**
+     * ADR 0035's label fade: the fourth member of Frame History, on exactly [previousSelectedLod]'s
+     * terms — read by preparation, fed to a pure function as inert data, committed only after every
+     * fallible step of a `prepare` has succeeded, and cleared by the public `clearFrameHistory()`.
+     * `prepareBatch` needs no rule of its own because it is `plans.map { prepare(it, accessMode) }`,
+     * so a fade commits at the same boundary a LOD does.
+     *
+     * **What it is not is a cache.** Every other cross-frame mechanism in this renderer — decoded
+     * images, uploaded textures, parsed GLBs, compiled shaders, resident tiles — changes how fast a
+     * frame is produced and never how it looks. This one changes pixels: two frames carrying the same
+     * plan can paint a label at different opacities, which is the whole point of it, and
+     * `clearFrameHistory()` is the public call that takes a consumer back to a render that is a pure
+     * function of the plan.
+     */
+    private var previousLabelFade: LabelFadeState = LabelFadeState.EMPTY
+
+    /**
+     * The Label handover this renderer is holding, and the exact opposite kind of thing to
+     * [previousLabelFade] above: **a cache**, changing how fast a frame is produced and never how it
+     * looks. It is therefore not a fifth member of Frame History and is deliberately not cleared by
+     * `clearFrameHistory()` — see [labelHandover] for the whole decision.
+     *
+     * One entry, on [BasemapEngineHost.compiledStyle]'s own terms rather than as a map: a camera that
+     * moves changes its tile set every frame and would evict any bounded cache continuously, while a
+     * camera that sits still — the case measured at 514–520 ms of `prepare()` per frame, ~85% of it,
+     * for a batch that was byte-identical all three times — needs exactly one. A second entry would buy
+     * only an oscillation between two tile sets, which no consumer produces and no measurement asked
+     * for.
+     */
+    private var retainedLabelHandover: RetainedLabelHandover? = null
+
+    /**
+     * The glyph atlas of [retainedLabelHandover]'s batch, decoded once rather than on every frame that
+     * keeps a label.
+     *
+     * **Keyed by the atlas's own content, not by the handover's request key**, and the two are genuinely
+     * different questions. `ResourceKeyDeriver.glyphAtlas` names the atlas by the digest Rentile packed
+     * it under, so two tile sets whose label text happens to need the identical glyphs share this entry
+     * even though their handover keys differ — a pan along a repetitive coastline is exactly that shape.
+     * Keying it off the handover instead would throw the decode away on every invalidation and re-do
+     * 122 ms of work (measured, 16 ranges, 6.88 MB) to arrive at the same pixels.
+     *
+     * Bounded by `ResourceLimits.maximumDecodedImageBytes` — the same ceiling `decodeGlyphAtlas` already
+     * enforces — because that is what a `DecodedImage` of an atlas can weigh at all. One is held, for
+     * the same reason one handover is.
+     */
+    private var retainedGlyphAtlas: RetainedGlyphAtlas? = null
+
+    /**
+     * The sprite atlas of [retainedLabelHandover]'s manifest, decoded once rather than on every frame
+     * that draws an icon.
+     *
+     * **Memoised against the manifest *instance*, which is a stronger statement than it looks.** The
+     * manifest is only ever built by `spritePairJointManifest`, once per proxied sprite pair, and is
+     * then carried by [RetainedLabelHandover] for as long as that handover answers; so an identical
+     * reference means literally the same bytes, decoded from the same fetch. A fresh manifest over
+     * byte-identical bytes misses this and pays one decode, but still derives the same
+     * `ResourceKeyDeriver.spriteAtlas` key and therefore re-uses the texture already on the GPU.
+     *
+     * The alternative -- keying it by the derived key, as [retainedGlyphAtlas] is -- would have to
+     * derive that key, and deriving it hashes the whole encoded atlas. Doing that once per frame to
+     * avoid a decode once per sprite pair is the wrong way round.
+     */
+    private var retainedSpriteAtlas: RetainedSpriteAtlas? = null
 
     /** Once per renderer, never per frame — see the design spec's `drawBasemap` decision. */
     private var basemapWarningEmitted: Boolean = false
 
     /**
      * The compiled basemap style of the **most recently prepared frame**, or `null` when that frame drew
-     * no basemap (or when no preparation has succeeded yet). Cleared rather than left standing on a
-     * `drawBasemap = false` frame, so that a reader never has to cross-check the plan to know whether
+     * neither the basemap nor its labels (or when no preparation has succeeded yet). Since E-labels task
+     * 8b a `drawBasemap = false, drawLabels = true` frame holds its style here too: labels come from the
+     * style, so that pairing acquires and compiles one. Cleared rather than left standing on a frame that
+     * asked for neither, so that a reader never has to cross-check the plan to know whether
      * this belongs to the frame in front of it — "the last style compiled" is a subtly different claim
-     * and would be a trap for Cycle E-C3, which consumes this. Nothing draws with it yet.
+     * and would be a trap for Cycle E-C3, which consumes this. Nothing draws with it: the ground and
+     * the Label handover both take the style from the acquisition that produced it rather than from
+     * here, for exactly the reason the paragraph above gives.
      *
      * Read back from [basemapEngineHost] rather than taken from the driver's compile action, because a
      * `RESIDENT`-provenance frame emits no compile action at all.
@@ -588,15 +844,39 @@ internal class RenGRenderer(
                 geometryTextureReferencesByGeometry.flatten().map { it.second }
             // Post-world-copy-dedup by construction: `canonicalResources` is what BasemapTileSelector
             // emits separately from `instances` precisely so N visible copies of one tile are one
-            // acquisition, one engine render and one identity. It is non-null exactly when the plan draws
-            // a basemap and a style is configured (planMercatorSpatial), which is also exactly when
-            // `styleReference` is non-null.
-            val canonicalTiles = planned.spatialPlan.tileSelection?.canonicalResources.orEmpty()
+            // acquisition, one engine render and one identity. Since E-labels task 8b the selection is
+            // non-null whenever the plan draws a basemap *or* its labels and a style is configured
+            // (planMercatorSpatial), which is also exactly when `styleReference` is non-null.
+            //
+            // **This is the ground draw's own gate, and the only one.** These are the tiles the engine
+            // rasterizes into the PNGs the ground is textured from, so a frame that draws no basemap
+            // hands over none: `renderBasemapTiles` is skipped, `basemapStyleDigest` stays null, and
+            // `groundInstances` therefore returns empty below. `drawLabels` deliberately does not widen
+            // it -- the label handover takes the canonical tiles from the spatial plan and fetches its
+            // own vector tiles through the engine, and nothing about a label needs the ground's raster.
+            val groundCanonicalTiles = if (plan.drawBasemap) {
+                planned.spatialPlan.tileSelection?.canonicalResources.orEmpty()
+            } else {
+                emptyList()
+            }
+            // **The label draw's own gate, and the same selection the ground reads.** Deriving a second
+            // tile list here would be a defect rather than a duplication: `labelCandidateRequestKey`
+            // deliberately does not canonicalise `x`, so a tile set that differs from this one by a
+            // world copy is a different set of routes, a different cache key and a different set of
+            // candidates. Task 8b is what makes one selection reachable from both switches -- since
+            // that split the selection exists on a `drawBasemap = false, drawLabels = true` frame,
+            // which is exactly the pairing that used to plan no tiles at all.
+            val labelCanonicalTiles = if (plan.drawLabels) {
+                planned.spatialPlan.tileSelection?.canonicalResources.orEmpty()
+            } else {
+                emptyList()
+            }
             val acquired = acquireFrameResources(
                 styleReference = styleReference,
                 imageReferences = imageReferences,
                 modelGlbReferences = modelGlbReferences,
-                canonicalTiles = canonicalTiles,
+                canonicalTiles = groundCanonicalTiles,
+                labelTiles = labelCanonicalTiles,
                 accessMode = accessMode,
             )
             val decodedByKey = acquired.decodedImagesByKey
@@ -640,14 +920,65 @@ internal class RenGRenderer(
                 prepareModel(model, modelGlbReferences[index], modelTextureReferences[index], decodedByKey)
             }
 
+            // The label path's second and third steps, in the order ADR 0034 and ADR 0035 fix them.
+            // `placeLabels` resolves point placement, collision and priority against the same resolved
+            // camera the planner already derived -- not a second resolution of the raw `Camera` -- and
+            // returns the survivors lowest-priority-first. `advanceLabelFade` then folds in the
+            // previous frame's opacities by `LabelIdentity` and is committed below beside the LOD, on
+            // the LOD's exact terms: only once every fallible step above has succeeded.
+            //
+            // A `null` batch is the honest input on a frame that asked for no labels, and it is not a
+            // placeholder for a real one: a frame that places no label is a frame in which every label
+            // is absent, so every carried entry decays toward zero and the map empties itself.
+            val labelBatch = acquired.labelCandidates?.batch
+            val placedLabels = if (labelBatch == null) {
+                emptyList()
+            } else {
+                placeLabels(planned.spatialPlan.camera, labelBatch, acquired.spriteAtlas)
+            }
+            val labelFade = advanceLabelFade(
+                previous = previousLabelFade,
+                batch = labelBatch,
+                placed = placedLabels,
+            )
+            // The atlas is decoded only for a frame that actually kept a label. An empty batch still
+            // carries one -- Skia will not encode a zero-dimension image, so Rentile packs a 1x1
+            // placeholder -- and decoding, keying and uploading that would be a texture no draw ever
+            // samples.
+            val labels = if (labelBatch == null || labelFade.labels.isEmpty()) {
+                null
+            } else {
+                val atlasKey = geometryKeyDeriver.glyphAtlas(labelBatch.atlas.contentKey).key
+                // Both halves of every surviving symbol, faded from the one number the fade produced
+                // for it. `advanceLabelFade` faded the glyph quads; the icon quad is faded here
+                // because it never reached that function -- see `PreparedLabelFrame.icons`.
+                val icons = labelFade.labels.mapNotNull { faded ->
+                    faded.label.icon?.quad?.fadedBy(faded.opacity)
+                }
+                // Decoded only for a frame that actually kept an icon. A style can declare a sprite
+                // pair that every one of its icons then fails to resolve against, and decoding an
+                // atlas nothing samples is the same waste the glyph atlas's own guard avoids.
+                val sprites = if (icons.isEmpty()) null else residentSpriteAtlas(acquired.spriteAtlas)
+                PreparedLabelFrame(
+                    atlasKey = atlasKey,
+                    atlas = residentGlyphAtlas(atlasKey, labelBatch.atlas.pngBytes),
+                    labels = labelFade.labels,
+                    icons = if (sprites == null) emptyList() else icons,
+                    spriteAtlasKey = sprites?.key,
+                    spriteAtlas = sprites?.image,
+                )
+            }
+
             previousEncodedPlan = planned.encodedPlan
             previousSelectedLod = planned.spatialPlan.lodObservation.selectedLod
+            previousLabelFade = labelFade.nextState
 
             return RenGPreparedFrame(
                 owner = this,
                 frameIndex = plan.frameIndex,
                 camera = plan.camera,
                 drawBasemap = plan.drawBasemap,
+                drawLabels = plan.drawLabels,
                 stickers = stickers,
                 geometries = geometries,
                 models = models,
@@ -657,6 +988,7 @@ internal class RenGRenderer(
                     renderedTiles = acquired.basemapTiles,
                     styleDigest = acquired.basemapStyleDigest,
                 ),
+                labels = labels,
                 mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
                 screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
             )
@@ -664,6 +996,102 @@ internal class RenGRenderer(
             preparationMutex.unlock()
         }
     }
+
+    /**
+     * Decodes the glyph atlas the engine packed for this frame, to the same canonical RGBA8 every
+     * other image in this renderer becomes.
+     *
+     * **The failure is the one the identical bytes already have elsewhere**, not a new policy: an
+     * engine-produced PNG that `decodePng` will not take is `RESOURCE_DECODE_FAILED` at
+     * `RESOURCE_DECODING`, exactly as a sticker or geometry texture is a few lines up in
+     * [acquireFrameResources], and exactly as a rendered ground tile is at draw time. What is
+     * genuinely reachable here is the budget rather than a malformed container: an atlas shares
+     * [ResourceLimits.maximumDecodedImageBytes] with every raster RenG decodes, and a style whose
+     * font stacks pack past it fails the frame rather than drawing text without its glyphs.
+     */
+    /**
+     * [decodeGlyphAtlas], but paid once per distinct atlas rather than once per frame that keeps a label.
+     *
+     * **The decode is the atlas's real per-frame cost, and the upload never was.** `uploadGlyphAtlas`
+     * has leased a resident texture by key since task 20, so the GPU half was already right; what was
+     * not is that `prepare()` decoded 6.88 MB of PNG -- 120-130 ms measured, 24% of the whole label
+     * path -- to produce a [DecodedImage] the upload then threw away on every frame after the first.
+     * `prepare()` cannot consult [glObjectRegistry] to find out whether it needs one: it is a `suspend`
+     * function that may resume off the thread holding the render context, and the registry belongs to
+     * the draw. So the decode is memoized here instead, on the CPU side where it happens.
+     *
+     * [key] is the atlas's content identity, so a hit means the same bytes rather than the same request,
+     * and a `RESIDENT` handover that repacked an identical atlas hits it too.
+     */
+    private fun residentGlyphAtlas(key: ResourceKey, pngBytes: ByteArray): DecodedImage {
+        retainedGlyphAtlas?.takeIf { it.key == key }?.let { return it.image }
+        val decoded = decodeGlyphAtlas(pngBytes)
+        retainedGlyphAtlas = RetainedGlyphAtlas(key, decoded)
+        return decoded
+    }
+
+    /**
+     * [manifest]'s atlas image, decoded and named, or `null` when there is no manifest to decode.
+     *
+     * **A `null` manifest with icons in hand is unreachable rather than merely unlikely**, because
+     * `resolveIcon` returns `null` for every icon when the manifest is absent -- an icon exists only
+     * if a manifest resolved it. It is expressed as a nullable rather than a `requireNotNull` so that
+     * a future path which decouples the two loses its icons instead of failing a frame over them.
+     *
+     * The decode is memoised against the manifest instance; see [retainedSpriteAtlas]. The key is
+     * derived on the same miss, which is the only place the encoded atlas is hashed.
+     */
+    private fun residentSpriteAtlas(manifest: SpriteAtlasManifest?): RetainedSpriteAtlas? {
+        if (manifest == null) return null
+        retainedSpriteAtlas?.takeIf { it.manifest === manifest }?.let { return it }
+        val key = geometryKeyDeriver.spriteAtlas(manifest.atlasPngBytes).key
+        val decoded = decodeSpriteAtlas(manifest.atlasPngBytes)
+        return RetainedSpriteAtlas(manifest, key, decoded).also { retainedSpriteAtlas = it }
+    }
+
+    /**
+     * The sprite atlas, decoded to the same canonical RGBA8 every other image in this renderer
+     * becomes, failing exactly as [decodeGlyphAtlas] does over the identical class of bytes.
+     *
+     * **What is reachable here is the budget, not a malformed container.** The firewall's own sprite
+     * member gate already decoded these exact bytes in full before the pair was allowed to be
+     * cached, at a ceiling of its own; `maximumDecodedImageBytes` is a consumer-settable limit that
+     * can legitimately be lower. A style whose sprite sheet packs past the consumer's own ceiling
+     * fails the frame rather than drawing a map with its icons quietly missing -- the same choice the
+     * glyph atlas makes over the same limit, and for the same reason: a silent half-drawn symbol is
+     * the failure this whole task exists to close.
+     */
+    private fun decodeSpriteAtlas(pngBytes: ByteArray): DecodedImage =
+        when (val decoded = decodePng(pngBytes, configuration.resourceLimits.maximumDecodedImageBytes)) {
+            is PngDecodeResult.Success -> decoded.image
+            else -> throw RenGException(
+                code = RenGErrorCode.RESOURCE_DECODE_FAILED,
+                stage = PipelineStage.RESOURCE_DECODING,
+                diagnostics = listOf(
+                    failureContextDiagnostic(
+                        stage = PipelineStage.RESOURCE_DECODING,
+                        fieldName = DiagnosticField.RESOURCE,
+                        resourceClass = ResourceClass.BASEMAP_SPRITE_IMAGE,
+                    ),
+                ),
+            )
+        }
+
+    private fun decodeGlyphAtlas(pngBytes: ByteArray): DecodedImage =
+        when (val decoded = decodePng(pngBytes, configuration.resourceLimits.maximumDecodedImageBytes)) {
+            is PngDecodeResult.Success -> decoded.image
+            else -> throw RenGException(
+                code = RenGErrorCode.RESOURCE_DECODE_FAILED,
+                stage = PipelineStage.RESOURCE_DECODING,
+                diagnostics = listOf(
+                    failureContextDiagnostic(
+                        stage = PipelineStage.RESOURCE_DECODING,
+                        fieldName = DiagnosticField.RESOURCE,
+                        resourceClass = ResourceClass.BASEMAP_GLYPH_RANGE,
+                    ),
+                ),
+            )
+        }
 
     /**
      * Pairs every unwrapped draw [instances] entry with the rendered tile it draws, by deriving RenG's
@@ -872,11 +1300,13 @@ internal class RenGRenderer(
      * [CancellationException] rather than a [RenGException], consistent with keeping cancellation
      * unwrapped throughout this codebase.
      */
+    @Suppress("LongParameterList")
     private suspend fun acquireFrameResources(
         styleReference: StaticResourceReference.External?,
         imageReferences: List<StaticResourceReference.External>,
         modelGlbReferences: List<StaticResourceReference.External>,
         canonicalTiles: List<CanonicalBasemapTile>,
+        labelTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
     ): FrameAcquisition {
         val references = listOfNotNull(styleReference) + imageReferences + modelGlbReferences
@@ -896,14 +1326,20 @@ internal class RenGRenderer(
 
         var basemapTiles: List<RenderedBasemapTile> = emptyList()
         var basemapStyleDigest: String? = null
+        var labelCandidates: AcquiredLabelCandidates? = null
+        // Read inside the invocation and carried out of it, because the registry that holds it is
+        // discarded when the invocation ends (ADR 0016). It is the manifest of the sprite pair this
+        // frame's own style declared, and the only way an icon's `imageName` becomes atlas geometry.
+        var spriteAtlas: SpriteAtlasManifest? = null
         val outcome = basemapEngineHost.withOperation(accessMode) {
             val driven = preparationDriver.run(definition)
             if (driven is ResourceOperationOutcome.Success) {
                 // Read back rather than taken from the compile action: on a RESIDENT-provenance frame
                 // the pure core emits no CompileBasemapStyle at all, so there is no action to take it
                 // from. The host retains the compilation across invocations, so this is the one place
-                // the frame's style is obtainable on every frame alike. A frame that drew no basemap
-                // clears it, so this always describes the frame just prepared.
+                // the frame's style is obtainable on every frame alike. A frame that traversed no style
+                // -- since E-labels task 8b, one that drew neither the basemap nor its labels -- clears
+                // it, so this always describes the frame just prepared.
                 // Asked for by content, not by key alone: a compilation whose visibility install never
                 // ran -- the style's own Store write failing is enough -- would otherwise be handed back
                 // here for bytes that are not resident, and paired with routes renderBasemapTiles derives
@@ -918,9 +1354,28 @@ internal class RenGRenderer(
                     )
                 }
                 preparedBasemapStyle = style
-                if (styleReference != null && style != null && canonicalTiles.isNotEmpty()) {
-                    basemapTiles = renderBasemapTiles(styleReference, style, canonicalTiles, accessMode)
-                    basemapStyleDigest = style.digest
+                if (styleReference != null && style != null) {
+                    // Both halves read one manifest. It is bound to the style's content digest, so the
+                    // second call is a lookup rather than a second parse of a 248 KB document -- see
+                    // `BasemapEngineHost.styleManifest`.
+                    val manifest = if (canonicalTiles.isEmpty() && labelTiles.isEmpty()) {
+                        null
+                    } else {
+                        completedStyleManifest(styleReference)
+                    }
+                    if (manifest != null && canonicalTiles.isNotEmpty()) {
+                        basemapTiles = renderBasemapTiles(manifest, style, canonicalTiles, accessMode)
+                        basemapStyleDigest = style.digest
+                    }
+                    if (manifest != null && labelTiles.isNotEmpty()) {
+                        val handover = labelHandover(manifest, style, labelTiles, accessMode)
+                        labelCandidates = handover.candidates
+                        // Taken from the handover rather than read here, because on a frame that reused
+                        // a retained one nothing in this invocation ever asked the engine for the sprite
+                        // pair -- so the registry holds no manifest and reading it now would answer
+                        // `null` for a style that declares one. See [RetainedLabelHandover].
+                        spriteAtlas = handover.spriteAtlas
+                    }
                 }
             }
             driven
@@ -954,13 +1409,19 @@ internal class RenGRenderer(
             }
             reference.resourceKey to image
         }
-        return FrameAcquisition(decodedByKey, basemapTiles, basemapStyleDigest)
+        return FrameAcquisition(decodedByKey, basemapTiles, basemapStyleDigest, labelCandidates, spriteAtlas)
     }
 
     /**
-     * Declares the tile routes this frame's style will make the engine ask for, then acquires and draws
-     * the ground through it. Called from **inside** the invocation that compiled the style, so both
-     * phases share one operation registry (ADR 0016).
+     * This frame's style, read as the route-composition manifest both the ground and the labels need.
+     * Called from **inside** the invocation that compiled the style, so every phase deriving routes
+     * from it shares one operation registry (ADR 0016).
+     *
+     * **One manifest, two consumers, and a cache that makes the second read free.** The ground
+     * ([renderBasemapTiles]) and the Label handover ([acquireLabelCandidates]) both compose urls out
+     * of this, over the same tile selection, and E-labels task 8b made either of them reachable without
+     * the other. Resolving it once per frame and passing it to whichever halves run is what keeps the
+     * two from drifting -- and is why this returns the manifest rather than doing anything with it.
      *
      * The manifest is asked of the engine host rather than carried out of the driver. It is the same pure
      * function of the same two inputs the driver's own `ValidateBasemapStyle` ran — the style bytes and
@@ -991,12 +1452,7 @@ internal class RenGRenderer(
      * urls exactly as an inline one does; a source whose document never arrived stays degraded and
      * contributes nothing at all, rather than guessing a template that would fail closed anyway.
      */
-    private suspend fun renderBasemapTiles(
-        styleReference: StaticResourceReference.External,
-        style: PreparedStyle,
-        canonicalTiles: List<CanonicalBasemapTile>,
-        accessMode: ResourceAccessMode,
-    ): List<RenderedBasemapTile> {
+    private fun completedStyleManifest(styleReference: StaticResourceReference.External): BasemapStyleManifest {
         val stored = residentCache.current(styleReference.resourceKey)?.stored
             ?: error("a successful style commit must leave the style document resident")
         val manifest = when (
@@ -1015,13 +1471,25 @@ internal class RenGRenderer(
         // compiled this exact content -- the same content digest both halves are keyed off -- so a
         // `url`-form source composes its tile urls exactly as an inline one does. A source whose document
         // never arrived stays degraded and contributes nothing, rather than guessing a template.
-        val completed = completeBasemapStyleManifest(
+        return completeBasemapStyleManifest(
             manifest,
             basemapEngineHost.tileJsonDocuments(styleReference.resourceKey, stored.contentDigest),
         )
+    }
+
+    /**
+     * Declares the tile routes [manifest] says this frame's ground will make the engine ask for, then
+     * acquires and draws it. Runs inside the style's own invocation, as [completedStyleManifest] does.
+     */
+    private suspend fun renderBasemapTiles(
+        manifest: BasemapStyleManifest,
+        style: PreparedStyle,
+        canonicalTiles: List<CanonicalBasemapTile>,
+        accessMode: ResourceAccessMode,
+    ): List<RenderedBasemapTile> {
         basemapEngineHost.registerRoutes(
             tileTimeRoutes(
-                manifest = completed,
+                manifest = manifest,
                 tiles = canonicalTiles,
                 accessMode = accessMode,
                 limits = configuration.resourceLimits,
@@ -1032,6 +1500,111 @@ internal class RenGRenderer(
         return basemapEngineHost.prepareTiles(style, canonicalTiles).use { prepared ->
             basemapEngineHost.renderTiles(prepared)
         }
+    }
+
+    /**
+     * Hands this frame's tiles to the Label handover, from inside the same invocation the style was
+     * compiled in. Everything hard about the sequence -- the two rounds of preregistration, reading
+     * `glyphUrls` before the plan is closed, closing it in a `finally`, and the three failures it
+     * names -- belongs to [BasemapEngineHost.acquireLabelCandidates]; this supplies the two things
+     * only the renderer holds and calls it once.
+     *
+     * **The label tile routes are the ground's own derivation over the label tile set.** A label layer
+     * reads the vector tiles of the same sources the style declares, so [tileTimeRoutes] is already
+     * the right function -- there is no second, label-specific route shape. On a frame that draws both,
+     * the ground registered these same routes moments ago and this round is idempotent
+     * ([OperationRegistry.preregister] takes an identical redeclaration without complaint); on a
+     * `drawBasemap = false, drawLabels = true` frame it is the only round there is, which is precisely
+     * why the handover registers them itself rather than trusting a caller to have done it.
+     *
+     * [BasemapStyleManifest.glyphTemplate] is RenG's own resolved copy and must stay so: `glyphUrls`
+     * substitutes the caller's template, so the credential that reaches RenG's `Transport` is the one
+     * in this string rather than one the engine composed. A style declaring no `glyphs` passes `null`,
+     * which is a failure only if the engine nevertheless froze a non-empty closure -- the handover's
+     * own judgement, not this call site's.
+     *
+     * ---
+     *
+     * **And it is called once per *tile set*, not once per frame.** Measured on a real context with a
+     * stationary camera, the label path was 514-520 ms of a 605-610 ms `prepare()` -- ~85% of it, and
+     * 5.5x the ground path over the same 17 tiles -- because nothing was retained: three acquisitions of
+     * an identical tile set asked the consumer's `Transport` for all 17 label tiles and all 16 Glyph
+     * Ranges every single time (17 -> 34 -> 51 and 16 -> 32 -> 48) and re-packed a **byte-identical**
+     * atlas, the same `contentKey` all three times.
+     *
+     * **The key is [BasemapEngineHost.labelCandidateRequestKey] and RenG derives nothing of its own.**
+     * Rentile publishes that key for precisely this cache, computed before any network from its own
+     * compiled-style digest, the sorted de-duplicated tile identities, and a private label-semantics
+     * version it bumps whenever a change to label evaluation, text layout or glyph packing would alter a
+     * batch this key would otherwise leave looking unchanged. That last input is unreachable from here,
+     * which is exactly why a key RenG derived itself would be wrong: it would be a second opinion about
+     * someone else's cache validity, and it would keep looking valid on the day the engine's own answer
+     * moved. What the key deliberately omits -- credentials, sessions, validators, the Glyph Closure --
+     * is what makes it a *request* identity; [com.rohittp.rentile.LabelCandidateBatch.contentKey] is the
+     * answer's, and RenG stores the atlas under it separately.
+     *
+     * **This is a cache and never Frame History, and `clearFrameHistory()` therefore leaves it alone.**
+     * ADR 0035 draws the line in as many words: every cross-frame mechanism in this renderer except the
+     * fade -- decoded images, uploaded textures, parsed GLBs, compiled shaders, resident tiles -- "changes
+     * how fast a frame is produced, never how it looks", and this one is squarely on that side. Two
+     * consecutive frames over one tile set draw the same labels whether or not the batch behind them was
+     * re-fetched, so clearing it would make a history call into a cache-invalidation call as well, and
+     * `CONTEXT.md`'s Frame History entry already says the opposite twice: `clearFrameHistory()` "neither
+     * frees resources nor invalidates prepared frames", and its own `_Avoid_` list names "Cache". The
+     * resident cache, which suppresses far more consumer traffic than this does, is likewise untouched
+     * by it; `freeResources` and `close()` are the calls that own caches.
+     *
+     * **What it holds contradicts no GL opinion, because it holds no GL object.** The batch is an
+     * immutable Rentile value -- candidates, layer styles, atlas PNG bytes, a content key, diagnostics --
+     * with no `close()` and nothing engine-side behind it, unlike a `PreparedBatch`. The atlas's *texture*
+     * lives where every other texture does, in [glObjectRegistry] under the content-derived key
+     * `ResourceKeyDeriver.glyphAtlas`, so `freeResources`, LRU eviction, `notifyGpuObjectsGone` and
+     * `close()` all keep exactly the authority over it they already had: a frame that lost the texture
+     * re-uploads it from [RetainedGlyphAtlas], and a frame that lost both decodes it again from bytes
+     * that are still correct. `close()` drops both retentions as the CPU state they are.
+     */
+    private suspend fun labelHandover(
+        manifest: BasemapStyleManifest,
+        style: PreparedStyle,
+        labelTiles: List<CanonicalBasemapTile>,
+        accessMode: ResourceAccessMode,
+    ): RetainedLabelHandover {
+        val requestKey = basemapEngineHost.labelCandidateRequestKey(style, labelTiles)
+        val handover = retainedLabelHandover?.takeIf { it.requestKey == requestKey } ?: run {
+            val acquired = basemapEngineHost.acquireLabelCandidates(
+                style = style,
+                tiles = labelTiles,
+                glyphTemplate = manifest.glyphTemplate,
+                labelTileRoutes = tileTimeRoutes(
+                    manifest = manifest,
+                    tiles = labelTiles,
+                    accessMode = accessMode,
+                    limits = configuration.resourceLimits,
+                ),
+                limits = configuration.resourceLimits,
+            )
+            // Committed only once the acquisition has fully succeeded, exactly as the LOD and the fade
+            // are. A throw leaves the previous entry standing, which is correct rather than merely
+            // convenient: it is keyed on a request this frame is not making, so it can only ever be
+            // served to a later frame that asks the same question again.
+            RetainedLabelHandover(
+                requestKey = requestKey,
+                candidates = acquired,
+                spriteAtlas = basemapEngineHost.spriteAtlasManifest(),
+            ).also { retainedLabelHandover = it }
+        }
+        // ADR 0036's "once per prepare", and this call site is the whole of the mechanism: the
+        // handover runs once per prepare, so an aggregate emitted beside it does too, however many
+        // exclusions the batch reported and however many layers or tiles they came from. The batch's
+        // own diagnostics never travel further than this line -- `reportLabelContentExclusions`
+        // returns nothing, and what it emits is RenG's own code with a severity and no other field.
+        //
+        // **Deliberately outside the `run` block**, so a frame served from the retained handover reports
+        // exactly what a frame that re-acquired it would. The aggregate describes the content this frame
+        // is drawing, not the exchange that fetched it, and a consumer whose warning appeared on frame 0
+        // and vanished on frame 1 would be reading RenG's cache state rather than its own style.
+        reportLabelContentExclusions(handover.candidates.batch.diagnostics, configuration.diagnosticSink)
+        return handover
     }
 
     override suspend fun cancelPreparations() {
@@ -1045,6 +1618,14 @@ internal class RenGRenderer(
             if (operation == RendererLifecycleOperation.ClearFrameHistory) {
                 previousEncodedPlan = null
                 previousSelectedLod = null
+                previousLabelFade = LabelFadeState.EMPTY
+                // `retainedLabelHandover`, `retainedGlyphAtlas` and `retainedSpriteAtlas` are
+                // deliberately NOT cleared here,
+                // and the omission is a decision rather than an oversight: they are caches, this call
+                // clears history, and CONTEXT.md says a history clear "neither frees resources nor
+                // invalidates prepared frames". ADR 0035's rule -- after `clearFrameHistory()` the render
+                // is a pure function of the plan -- still holds, because neither of them can change what
+                // a frame looks like. `labelHandover` carries the full argument.
                 identityRegistry = CanonicalIdentityRegistry()
                 framePlanningCore = newFramePlanningCore(identityRegistry)
                 null
@@ -1108,6 +1689,8 @@ internal class RenGRenderer(
         compositePipeline = null
         stickerPipeline = null
         groundPipeline = null
+        labelPipeline = null
+        iconPipeline = null
         geometryPipelines.clear()
         // The model pipelines and every uploaded primitive are forgotten on exactly the same terms and
         // in exactly the same place as the geometry pipelines above: the joint uniform buffers, the
@@ -1134,6 +1717,8 @@ internal class RenGRenderer(
                         compositePipeline = recreated.state.compositePipeline
                         stickerPipeline = recreated.state.stickerPipeline
                         groundPipeline = recreated.state.groundPipeline
+                        labelPipeline = recreated.state.labelPipeline
+                        iconPipeline = recreated.state.iconPipeline
                     }
 
                     is InternalGlStateResult.Failed -> {
@@ -1196,6 +1781,8 @@ internal class RenGRenderer(
         val composite = requireNotNull(compositePipeline) { "drawing requires the composite pipeline" }
         val sticker = requireNotNull(stickerPipeline) { "drawing requires the sticker pipeline" }
         val ground = requireNotNull(groundPipeline) { "drawing requires the ground pipeline" }
+        val label = requireNotNull(labelPipeline) { "drawing requires the label pipeline" }
+        val icon = requireNotNull(iconPipeline) { "drawing requires the icon pipeline" }
 
         val resolvedCamera = resolveFrameCamera(frame.camera)
 
@@ -1203,10 +1790,10 @@ internal class RenGRenderer(
         // failure returns inside, and on a throw out of drawFrame. An unreleased lease is permanently
         // exempt from eviction (`GlObjectRegistry.evictOverBudget` iterates only unleased keys), so a
         // leaked one is a texture the byte budget can never reclaim for the renderer's whole life.
-        val groundLeases = ArrayList<TextureLease>(frame.basemapTiles.size)
+        val textureLeases = ArrayList<TextureLease>(frame.basemapTiles.size + 1)
         var unrelievedResidency: GpuTextureResidency? = null
         val failure = try {
-            when (val resolved = resolveGroundTiles(frame, groundLeases)) {
+            when (val resolved = resolveGroundTiles(frame, textureLeases)) {
                 is GroundTilesResult.Failed -> resolved.failure
                 is GroundTilesResult.Resolved -> drawResolvedFrame(
                     frame = frame,
@@ -1216,12 +1803,15 @@ internal class RenGRenderer(
                     composite = composite,
                     sticker = sticker,
                     ground = ground,
+                    label = label,
+                    icon = icon,
                     resolvedCamera = resolvedCamera,
                     sceneGroundTiles = resolved.tiles,
+                    textureLeases = textureLeases,
                 )
             }
         } finally {
-            unrelievedResidency = releaseGroundLeases(groundLeases)
+            unrelievedResidency = releaseTextureLeases(textureLeases)
         }
         // Only on a frame that actually drew. A failing draw reports its own typed failure, and
         // reaching into the consumer's sink while that failure is on its way out would add noise to
@@ -1241,8 +1831,9 @@ internal class RenGRenderer(
     }
 
     /**
-     * Releases every ground lease this draw took, and reports the worst residency that eviction could
-     * not bring under budget -- or `null` if it always could.
+     * Releases every texture lease this draw took -- its ground tiles and, since E-labels, its glyph
+     * atlas -- and reports the worst residency that eviction could not bring under budget, or `null` if
+     * it always could.
      *
      * **One reading per frame, not one per texture.** Each release runs an eviction pass, so a frame
      * 39 tiles past the budget reaches the "out of unleased candidates, still over budget" exit 39
@@ -1253,9 +1844,9 @@ internal class RenGRenderer(
      * falls -- because "the worst it got" is what the reading claims to be, and that should not
      * quietly depend on an ordering property of a loop somewhere else.
      */
-    private fun releaseGroundLeases(groundLeases: List<TextureLease>): GpuTextureResidency? {
+    private fun releaseTextureLeases(leases: List<TextureLease>): GpuTextureResidency? {
         var worst: GpuTextureResidency? = null
-        for (lease in groundLeases) {
+        for (lease in leases) {
             val residency = glObjectRegistry.releaseLease(lease, binding)
             if (!residency.overBudget) continue
             if (worst == null || residency.residentBytes > worst.residentBytes) worst = residency
@@ -1279,8 +1870,11 @@ internal class RenGRenderer(
         composite: CompositePipeline,
         sticker: StickerPipeline,
         ground: GroundPipeline,
+        label: LabelPipeline,
+        icon: IconPipeline,
         resolvedCamera: ResolvedMercatorCamera,
         sceneGroundTiles: List<SceneGroundTile>,
+        textureLeases: MutableList<TextureLease>,
     ): FailureDescriptor? {
         val sceneStickers = frame.stickers.map { preparedSticker ->
             val texture = cachedTexture(preparedSticker.resourceKey) {
@@ -1340,10 +1934,12 @@ internal class RenGRenderer(
             geometries = sceneGeometries,
             groundTiles = sceneGroundTiles,
             models = sceneModels,
+            labels = sceneLabels(frame, textureLeases),
+            icons = sceneIcons(frame, textureLeases),
             mapOrder = frame.mapOrder,
             screenOrder = frame.screenOrder,
         )
-        val content = SceneContent(resolvedCamera, scene, sticker, ground, modelPipelines)
+        val content = SceneContent(resolvedCamera, scene, sticker, ground, modelPipelines, label, icon)
 
         return drawFrame(
             binding = binding,
@@ -1353,6 +1949,67 @@ internal class RenGRenderer(
             targetFramebuffer = framebufferName,
             content = content,
         )
+    }
+
+    /**
+     * ADR 0034's fourth scene list, assembled from what `prepare()` already decided.
+     *
+     * **One batch, because a frame's text shares one atlas.** A [LabelBatch] is per *texture* -- the
+     * one thing a single `glDrawElements` cannot vary -- and every glyph a `LabelCandidateBatch` hands
+     * over is packed into that batch's single atlas. So this flattens every surviving label's quads
+     * into one draw, in [PreparedLabelFrame.labels] order, which is [placeLabels]' own
+     * lowest-priority-first order: where two labels legitimately share pixels, the one that would have
+     * won the collision is the one that paints last. Nothing here sorts, places or fades anything --
+     * all three happened during `prepare()`, and ADR 0035 requires that rather than merely allowing it.
+     *
+     * **The atlas is resident, not re-uploaded.** [uploadGlyphAtlas] leases what is already on the GPU
+     * and uploads only on a miss, exactly as a ground tile does, and the lease joins the same list
+     * [performDraw]'s `finally` releases. That lease is what makes the atlas unevictable for the
+     * duration of this draw: a frame cannot lose the texture it is sampling to a sibling tile's
+     * pressure, and after the release it is an ordinary least-recently-used tenant of the same
+     * [com.rohittp.reng.ResourceLimits.maximumResidentGpuTextureBytes] budget the tiles compete for.
+     */
+    private fun sceneLabels(
+        frame: RenGPreparedFrame,
+        textureLeases: MutableList<TextureLease>,
+    ): List<LabelBatch> {
+        val prepared = frame.labels ?: return emptyList()
+        val atlas = uploadGlyphAtlas(binding, glObjectRegistry, prepared.atlasKey, prepared.atlas)
+        textureLeases += atlas.lease
+        return listOf(
+            LabelBatch(
+                atlasTexture = atlas.handle.name,
+                quads = prepared.labels.flatMap { it.quads },
+            ),
+        )
+    }
+
+    /**
+     * Phase 5's icon half, assembled from what `prepare()` already decided.
+     *
+     * **One batch, because a style declares at most one sprite pair.** An [IconBatch] is per texture
+     * for [LabelBatch]'s reason, and every icon in a frame resolved against the one manifest the
+     * firewall retained, so every icon samples the one atlas. The quads are handed over in
+     * [PreparedLabelFrame.icons] order, which is the placement pass's own -- nothing here sorts,
+     * places or fades anything.
+     *
+     * **The atlas is resident, not re-uploaded**, and its lease joins the same list [performDraw]'s
+     * `finally` releases, exactly as the glyph atlas's does. It is enrolled in the same
+     * [com.rohittp.reng.ResourceLimits.maximumResidentGpuTextureBytes] budget, so a sprite atlas, a
+     * glyph atlas and the ground's tiles compete honestly rather than one of them being exempt.
+     */
+    private fun sceneIcons(
+        frame: RenGPreparedFrame,
+        textureLeases: MutableList<TextureLease>,
+    ): List<IconBatch> {
+        val prepared = frame.labels ?: return emptyList()
+        val key = prepared.spriteAtlasKey ?: return emptyList()
+        val image = requireNotNull(prepared.spriteAtlas) {
+            "a prepared frame naming a sprite atlas must carry its pixels"
+        }
+        val atlas = uploadSpriteAtlas(binding, glObjectRegistry, key, image)
+        textureLeases += atlas.lease
+        return listOf(IconBatch(atlasTexture = atlas.handle.name, quads = prepared.icons))
     }
 
     /**
@@ -1570,6 +2227,8 @@ internal class RenGRenderer(
                 compositePipeline?.let { deleteCompositePipeline(binding, programs, it) }
                 stickerPipeline?.let { deleteStickerPipeline(binding, programs, it) }
                 groundPipeline?.let { deleteGroundPipeline(binding, programs, it) }
+                labelPipeline?.let { deleteLabelPipeline(binding, programs, it) }
+                iconPipeline?.let { deleteIconPipeline(binding, programs, it) }
                 geometryPipelines.values.forEach { deleteGeometryPipeline(binding, programs, it) }
                 geometryPipelines.clear()
                 // The model pipelines are deleted here and the uploaded primitives are not, and the
@@ -1592,7 +2251,17 @@ internal class RenGRenderer(
                 compositePipeline = null
                 stickerPipeline = null
                 groundPipeline = null
+                labelPipeline = null
+                iconPipeline = null
                 residentCache.closeAll()
+                // CONTEXT.md's Close entry says a close "releases CPU state", and these two are exactly
+                // that and nothing more: an immutable Rentile batch and one decoded atlas, no GL handle
+                // between them, so unlike everything above they need no context and can never fail. They
+                // are dropped here rather than in `clearFrameHistory()` because they are caches -- see
+                // [labelHandover] for why that distinction is the whole decision.
+                retainedLabelHandover = null
+                retainedGlyphAtlas = null
+                retainedSpriteAtlas = null
                 // The renderer owns exactly one Rentile engine (ADR 0016), so closing the renderer closes
                 // it. Its close() is idempotent and, unlike everything above it here, not GL-scoped -- so
                 // it neither needs nor consults the exact current context (ADRs 0007/0015).

@@ -38,14 +38,19 @@ internal const val STICKER_F_URL: String = "reng-harness:sticker-f.png"
 internal const val STICKER_PIN_URL: String = "reng-harness:sticker-pin.png"
 
 /**
- * [groundless] forces `drawBasemap = false` on every frame. Not part of the storyboard: it is the
- * switch that lets the overlay content be watched across the whole camera path when the ground
- * itself will not draw.
+ * [groundless] forces `drawBasemap = false` on every frame, and [labelless] forces
+ * `drawLabels = false` on every frame. Neither is part of the storyboard: the first lets the
+ * overlay content be watched across the whole camera path when the ground itself will not draw,
+ * and the second exists so a labelled run and an unlabelled run of the same camera path can be
+ * subtracted, which is the only way to count a frame's label ink rather than squint at it.
  */
-internal fun framePlans(groundless: Boolean = false, modelUrl: String? = null): List<FramePlan> =
-    (0 until FRAME_COUNT).map { framePlan(it, groundless, modelUrl) }
+internal fun framePlans(
+    groundless: Boolean = false,
+    modelUrl: String? = null,
+    labelless: Boolean = false,
+): List<FramePlan> = (0 until FRAME_COUNT).map { framePlan(it, groundless, modelUrl, labelless) }
 
-private fun framePlan(index: Int, groundless: Boolean, modelUrl: String?): FramePlan {
+private fun framePlan(index: Int, groundless: Boolean, modelUrl: String?, labelless: Boolean): FramePlan {
     val t = index.toDouble() / (FRAME_COUNT - 1).toDouble()
     return FramePlan(
         frameIndex = index.toLong(),
@@ -63,6 +68,7 @@ private fun framePlan(index: Int, groundless: Boolean, modelUrl: String?): Frame
         ),
         projectionMode = ProjectionMode.MERCATOR,
         drawBasemap = !groundless && index !in NEGATIVE_FRAMES,
+        drawLabels = !labelless,
         stickers = listOf(mapAnchoredPin(), screenAnchoredF()),
         models = modelUrl?.let { listOf(animatedModel(it, t)) }.orEmpty(),
         geometries = listOf(groundGrid()),

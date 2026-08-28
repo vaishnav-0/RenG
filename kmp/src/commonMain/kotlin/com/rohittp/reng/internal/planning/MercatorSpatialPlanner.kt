@@ -143,7 +143,18 @@ internal fun planMercatorSpatial(
 
     var footprint: ClosedMercatorFootprint? = null
     var tileSelection: TileSelectionOutcome.Success? = null
-    if (plan.drawBasemap && basemapStyleConfigured) {
+    // E-labels task 8b: the footprint and the tile selection are the *frame's*, not the ground's.
+    // `drawLabels` is fully orthogonal to `drawBasemap` (FramePlan.drawLabels), and the label handover
+    // takes its own tile list -- `BasemapEngineHost.acquireLabelCandidates` is handed exactly these
+    // canonical tiles -- so a `drawBasemap = false, drawLabels = true` frame needs this selection just
+    // as much as a ground-drawing one does. Gating it on `drawBasemap` alone made that pairing, which
+    // E7 declares legal, silently render nothing at all.
+    //
+    // Only the *ground draw itself* stays gated on `drawBasemap` alone; that gate lives at the single
+    // point where RenGRenderer.prepare decides which canonical tiles the engine rasterizes. Nothing
+    // here selects a tile the ground-drawing frame would not have selected: with `drawBasemap = true`
+    // the condition is exactly what it was, so the three pairings that already worked are untouched.
+    if ((plan.drawBasemap || plan.drawLabels) && basemapStyleConfigured) {
         footprint = clippedPhysicalPixelFootprint(camera)
         when (
             val selection = selectBasemapTiles(

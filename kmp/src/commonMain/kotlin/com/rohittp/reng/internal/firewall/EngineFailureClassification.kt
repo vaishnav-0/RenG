@@ -48,8 +48,11 @@ private const val MAXIMUM_UNWRAP_DEPTH: Int = 8
  *
  * **Redaction.** Exactly three engine values are ever carried across: the [RentileErrorCode] itself,
  * `resourceClass` (an enum), and `sanitizedResourceId` (already `sha256Hex` of a credential-redacted
- * url). The engine's `message` is dropped whole, its `diagnostics` are never read (Rentile's
- * `RenderDiagnostic` carries free-form `details`), and neither is `affectedTiles`.
+ * url). The engine's `message` is dropped whole, the `diagnostics` hanging off a *failure* are never
+ * read (Rentile's `RenderDiagnostic` carries free-form `details`), and neither is `affectedTiles`.
+ * The one place RenG does read an engine diagnostic is [reportLabelContentExclusions], on a batch
+ * that succeeded, and it carries across a severity and nothing else (ADR 0036) -- never a `details`
+ * entry, and never here.
  * [com.rohittp.reng.RenGException] has no `cause` parameter at all, so forwarding a cause is
  * structurally impossible. [ResourceAcquisitionException.statusCode] is available and still not carried:
  * RenG's allowlist leaves a status code `FORBIDDEN` at every stage an engine failure can reach.
@@ -129,17 +132,22 @@ internal fun classifyEngineFailure(failure: Throwable): FailureDescriptor {
             RentileErrorCode.FOREIGN_PREPARED_BATCH,
             RentileErrorCode.INVALID_TILE_ID,
             RentileErrorCode.TILE_NOT_IN_PREPARED_BATCH,
-            // Rentile 0.6.0's three label-candidate codes. All three are raised only from
-            // `acquireLabelCandidates` and the `LabelCandidatePlan` it returns -- an entry point RenG
-            // does not call and does not expose, so none of them is reachable from `prepare`,
-            // `prepareBatch`, or `render`. They join the fail-closed bucket rather than getting a
-            // RenG code of their own precisely because RenG has no label work to attribute them to:
-            // inventing one would claim a labelling stage that does not exist. When RenG does draw
-            // labels, these three move out of here into shapes that name the label plan.
+            -> return basemapRenderFailure()
+
+            // Rentile's three label-candidate codes, and this is the move the older comment here
+            // promised: they are raised only from `acquireLabelCandidates` and the
+            // `LabelCandidatePlan` it returns, an entry point RenG now calls, so the fail-closed
+            // bucket they used to share with the ground's failures reported them at the wrong half
+            // of the frame. Each of them means RenG's own defect -- a plan from another rasterizer,
+            // a plan read after it was closed, a template disagreement `glyphUrls` did not catch --
+            // so there is still nothing truthful for RenG to add beyond the code it already has.
+            // What changed is that the stage now names the label plan: the ground drew, and the
+            // labels did not. No RenG code of their own, because inventing one per engine code is
+            // exactly the vocabulary mirroring ADR 0036 refuses.
             RentileErrorCode.FOREIGN_LABEL_CANDIDATE_PLAN,
             RentileErrorCode.LABEL_CANDIDATE_PLAN_CLOSED,
             RentileErrorCode.GLYPH_TEMPLATE_MISMATCH,
-            -> return basemapRenderFailure()
+            -> return labelPlanFailure()
 
             // The three wrapping codes. Each reports its own aggregate shape, not the fault; the fault
             // that actually stopped the frame is the primary failure inside, so classification continues
@@ -167,6 +175,15 @@ internal fun classifyEngineFailure(failure: Throwable): FailureDescriptor {
  */
 private fun basemapRenderFailure(): FailureDescriptor =
     FailureDescriptor(code = RenGErrorCode.BASEMAP_RENDER_FAILED, stage = PipelineStage.BASEMAP_RENDER)
+
+/**
+ * The same fail-closed shape, reported at the stage that names the label plan
+ * ([PipelineStage.LABEL_PREPARATION]) rather than at the ground's. Same code, and deliberately: the
+ * engine failing at its label work is not a different *kind* of thing from the engine failing at its
+ * tile work, and a second opaque code would say nothing the stage does not already say.
+ */
+private fun labelPlanFailure(): FailureDescriptor =
+    FailureDescriptor(code = RenGErrorCode.BASEMAP_RENDER_FAILED, stage = PipelineStage.LABEL_PREPARATION)
 
 /**
  * Builds the one failure shape RenG's allowlist demands for the two engine classes that expose an

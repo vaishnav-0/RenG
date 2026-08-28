@@ -118,6 +118,14 @@ Two defects the spike found by running rather than reading, both of which this c
 1. An unpreregistered glyph URL is refused by the **store** index, not the transport index, because
    Rentile's glyph acquirer reads its raw store first. The refusal is complete — no byte reaches the
    consumer — but surfaces as opaque `BASEMAP_RENDER_FAILED` rather than a route failure.
+
+   **Corrected during Task 6, and the correction is the useful half.** *Which* index refuses depends on
+   *why*. The store index is keyed on the **redacted** digest and the transport index on the **exact** URL —
+   so an unpreregistered route is caught at the store, while a **stale credential passes the store gate and
+   is refused at transport**. Measured: the consumer's `Store` is asked for all three glyph ranges, its
+   `Transport` sees none, and no glyph bytes are written. The handover spike could not see this because its
+   fixture carried no credential; it listed the case as unmeasured. The two refusals share one public code
+   and are distinguished internally.
 2. `GlyphTemplateMismatchException` and `LabelCandidatePlanClosedException` **escape RenG unwrapped**,
    because `glyphUrls` is a plan method rather than a call through `engineCall`. An engine exception type
    crossing the public boundary breaches the sanitized-failure contract.
@@ -142,15 +150,23 @@ a batch**, where a switch costs a flush.
 **The frame's phase order becomes:**
 
 ```
-map regime (depth tested)
+map regime (depth tested throughout, per ADR 0027)
   1  ground              test, no write
   2  geometries          test, no write
   3  models              test AND write     (ADR 0030)
   4  map-anchored stickers   test, no write
-  5  LABELS              depth test OFF     <-- new
+
+  5  LABELS              depth test OFF     <-- new, and OUTSIDE both regimes
+
 screen regime (no depth)
   6  consumer screen-anchored stickers, by z
 ```
+
+**Labels sit between the two regimes rather than inside either.** ADR 0027 says *every* map-regime pass
+enables `GL_DEPTH_TEST` and sets `glDepthMask(GL_FALSE)`, and ADR 0030 amends that for the model pass alone.
+A label pass that *disables* the test would read as a third exception if labels were called part of the map
+regime — so they are not. Stating membership this way is what keeps ADR 0034 from contradicting ADR 0027;
+putting labels inside the map regime would require superseding 0027 rather than adding an ADR.
 
 So a consumer's screen sticker covers a label, and a label covers a map-anchored sticker. **ADR 0024 never
 answered where an engine-derived stack sits; this ADR answers it.**
@@ -208,6 +224,20 @@ batch rule for free; the hazard is deviating, not conforming.
 **The state is self-bounding** and needs no public ceiling: an entry is retained only while its label is
 either a current candidate or still mid-fade, so the map is O(labels in view), not O(labels ever seen).
 
+**Fade advances per successful `prepare()`, over a duration RenG owns as an internal constant.** `FramePlan`
+carries `frameIndex` and no wall-clock time, and `prepare()` cannot read a clock without destroying the
+determinism this whole section rests on — the repeatability guard added by the X2 fix would catch it.
+
+The consequence is stated rather than hidden: **a fade's duration in seconds is a function of the consumer's
+frame rate.** A ten-step fade is 167 ms at 60 fps and 333 ms at 30 fps. That is accepted for a cosmetic ease.
+
+The rejected alternative was a `FramePlan.timeSeconds` field, following `AnimationTrack.timeSeconds`, where
+the consumer already supplies time rather than RenG reading a clock. It is more correct and was rejected
+anyway: defaulting to `0.0` means a consumer who does not thread a clock gets a fade that never advances —
+labels pop exactly as if the feature were absent, silently. That is the failure mode `CLAUDE.md` names, and
+frame-count fade works correctly with no consumer action at all. The duration constant is RenG's own, on the
+same footing as ADR 0026's scene light: not a consumer-visible feature.
+
 **Still owed:** a **label identity** derivation under ADR 0018. Get it wrong and fade is either useless
 (identities never match, everything pops anyway) or wrong (identities collide, a label inherits another's
 opacity).
@@ -224,10 +254,14 @@ The fixture problem is **solved and cheap**, contrary to the renderer-gap docume
 `Glyphs` and `Glyph` types are public in its published KLIB ABI despite their `internal` package names, so
 RenG's test sources compile against them with **no build-file change and no added dependency**.
 
-**Target reachability, measured:** `macosArm64Test` and `iosSimulatorArm64Test` run the whole thing;
-`testAndroidHostTest` runs everything except the atlas case, which fails on Skia's missing host library
-*after* every glyph range is fetched. So the routing half gates on `commonTest` across all four
-context-holding targets; only candidate geometry and atlas pixels need `nativeTest`.
+**Target reachability, measured — and the line sits one step earlier than the handover spike reported.**
+`LabelCandidateAssembler.emptyBatch` packs a 1×1 placeholder atlas through Skia, so **even a no-glyphs
+style's batch cannot be read on the Android host**. The split is "everything except *reading the batch*",
+not "everything except candidate geometry and atlas pixels".
+
+So the routing half — closure exactness, both refusal paths, URL composition, preregistration rounds —
+gates on `commonTest` across all four context-holding targets. Anything that touches the returned
+`LabelCandidateBatch` goes in `nativeTest`.
 
 Assertions the suite owes:
 
@@ -304,5 +338,23 @@ what RenG calls.
 - Labels are not verified legible. Only Cycle J can do that.
 - Complex scripts produce no text and RenG cannot fix it downstream — it only stops being silent.
 - `icon-text-fit` layers draw unfitted icons; the plate will be the wrong size, not absent.
+- **Icons are placed, collided and painted-in-data, but not drawn.** Task 12 resolves
+  `LabelIconRef.imageName` against the retained sprite manifest, composes the ordering contract, and gives
+  every icon its own box in the collision index — so text no longer lands where a symbol already sits.
+  What is missing is the draw itself, and it needs two things this cycle does not build: a pipeline that
+  samples a sprite atlas, since the label program thresholds its texture's alpha as a signed distance
+  field and a sprite's alpha is coverage; and the atlas's **pixels**, which the firewall parses the
+  geometry out of and then discards. §3's "resolving `LabelIconRef.imageName` to sprite pixels, **and the
+  draw**" is therefore half-delivered, and no task in the plan owns the other half. Until it does, the
+  only icon on screen is the one Rentile rasterised into the tile underneath.
+- `icon-color`, `icon-halo-color`, `icon-halo-width` and `icon-halo-blur` reach no shader, and would apply
+  only to an `sdf` sprite in any case — Rentile tints under `SRC_IN` when the manifest entry says so and
+  passes no colour filter otherwise. The flag is now carried on `SpriteAtlasEntry` so that whoever writes
+  the draw cannot tint artwork the style never asked to recolour.
+- `icon-pitch-alignment` is resolved and then not honoured: a `map`-pitched icon should reach the screen as
+  a projected parallelogram and instead is drawn screen-facing at its map-anchored position. That is the
+  same gap the text path already has for `text-pitch-alignment`, which nothing in placement reads.
+- `symbol-avoid-edges` is honoured for a symbol's **icon** and not for its text. Closing the text half
+  changes which labels a text-only layer places, which is task 9's territory rather than task 12's.
 - No label content is occluded by 3D scene content.
 - Nothing is measured on a real mobile GPU. The mobile targets run in simulation only, per ADR 0033.

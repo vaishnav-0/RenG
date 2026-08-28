@@ -603,9 +603,9 @@ internal data class PendingChildDiscovery(
 
 /**
  * The checks RenG itself performs over content its **own** driver acquired. No member exists for a check
- * the Rentile engine owns: the engine acquires all seven engine-keyed basemap classes through RenG's
- * firewall, so no TileJSON, vector tile, GeoJSON or DEM ever reaches a class gate (ADR 0003's split,
- * ADR 0016's firewall).
+ * the Rentile engine owns: the engine acquires all eight engine-keyed basemap classes through RenG's
+ * firewall, so no TileJSON, vector tile, GeoJSON, DEM or glyph range ever reaches a class gate
+ * (ADR 0003's split, ADR 0016's firewall).
  *
  * Not every check RenG owns is a member here. DEM terrain-encoding validation is RenG's under ADR 0016,
  * but it belongs to the firewall's write path rather than to a driver class gate, because the driver
@@ -624,12 +624,13 @@ internal enum class ResourceClassGate {
  * `null` is the answer for two different reasons, and both are structural rather than unfinished:
  *
  * - **The engine acquires it.** `BASEMAP_TILE_JSON`, `BASEMAP_VECTOR_TILE`, `BASEMAP_RASTER_TILE`,
- *   `BASEMAP_DEM_TILE`, `BASEMAP_GEO_JSON`, `BASEMAP_SPRITE_JSON` and `BASEMAP_SPRITE_IMAGE` are keyed to
+ *   `BASEMAP_DEM_TILE`, `BASEMAP_GEO_JSON`, `BASEMAP_SPRITE_JSON`, `BASEMAP_SPRITE_IMAGE` and
+ *   `BASEMAP_GLYPH_RANGE` are keyed to
  *   the Rentile engine, which fetches and validates them itself through RenG's firewall
  *   ([com.rohittp.reng.internal.firewall.OperationRegistry]); RenG's driver only preregisters their
  *   routes. They cannot become driver routes either: only
  *   [com.rohittp.reng.internal.planning.StaticResourceReference.External] becomes a
- *   [ResourceOccurrence], and its own `init` requires a static-direct class, which none of the seven is.
+ *   [ResourceOccurrence], and its own `init` requires a static-direct class, which none of the eight is.
  *   Re-gating them here would also fetch and validate one logical resource twice under two different
  *   stable ids, one per key space (ADR 0016).
  * - **Its commit path is not the ordinary one.** `BASEMAP_STYLE` commits through the style-commit path
@@ -653,6 +654,7 @@ internal fun ordinaryResourceClassGates(resourceClass: ResourceClass): List<Reso
         ResourceClass.BASEMAP_STYLE,
         ResourceClass.BASEMAP_SPRITE_JSON,
         ResourceClass.BASEMAP_SPRITE_IMAGE,
+        ResourceClass.BASEMAP_GLYPH_RANGE,
         -> null
     }
 
@@ -1406,7 +1408,7 @@ internal sealed interface BasemapStyleValidationOutcome {
      * `deriveBasemapStyleManifest`/`styleTimeRoutes`.
      *
      * These are a *preregistration* manifest, not resources RenG fetches. RenG keys only its own four
-     * classes (ADR 0016); the seven engine-keyed ones are acquired by the engine itself and are admitted
+     * classes (ADR 0016); the eight engine-keyed ones are acquired by the engine itself and are admitted
      * only because the firewall recognises the exact url. Modelling them as occurrences instead would
      * have to exempt them from six independent invariants that assume every occurrence becomes a
      * fetched, visibility-installed route — most decisively the one that makes operation success
@@ -1843,7 +1845,7 @@ internal data class StartRoute(
  * a style route retires through its own visibility install instead. Since
  * [BasemapStyleValidationOutcome.Valid] now yields a *route manifest* rather than
  * [DiscoveredResourceChild]ren, nothing in RenG produces a child occurrence at all, and nothing is
- * planned to: the seven engine-keyed classes are acquired by the Rentile engine through the firewall,
+ * planned to: the eight engine-keyed classes are acquired by the Rentile engine through the firewall,
  * never by RenG's own driver (ADR 0016).
  *
  * This mechanism, [ChildrenDiscovered], [RouteReadyForDiscovery], [DiscoveredResourceChild],

@@ -114,9 +114,26 @@ class RendererBasemapStyleRenderTest {
         assertNotNull(first, "a frame that draws a basemap holds its compiled style")
         assertSame(first, second, "the same style document is the same compilation, frame after frame")
 
+        // E-labels task 8b: a frame that draws the labels and not the ground holds its style too --
+        // the labels are in it. This is one of the two mixed pairings; the same claim with both
+        // switches true is `first`/`second` above and would pass without the split.
+        renderer.prepare(
+            FramePlan(frameIndex = 2L, camera = styleCamera(), drawBasemap = false, drawLabels = true),
+        )
+        assertSame(
+            first,
+            renderer.preparedBasemapStyle,
+            "a frame that draws only the labels still holds the style they come from",
+        )
+
         // This names the frame in front of the reader, never "the last style compiled at some point".
-        renderer.prepare(FramePlan(frameIndex = 2L, camera = styleCamera(), drawBasemap = false))
-        assertNull(renderer.preparedBasemapStyle, "a frame that draws no basemap holds no style")
+        renderer.prepare(
+            FramePlan(frameIndex = 3L, camera = styleCamera(), drawBasemap = false, drawLabels = false),
+        )
+        assertNull(
+            renderer.preparedBasemapStyle,
+            "a frame that draws neither the basemap nor its labels holds no style",
+        )
     }
 
     /**

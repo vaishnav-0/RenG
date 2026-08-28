@@ -45,15 +45,19 @@ class MercatorSpatialPlannerTest {
             pitch = 23.0,
         )
         val outputPixelSize = OutputPixelSize(1024, 1024)
+        // (drawBasemap, drawLabels, basemapStyleConfigured). Since E-labels task 8b a frame is inactive
+        // only when *neither* draw switch is set, or when no style is configured at all -- `drawLabels`
+        // is therefore false wherever `drawBasemap` is, and the middle case leaves it true to show that
+        // an unconfigured style suppresses the selection on its own.
         val cases = listOf(
-            false to true,
-            true to false,
-            false to false,
+            Triple(false, false, true),
+            Triple(true, true, false),
+            Triple(false, false, false),
         )
 
-        for ((drawBasemap, basemapStyleConfigured) in cases) {
+        for ((drawBasemap, drawLabels, basemapStyleConfigured) in cases) {
             val spatialPlan = planSuccess(
-                plan = framePlan(camera = camera, drawBasemap = drawBasemap),
+                plan = framePlan(camera = camera, drawBasemap = drawBasemap, drawLabels = drawLabels),
                 outputPixelSize = outputPixelSize,
                 previousSelectedLod = 2,
                 maximumBasemapTileInstances = 1,
@@ -79,6 +83,57 @@ class MercatorSpatialPlannerTest {
         )
         assertNotNull(active.footprint)
         assertNotNull(active.tileSelection)
+    }
+
+    /**
+     * E-labels task 8b. Tile selection belongs to the **frame**, not to the ground: the label handover
+     * takes its own list of canonical tiles, so `drawBasemap = false, drawLabels = true` — a pairing
+     * `FramePlan` declares legal and orthogonal — has to select exactly the tiles a ground-drawing frame
+     * would, or it plans nothing to hand over and the labels silently never appear.
+     *
+     * **Both flags equal is this assertion's symmetry point, and neither half of it discriminates.**
+     * `true/true` selects tiles today and `false/false` selects none today, so a test built from those
+     * two passes against the unsplit `plan.drawBasemap && basemapStyleConfigured` unchanged. The two
+     * **mixed** pairings are the whole content: `false/true` is the case that was broken, and
+     * `true/false` is the case that must not have been broken *by* the fix. Both are asserted against
+     * the `true/true` selection by value rather than merely for non-nullness, so widening the guard to
+     * something that selects a *different* set of tiles fails here too.
+     */
+    @Test
+    fun eitherDrawSwitchSelectsTheSameTilesAndOnlyNeitherSelectsNone() {
+        val camera = Camera(latitude = -55.0, unwrappedLongitude = -135.0, zoom = 4.0, bearing = 0.0, pitch = 0.0)
+
+        fun selectionFor(drawBasemap: Boolean, drawLabels: Boolean): MercatorSpatialPlan = planSuccess(
+            plan = framePlan(camera = camera, drawBasemap = drawBasemap, drawLabels = drawLabels),
+            outputPixelSize = OutputPixelSize(64, 64),
+            maximumBasemapTileInstances = 512,
+            basemapStyleConfigured = true,
+        )
+
+        val both = selectionFor(drawBasemap = true, drawLabels = true)
+        val basemapOnly = selectionFor(drawBasemap = true, drawLabels = false)
+        val labelsOnly = selectionFor(drawBasemap = false, drawLabels = true)
+        val neither = selectionFor(drawBasemap = false, drawLabels = false)
+
+        val selected = assertNotNull(both.tileSelection, "the unmixed positive case still selects tiles")
+        assertTrue(selected.canonicalResources.isNotEmpty(), "the fixture camera must select something")
+
+        assertEquals(
+            selected,
+            basemapOnly.tileSelection,
+            "drawLabels = false must not take a tile away from a frame that draws the basemap",
+        )
+        assertEquals(both.footprint, basemapOnly.footprint)
+        assertEquals(
+            selected,
+            labelsOnly.tileSelection,
+            "labels alone must select exactly the tiles the basemap would have, or the handover has " +
+                "no tile list to take",
+        )
+        assertEquals(both.footprint, labelsOnly.footprint)
+
+        assertNull(neither.tileSelection, "a frame that asks for neither must stay as cheap as it was")
+        assertNull(neither.footprint)
     }
 
     @Test
@@ -194,6 +249,10 @@ class MercatorSpatialPlannerTest {
                     model(mapModelPlacement, "map-model-duplicate"),
                 ),
                 drawBasemap = false,
+                // Neither switch: this case is about draw-regime membership, and a one-instance tile
+                // budget is not a claim it wants to make. Since task 8b `drawLabels` alone would
+                // select tiles here and over-budget the plan before it ever resolves a placement.
+                drawLabels = false,
             ),
             outputPixelSize = OutputPixelSize(640, 480),
             maximumBasemapTileInstances = 1,
@@ -839,6 +898,7 @@ class MercatorSpatialPlannerTest {
     private fun framePlan(
         camera: Camera = Camera(0.0, 0.0, 0.0, 0.0, 0.0),
         drawBasemap: Boolean = true,
+        drawLabels: Boolean = true,
         stickers: List<Sticker> = emptyList(),
         models: List<Model> = emptyList(),
         geometries: List<Geometry> = emptyList(),
@@ -846,6 +906,7 @@ class MercatorSpatialPlannerTest {
         frameIndex = 1L,
         camera = camera,
         drawBasemap = drawBasemap,
+        drawLabels = drawLabels,
         stickers = stickers,
         models = models,
         geometries = geometries,

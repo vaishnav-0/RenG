@@ -12,6 +12,28 @@ internal enum class CanonicalRootKind(internal val wireByte: Int) {
     BASEMAP_TILE(6),
     MODEL_GEOMETRY(7),
     MODEL_IMAGE(8),
+
+    /**
+     * One engine-derived label, across frames (ADR 0035). The only root here that names no resource
+     * at all: nothing is fetched, decoded, uploaded or cached under it, and its digest is never taken
+     * -- see `deriveLabelIdentity`, which keys on these exact bytes.
+     */
+    LABEL(9),
+
+    /**
+     * One packed glyph atlas, identified by the content it packs. Named here rather than derived
+     * from a locator because an atlas is not fetched: it is assembled by the engine out of the
+     * Glyph Ranges the firewall did fetch, so it has no url of its own to be the identity of.
+     */
+    GLYPH_ATLAS(10),
+
+    /**
+     * One sprite atlas, identified by the encoded image the firewall proxied. Named here for the same
+     * reason [GLYPH_ATLAS] is -- nothing fetches it under a locator RenG can see, because the sprite
+     * pair's urls are composed inside the engine's own acquisition -- but identified by its bytes
+     * rather than by an engine-supplied content key, because a sprite pair has none.
+     */
+    SPRITE_ATLAS(11),
 }
 
 internal class CanonicalFieldWriter internal constructor() {
@@ -83,8 +105,35 @@ internal object CanonicalBinary {
         return CanonicalBytes(encodeLongBits(value))
     }
 
+    /**
+     * A **signed** 64-bit integer, two's complement and big-endian, for the values RenG reads out of
+     * the engine rather than derives itself.
+     *
+     * [u64] is the right encoding for a value RenG knows to be non-negative -- a LOD, a pixel extent,
+     * a document index -- and its `require` is a real check there. It is the wrong one for a
+     * `TileId`'s three coordinates or a `LabelGlyphEntry.codepoint`: those are plain `Int`s on
+     * Rentile's side with no validation behind them, and an identity derivation that throws on one is
+     * an identity derivation that can fail a frame over a number nobody promised. This encoding is
+     * total over every `Long`, so the caller needs no guard and no fallback.
+     */
+    internal fun i64(value: Long): CanonicalBytes = CanonicalBytes(encodeLongBits(value))
+
     internal fun boolean(value: Boolean): CanonicalBytes =
         CanonicalBytes(byteArrayOf(if (value) 1 else 0))
+
+    /**
+     * Bytes RenG did not author and does not interpret, carried into an identity verbatim.
+     *
+     * Every other encoder here turns a *value* into a canonical form, which is what makes two equal
+     * values derive one key. This one has nothing to canonicalise: an encoded image is already exactly
+     * as canonical as it is going to be, and re-encoding it would only invent a second opinion about
+     * what "the same atlas" means. The field's own length header is what keeps the encoding unambiguous,
+     * exactly as it does for [exactUtf8].
+     */
+    internal fun opaqueBytes(value: ByteArray): CanonicalBytes {
+        requireCanonicalSize(value.size.toLong())
+        return CanonicalBytes(value)
+    }
 
     internal fun binary64(value: Double): CanonicalBytes {
         val canonical = canonicalDouble(value, "canonical binary64 value")

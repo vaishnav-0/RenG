@@ -81,6 +81,9 @@ val runHarness by tasks.registering(Exec::class) {
     // `-PnoBasemap` renders the same camera path with `drawBasemap = false` on every frame, so the
     // stickers and the geometry can be watched even when the ground itself will not draw.
     val groundless = providers.gradleProperty("noBasemap").isPresent
+    // `-PnoLabels` renders the same camera path with `drawLabels = false` on every frame. Subtracting
+    // that run from an ordinary one is how a frame's label ink gets counted instead of eyeballed.
+    val labelless = providers.gradleProperty("noLabels").isPresent
     val verbose = providers.gradleProperty("verbose").isPresent
     doFirst {
         frames.get().asFile.mkdirs()
@@ -95,6 +98,7 @@ val runHarness by tasks.registering(Exec::class) {
             modelUrl.orNull?.takeIf(String::isNotBlank)?.let { add("--model"); add(it) }
             frameCount.orNull?.let { add("--frames"); add(it) }
             if (groundless) add("--no-basemap")
+            if (labelless) add("--no-labels")
             if (verbose) add("--verbose")
         },
     )

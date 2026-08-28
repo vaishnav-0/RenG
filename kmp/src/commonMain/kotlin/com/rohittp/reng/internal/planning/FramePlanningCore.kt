@@ -223,7 +223,12 @@ internal class FramePlanningCore(
         }
 
         val basemapStyle = request.basemapStyle
-        if (plan.drawBasemap && basemapStyle != null) {
+        // E-labels task 8b: labels come *from* the style, so the style is traversed when either draw
+        // switch is set, not when `drawBasemap` alone is. The condition is deliberately the same
+        // expression `planMercatorSpatial` gates its tile selection on: [PlannedFrameCore]'s own
+        // "a traversed basemap style requires a planned tile selection" invariant fails closed if the
+        // two ever drift apart, so widening one without the other is caught rather than shipped.
+        if ((plan.drawBasemap || plan.drawLabels) && basemapStyle != null) {
             external(basemapStyle, ResourceClass.BASEMAP_STYLE)
         }
         for (sticker in plan.stickersForCore()) {
@@ -272,6 +277,7 @@ private val ResourceClass.isStaticDirect: Boolean
         ResourceClass.BASEMAP_SPRITE_JSON,
         ResourceClass.BASEMAP_SPRITE_IMAGE,
         ResourceClass.BASEMAP_GEO_JSON,
+        ResourceClass.BASEMAP_GLYPH_RANGE,
         -> false
     }
 

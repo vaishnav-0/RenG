@@ -422,6 +422,79 @@ class BasemapStyleManifestTest {
         assertEquals(emptyList(), styleTimeRoutes(unresolvable, ResourceAccessMode.NORMAL, LIMITS))
     }
 
+    /**
+     * The style's `glyphs` template, which RenG needs its own resolved copy of: `glyphUrls` substitutes
+     * the template *the caller hands it*, so the credential that reaches RenG's own transport is the one
+     * in this string rather than the one Rentile compiled privately.
+     *
+     * The relative case is the one that discriminates -- a raw pass-through of `root["glyphs"]` would
+     * satisfy every absolute and every `null` assertion here and fail only this one. The absolute case
+     * uses a different origin from the style's for the mirror-image reason: re-resolving it against the
+     * base would rewrite the host.
+     *
+     * The placeholders stay unsubstituted on purpose. RenG never composes a glyph url itself; Rentile's
+     * `glyphUrls` does, from this template, which is what makes RenG's preregistered strings match the
+     * engine's requests exactly.
+     */
+    @Test
+    fun readsAndResolvesTheGlyphTemplateWithoutSubstitutingItsPlaceholders() {
+        val relative = manifestOf(
+            """{"version":8,"glyphs":"fonts/{fontstack}/{range}.pbf","sources":{},"layers":[]}""",
+        )
+        assertEquals(
+            "https://styles.example/maps/fonts/{fontstack}/{range}.pbf",
+            relative.glyphTemplate,
+        )
+        // Glyph routes are not style-time routes: they are preregistered from the label handover, after
+        // `planLabelCandidates` names the exact urls. A style-time glyph route here would be RenG
+        // guessing at a font stack.
+        assertEquals(emptyList(), styleTimeRoutes(relative, ResourceAccessMode.NORMAL, LIMITS))
+
+        val absolute = manifestOf(
+            """{"version":8,"glyphs":"https://fonts.example/f/{fontstack}/{range}.pbf?key=K",""" +
+                """"sources":{},"layers":[]}""",
+        )
+        assertEquals(
+            "https://fonts.example/f/{fontstack}/{range}.pbf?key=K",
+            absolute.glyphTemplate,
+        )
+
+        assertNull(manifestOf("""{"version":8,"sources":{},"layers":[]}""").glyphTemplate)
+        assertNull(
+            manifestOf("""{"version":8,"glyphs":["a"],"sources":{},"layers":[]}""").glyphTemplate,
+            "only the string form resolves, exactly as for `sprite`",
+        )
+        assertNull(
+            manifestOf(
+                """{"version":8,"glyphs":"fonts/{fontstack}/{range}.pbf","sources":{}}""",
+                baseUri = "styles.example/basic.json",
+            ).glyphTemplate,
+            "an unresolvable relative reference leaves no template rather than composing a url",
+        )
+    }
+
+    @Test
+    fun carriesTheGlyphTemplateThroughTileJsonCompletion() {
+        // completeBasemapStyleManifest rebuilds the manifest field by field, so a field it forgets to
+        // carry silently becomes null the moment any source is TileJSON-backed -- which is most styles.
+        // The fixture must therefore declare a `url`-form source: with none pending, completion returns
+        // the same manifest by identity and this test would pass with the carried field deleted.
+        val manifest = manifestOf(
+            """{"version":8,"glyphs":"fonts/{fontstack}/{range}.pbf",""" +
+                """"sources":{"s":{"type":"vector","url":"https://tiles.example/s.json"}},"layers":[]}""",
+        )
+        assertTrue(
+            manifest.tileJsonSources.isNotEmpty(),
+            "the fixture must have a document still pending, or completion short-circuits and this " +
+                "proves nothing",
+        )
+
+        val completed = completeBasemapStyleManifest(manifest, emptyMap())
+
+        assertNotNull(completed.glyphTemplate)
+        assertEquals(manifest.glyphTemplate, completed.glyphTemplate)
+    }
+
     // ---- style-time routes ---------------------------------------------------------------------
 
     @Test

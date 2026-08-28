@@ -246,6 +246,12 @@ private fun assertGroundCoversTheFrameInTheFixturesOwnArrangement(
  * The negative case, and the reason the positive one is not vacuous: with `drawBasemap = false` the
  * frame must come back exactly as the target was left, because RenG's own offscreen surface clears to
  * a fully transparent black that composites to nothing.
+ *
+ * **`drawLabels` is left at its default `true` deliberately, and that is what makes this the pixel
+ * statement of E-labels task 8b's rule.** Since that split, this exact plan acquires the style and
+ * selects the frame's tiles — everything a ground draw needs is planned and available — and the ground
+ * must still not appear, because the ground draw follows `drawBasemap` alone. Setting `drawLabels`
+ * false here would restore the old both-switches-off frame and quietly stop testing the split at all.
  */
 private fun assertDrawBasemapFalseLeavesTheFrameUntouched(
     binding: GlBinding,
@@ -258,7 +264,7 @@ private fun assertDrawBasemapFalseLeavesTheFrameUntouched(
         renderer,
         renderTarget,
         targetFramebuffer,
-        FramePlan(frameIndex = 1L, camera = styleCamera(), drawBasemap = false),
+        FramePlan(frameIndex = 1L, camera = styleCamera(), drawBasemap = false, drawLabels = true),
     )
     val drawn = frame.count { pixel -> !pixel.isCloseTo(ABSENT) }
     assertEquals(0, drawn, "drawBasemap = false must draw no ground at all, but $drawn pixels changed")
@@ -666,7 +672,7 @@ private fun clearAndDraw(
  * fixture camera: four 512-pixel tiles meeting at the frame's ground anchor, seen through a
  * projection whose near plane is one logical pixel away and whose far plane is at infinity.
  */
-private fun measureLargeQuadRasterisation(
+internal fun measureLargeQuadRasterisation(
     binding: GlBinding,
     dialect: ShaderDialect,
     targetFramebuffer: Int,
@@ -756,7 +762,7 @@ private fun measureLargeQuadRasterisation(
  * The failure it exists to spot is nothing like that size — `Apple Software Renderer` disagrees over
  * a whole tile, thousands of pixels at a time.
  */
-private class LargeQuadRasterisation(
+internal class LargeQuadRasterisation(
     private val mismatchedPixels: Int,
     private val worstRectangle: String,
 ) {

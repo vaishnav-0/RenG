@@ -14,10 +14,10 @@ class RentileKeyDerivationTest {
     private val resolver = ProductionRentilePrivateKeyResolver(PureKotlinSha256)
 
     /**
-     * The seven [ResourceClass] values Rentile itself fetches and keys, each paired with the exact
+     * The eight [ResourceClass] values Rentile itself fetches and keys, each paired with the exact
      * Rentile [com.rohittp.rentile.ResourceClass] name its stable id is filed under. This is not a
      * sample of one -- the assertion right below proves this set, together with the four classes
-     * [ownIdentityClasses] lists, exhausts every declared [ResourceClass]; an eighth class added to
+     * [ownIdentityClasses] lists, exhausts every declared [ResourceClass]; a ninth class added to
      * either side without updating the other fails this test rather than passing on a stale subset.
      */
     private val engineKeyedClasses: Map<ResourceClass, String> = mapOf(
@@ -28,6 +28,7 @@ class RentileKeyDerivationTest {
         ResourceClass.BASEMAP_SPRITE_JSON to "SPRITE_JSON",
         ResourceClass.BASEMAP_SPRITE_IMAGE to "SPRITE_IMAGE",
         ResourceClass.BASEMAP_GEO_JSON to "GEO_JSON",
+        ResourceClass.BASEMAP_GLYPH_RANGE to "GLYPH_RANGE",
     )
 
     private val ownIdentityClasses: Set<ResourceClass> = setOf(
@@ -38,8 +39,8 @@ class RentileKeyDerivationTest {
     )
 
     @Test
-    fun reproducesTheEngineDerivationForTheSevenClassesItKeys() {
-        assertEquals(7, engineKeyedClasses.size)
+    fun reproducesTheEngineDerivationForTheEightClassesItKeys() {
+        assertEquals(8, engineKeyedClasses.size)
         assertEquals(
             ResourceClass.entries.toSet(),
             engineKeyedClasses.keys + ownIdentityClasses,

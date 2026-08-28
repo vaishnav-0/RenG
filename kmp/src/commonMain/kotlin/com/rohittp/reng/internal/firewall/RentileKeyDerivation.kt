@@ -24,7 +24,7 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
  * byte-identical across every release in that range. The `0.5.0 -> 0.6.0` step was re-confirmed against
  * the two *published* sources jars rather than against a checkout, since the published bytes are what
  * actually ships, so the scheme below is not inferred from any single measurement run. RenG must
- * reproduce that exact derivation for the seven [ResourceClass] values Rentile itself fetches and
+ * reproduce that exact derivation for the eight [ResourceClass] values Rentile itself fetches and
  * keys, or RenG's own diffing and eviction bookkeeping silently stops matching Rentile's actual
  * cache entries: **a permanent, unannounced cache miss, never a thrown failure** -- there is no
  * failure surface for a wrong-but-well-formed key to trip.
@@ -40,17 +40,20 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
  * ([ResourceKeyDeriver.external]), which is already proven injective in locator and class.
  *
  * Rentile 0.3.0's ninth class, `GLYPH_RANGE` -- still the ninth and last at the pinned `0.6.0` -- is
- * deliberately absent from [engineKeyedResourceClassOf]:
- * it is reachable only through `acquireLabelCandidates`, which RenG never calls this cycle. The `when`
- * below is exhaustive over RenG's own [ResourceClass] -- an eleven-value enum this dependency's version
- * does not change -- not over [RentileResourceClass], so **this does not, and cannot, force a
- * compile-time update when a future Rentile release adds a class**: `RentileResourceClass` gaining a
- * ninth constant compiles this file unchanged, and the new constant simply stays unreachable from
- * either branch below. What *would* fail this file's compilation is Rentile renaming or removing one of
- * the seven constants already named here, since each is referenced by exact constant, not by ordinal or
- * string. Containment against a class this table doesn't route (`GLYPH_RANGE` included) is a runtime
- * property instead: [com.rohittp.reng.internal.firewall.OperationRegistry] fails closed on any
- * unrecognised Transport url or Store key, whether or not that class has a branch here at all.
+ * **routed** here as of Cycle E-labels, and it had to be: the firewall's transport index is keyed on
+ * `(url, RentileResourceClass)` and populated through this table, so a glyph route RenG preregisters is
+ * only findable if some RenG [ResourceClass] translates to `GLYPH_RANGE`. No existing constant could be
+ * repointed at it without collapsing two consumer resources onto one key, which is why
+ * [ResourceClass.BASEMAP_GLYPH_RANGE] exists rather than an alias. The `when` below is exhaustive over
+ * RenG's own [ResourceClass] -- a twelve-value enum this dependency's version does not change -- not
+ * over [RentileResourceClass], so **this does not, and cannot, force a compile-time update when a
+ * future Rentile release adds a class**: `RentileResourceClass` gaining a tenth constant compiles this
+ * file unchanged, and the new constant simply stays unreachable from either branch below. What *would*
+ * fail this file's compilation is Rentile renaming or removing one of the eight constants already named
+ * here, since each is referenced by exact constant, not by ordinal or string. Containment against a
+ * class this table doesn't route is a runtime property instead:
+ * [com.rohittp.reng.internal.firewall.OperationRegistry] fails closed on any unrecognised Transport url
+ * or Store key, whether or not that class has a branch here at all.
  */
 internal class ProductionRentilePrivateKeyResolver(
     private val sha256: Sha256Function,
@@ -77,7 +80,7 @@ internal class ProductionRentilePrivateKeyResolver(
 }
 
 /**
- * The seven [ResourceClass] values Rentile itself fetches, stores, and keys, mapped to the exact
+ * The eight [ResourceClass] values Rentile itself fetches, stores, and keys, mapped to the exact
  * [RentileResourceClass] Rentile pairs with its `sha256Hex(withRedactedAuthenticationQuery(url))`
  * stable id. Referencing Rentile's own enum constants (rather than duplicating its member names as
  * literal strings) means a future rename or removal in Rentile fails this file's compilation instead of
@@ -101,6 +104,7 @@ internal fun engineKeyedResourceClassOf(resourceClass: ResourceClass): RentileRe
         ResourceClass.BASEMAP_SPRITE_JSON -> RentileResourceClass.SPRITE_JSON
         ResourceClass.BASEMAP_SPRITE_IMAGE -> RentileResourceClass.SPRITE_IMAGE
         ResourceClass.BASEMAP_GEO_JSON -> RentileResourceClass.GEO_JSON
+        ResourceClass.BASEMAP_GLYPH_RANGE -> RentileResourceClass.GLYPH_RANGE
         ResourceClass.BASEMAP_STYLE,
         ResourceClass.STICKER_IMAGE,
         ResourceClass.MODEL_GLB,
@@ -125,8 +129,10 @@ internal fun engineKeyedResourceClassOf(resourceClass: ResourceClass): RentileRe
  * [com.rohittp.reng.ResourceLocator]. Dropping it would turn an ordinary "the style would not fetch" into
  * an opaque `BASEMAP_RENDER_FAILED`.
  *
- * `null` for anything else -- a ninth class a future Rentile adds, `GLYPH_RANGE` first among them -- is
- * the fail-closed answer: the caller reports a failure that names no resource rather than guessing at one.
+ * `null` for anything else -- a tenth class a future Rentile adds -- is the fail-closed answer: the
+ * caller reports a failure that names no resource rather than guessing at one. Every one of Rentile
+ * 0.6.0's nine classes is mapped as of Cycle E-labels, so that branch is unreachable from today's engine
+ * and is a guard against tomorrow's; do not delete it on the strength of being uncovered.
  */
 internal fun rengResourceClassOf(engineResourceClass: RentileResourceClass): ResourceClass? =
     if (engineResourceClass == RentileResourceClass.STYLE) {
@@ -154,7 +160,7 @@ private val AUTHENTICATION_QUERY_PARAMETER_NAMES: Set<String> = setOf(
  * `com.rohittp.rentile.internal.withRedactedAuthenticationQuery` -- confirmed by reading that source at
  * Rentile's `0.2.0` release commit (`2d0a5bf`) and diffing it against the pinned `0.6.0` release
  * commit `87ccba2` -- unchanged across that range. Any
- * divergence here changes the hash input for all seven engine-keyed classes and silently breaks their
+ * divergence here changes the hash input for all eight engine-keyed classes and silently breaks their
  * key agreement with Rentile.
  */
 internal fun redactAuthenticationQuery(url: String): String {

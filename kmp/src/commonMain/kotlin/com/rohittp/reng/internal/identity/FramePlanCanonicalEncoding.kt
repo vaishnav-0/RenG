@@ -19,6 +19,13 @@ import com.rohittp.reng.geometriesForCore
 import com.rohittp.reng.modelsForCore
 import com.rohittp.reng.stickersForCore
 
+/**
+ * The Frame Plan field-tag table. ADR 0018 calls this table **permanent**, and a root is "a strictly
+ * increasing sequence of unique fields", so a field added later takes the next free tag and encodes
+ * last — it never takes a tag in the middle and renumbers the fields after it. `DRAW_LABELS` reads
+ * beside `DRAW_BASEMAP` in [FramePlan] and encodes after `GEOMETRIES` for exactly that reason; the
+ * two orders are allowed to differ, and the tag is what identity depends on.
+ */
 internal enum class FramePlanSegment(internal val tag: Int) {
     FRAME_INDEX(1),
     CAMERA(2),
@@ -27,6 +34,7 @@ internal enum class FramePlanSegment(internal val tag: Int) {
     STICKERS(5),
     MODELS(6),
     GEOMETRIES(7),
+    DRAW_LABELS(8),
 }
 
 internal class EncodedFramePlan(
@@ -61,6 +69,9 @@ internal class FramePlanCanonicalEncoder(
             CanonicalBinary.list(stickers.map(::encodeSticker)),
             CanonicalBinary.list(models.map(::encodeModel)),
             CanonicalBinary.list(geometries.map(::encodeGeometry)),
+            // Encoded as its own segment rather than folded into DRAW_BASEMAP's byte: the two flags
+            // are orthogonal, so all four pairings must reach four distinct Frame Identities.
+            CanonicalBinary.boolean(plan.drawLabels),
         )
         val root = CanonicalBinary.root(CanonicalRootKind.FRAME) {
             FramePlanSegment.entries.forEach { segment ->

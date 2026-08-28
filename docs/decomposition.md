@@ -47,7 +47,7 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | *(internal MVP release)* | All six targets published; only macOS and Linux verified | — |
 | E-basemap | Basemap drawn from Rentile tiles, plus deferred Cycle C tasks 14/16/17/18/19 | First frame with pixels; analytical readback over a real GL context |
 | F-2 | Models with textures and animation | Analytical readback over a real GL context |
-| E-labels | Map text drawn as screen-space primitives from Rentile label candidates | Labels legible and collision-free over a moving camera |
+| E-labels | Map text drawn as screen-space primitives from Rentile label candidates | Analytical readback over a real GL context, plus a recorded harness pass. **Not legibility** — see below |
 | E-terrain | Terrain displacing the mercator ground, plus deferred Cycle C task 20 | Golden baselines with terrain |
 | H | Android and iOS bring-up | `iosSimulatorArm64Test` in CI; two one-command device runs, neither automated |
 | G | Globe projection | Golden baselines at both projection modes |
@@ -259,6 +259,21 @@ through a software renderer while a developer's machine renders through Metal, s
 string — not the target — keys a baseline, or the first run on new hardware fails on a difference that is
 not a regression. And attribution has to be split: Rentile draws the basemap's content through Skia and
 RenG only composites it, so a whole-frame baseline cannot tell a RenG regression from a Skia bump.
+
+**E-labels' gate does not include legibility, and its row above no longer claims it.** The original wording
+was "labels legible and collision-free over a moving camera". Analytical readback proves collision-free; it
+cannot prove legible — antialiasing quality, halo contrast, the sharpness of the SDF iso-line and whether a
+reader can tell one glyph from another are all "how it looks" questions, and pixel verification is deferred
+to Cycle J. So the gate became the analytical suite **plus a recorded harness pass**, with the limitation
+stated in the suite's own KDoc rather than left for a reader to discover.
+
+The harness half earned its place immediately: it found that every LOD change renamed every label and
+restarted its fade, blinking the whole text layer out for ten frames — a defect no analytical assertion in
+the cycle could see, because every one of them is a single frame or a pair at fixed zoom. That is the fifth
+defect the visual harness has caught that a passing suite did not.
+
+**E-terrain and G inherit the same problem and it is not yet solved for them.** Both rows below still say
+"golden baselines", and Cycle J still runs after both.
 
 **E-terrain.** Draws the terrain Cycle C acquires, plus Cycle C's deferred terrain-acquisition task. Cycle
 C takes Rentile's terrain descriptor and DEM tiles, decodes them, and validates their declared encoding,

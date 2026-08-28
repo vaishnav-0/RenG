@@ -236,6 +236,83 @@ internal class ResourceKeyDeriver(
         )
     }
 
+    /**
+     * The identity of one **packed glyph atlas**: the single texture a Rentile
+     * `LabelCandidateBatch` hands over, assembled out of the Glyph Ranges the firewall fetched for it.
+     *
+     * **Keyed on [atlasContentKey] alone, and that is a content input rather than an index.** The
+     * distinction [basemapTile] draws applies here too and lands the other way round: RenG must never
+     * *index* by an engine key, because an engine release that changed its derivation would silently
+     * invalidate the whole cache -- but feeding one in as content is exactly what `styleDigest` already
+     * does for a rendered tile. `LabelGlyphAtlas.contentKey` is a digest over the packed glyph set, its
+     * metrics, its decoded SDF bitmaps and the atlas dimensions, so it is a complete description of the
+     * texture's bytes, and two frames whose atlases carry the same glyphs genuinely are the same
+     * upload.
+     *
+     * **No style digest, deliberately.** A rendered tile takes one because two styles paint the same
+     * ground differently; an atlas does not, because the same font stack packed for two styles is the
+     * same pixels. Adding one would only stop two styles sharing a texture they could have shared.
+     *
+     * The resulting key is `EXTERNAL`/[ResourceClass.BASEMAP_GLYPH_RANGE] rather than a kind of its
+     * own: [com.rohittp.reng.ResourceKind] is public API and an atlas is the GPU residency of exactly
+     * that class of bytes. There is no [RawResourceKey] -- nothing fetches an atlas.
+     */
+    internal fun glyphAtlas(atlasContentKey: String): DerivedResourceKey {
+        val identity = derive(
+            CanonicalBinary.root(CanonicalRootKind.GLYPH_ATLAS) {
+                field(1, CanonicalBinary.u16(ResourceKind.EXTERNAL.wireValue))
+                field(2, CanonicalBinary.u16(ResourceClass.BASEMAP_GLYPH_RANGE.wireValue))
+                field(3, CanonicalBinary.exactUtf8(atlasContentKey))
+            },
+        )
+        return DerivedResourceKey(
+            key = ResourceKey(
+                kind = ResourceKind.EXTERNAL,
+                stableId = identity.digest.lowercaseHex,
+                resourceClass = ResourceClass.BASEMAP_GLYPH_RANGE,
+            ),
+            rawKey = null,
+            identity = identity,
+        )
+    }
+
+    /**
+     * The identity of one **sprite atlas**: the image half of the sprite pair a style declares, as the
+     * firewall proxied it.
+     *
+     * **Keyed on the encoded bytes, which is the only content input available.** [glyphAtlas] can key on
+     * `LabelGlyphAtlas.contentKey` because the engine publishes one; a sprite pair has no such digest,
+     * and the url it was fetched from never leaves the engine's own acquisition, so there is nothing
+     * else to be the identity of. Hashing the bytes is therefore not a fallback: it is a *complete*
+     * description of the texture, which is exactly what the key is required to be.
+     *
+     * **It is paid once per parsed pair, not once per frame**, because the parsed manifest is retained
+     * with the label handover and the renderer memoises this derivation against that same retention.
+     * A frame served from the retained handover derives nothing.
+     *
+     * `EXTERNAL`/[ResourceClass.BASEMAP_SPRITE_IMAGE] rather than a kind of its own, for [glyphAtlas]'s
+     * reason: [ResourceKind] is public API and this is the GPU residency of exactly that class of bytes.
+     * There is no [RawResourceKey] -- the engine, not RenG, owns the fetch and the Store record.
+     */
+    internal fun spriteAtlas(atlasPngBytes: ByteArray): DerivedResourceKey {
+        val identity = derive(
+            CanonicalBinary.root(CanonicalRootKind.SPRITE_ATLAS) {
+                field(1, CanonicalBinary.u16(ResourceKind.EXTERNAL.wireValue))
+                field(2, CanonicalBinary.u16(ResourceClass.BASEMAP_SPRITE_IMAGE.wireValue))
+                field(3, CanonicalBinary.opaqueBytes(atlasPngBytes))
+            },
+        )
+        return DerivedResourceKey(
+            key = ResourceKey(
+                kind = ResourceKind.EXTERNAL,
+                stableId = identity.digest.lowercaseHex,
+                resourceClass = ResourceClass.BASEMAP_SPRITE_IMAGE,
+            ),
+            rawKey = null,
+            identity = identity,
+        )
+    }
+
     private fun derive(canonicalBytes: CanonicalBytes): HashedCanonicalBytes = HashedCanonicalBytes(
         digest = sha256.digest(canonicalBytes),
         canonicalBytes = canonicalBytes,
@@ -266,6 +343,7 @@ private val ResourceClass.wireValue: Int
         ResourceClass.STICKER_IMAGE -> 9
         ResourceClass.MODEL_GLB -> 10
         ResourceClass.MODEL_TEXTURE -> 11
+        ResourceClass.BASEMAP_GLYPH_RANGE -> 12
     }
 
 private const val GEOMETRY_SHADER_PROFILE_WIRE_VALUE: Int = 1

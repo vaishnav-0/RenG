@@ -35,3 +35,31 @@ JSON was rejected because equivalent parser/writer settings, escaping, and numbe
 implicit compatibility contract. Platform hashes were rejected because they are not collision-resistant or
 cross-target stable. Rentile's key was rejected because it deliberately removes credential query values,
 while RenG's exact opaque Resource Locator is content identity and only diagnostics—not identity—redact it.
+
+## Erratum, 2026-08-28 (Cycle E-labels): the Frame Plan tag table gains an eighth row
+
+This ADR states above that the Cycle B specification owns the permanent field-tag table for every Frame
+Plan field. That table pinned tags 1 through 7 — `FRAME_INDEX(1)`, `CAMERA(2)`, `PROJECTION_MODE(3)`,
+`DRAW_BASEMAP(4)`, `STICKERS(5)`, `MODELS(6)`, `GEOMETRIES(7)`. Cycle E-labels adds `FramePlan.drawLabels`
+and therefore an eighth: **`DRAW_LABELS(8)`**.
+
+It is recorded here rather than in the Cycle B specification because that specification is a historical
+decision record, and this project appends errata rather than rewriting them. A reader looking for the
+current table should read the Cycle B specification's seven rows together with this erratum's eighth.
+
+**Tag 8 rather than tag 5, and the difference matters.** `drawLabels` is declared beside `drawBasemap` in
+`FramePlan`'s constructor, where it belongs for a reader, but it is *encoded last*. Taking tag 5 — the
+position that mirrors the declaration order — would have renumbered `STICKERS`, `MODELS` and `GEOMETRIES`,
+and this ADR's requirement that a root's fields appear in strictly increasing tag order makes renumbering a
+change to every previously computed Frame Plan identity. The tags are permanent; declaration order is not
+part of the contract and never was. So the two orders deliberately differ, and the enum carries a comment
+saying why, because a future reader will otherwise read the mismatch as an oversight and "fix" it.
+
+**The tag table is append-only, and this is the first time that has been exercised.** A field removed in
+some later cycle retires its tag rather than freeing it for reuse.
+
+The two checked-in canonical fixtures each grow by the same seven bytes for the new segment — the minimal
+plan from 141 to 148, the representative one from 1,471 to 1,478. Their digests were re-derived outside
+RenG with an independent SHA-256 implementation, validated by first reproducing the two existing digests
+byte-exactly, rather than copied from what the changed code emitted. A digest taken from the code under
+test proves only that the code agrees with itself.

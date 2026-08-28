@@ -23,6 +23,7 @@ public enum class PipelineStage {
     RENDERER_CLOSE,
     CONTEXT_ADOPTION,
     BASEMAP_RENDER,
+    LABEL_PREPARATION,
 }
 
 public enum class DiagnosticSeverity {
@@ -36,6 +37,7 @@ public enum class DiagnosticCode {
     FAILURE_CONTEXT,
     BASEMAP_NOT_CONFIGURED,
     RESIDENT_GPU_TEXTURES_OVER_BUDGET,
+    LABEL_CONTENT_EXCLUDED,
 }
 
 @ConsistentCopyVisibility
@@ -117,6 +119,25 @@ public data class Diagnostic internal constructor(
                 require(limit != null && actual!! > limit) {
                     "resident-GPU-texture-budget diagnostics carry resident bytes strictly above the budget"
                 }
+            }
+
+            DiagnosticCode.LABEL_CONTENT_EXCLUDED -> {
+                // ADR 0036, made structural rather than left to the emitting call site. Only a code
+                // and a severity cross the engine boundary, so every other field is refused here:
+                // the engine's `details` -- free-form, and able to carry a signed url exactly as an
+                // injected adapter's message can -- has no field to arrive in, and neither has the
+                // script, the layer, the font stack nor the feature count. A future call site that
+                // decided to be more helpful is refused by this constructor rather than reviewed.
+                require(severity != DiagnosticSeverity.ERROR) {
+                    "label-content-excluded diagnostics are never errors"
+                }
+                require(stage == PipelineStage.LABEL_PREPARATION) {
+                    "label-content-excluded diagnostics occur during label preparation"
+                }
+                require(
+                    fieldName == null && resourceClass == null && resourceKey == null &&
+                        statusCode == null && limit == null,
+                ) { "label-content-excluded diagnostics carry a severity and nothing else" }
             }
         }
     }

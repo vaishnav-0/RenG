@@ -10,7 +10,9 @@ Ledger: `.superpowers/sdd/2026-08-28-cycle-e-labels/progress.md`.
 
 - **Every task ends green.** Python suite, `check_repository_policy.py`, `checkKotlinAbi`,
   `:kmp:testAndroidHostTest`, `:kmp:macosArm64Test`, `:kmp:iosSimulatorArm64Test`. Counts summed from
-  Gradle's JUnit XML, never from scrollback. Baseline entering the cycle is **1,134 / 1,174 / 1,160**.
+  Gradle's JUnit XML, never from scrollback. **Measure your own baseline by stashing rather than trusting a
+  quoted one** — the cycle-entry figure was 1,134 / 1,174 / 1,160 and six tasks have now found a quoted
+  number stale by the time they read it.
 - **`VERSION_NAME` stays `0.4.0`.** Frozen until E-terrain, G and J complete. Do not touch it.
 - **Nothing is pushed.** `publish.yml` cuts a release on any non-documentation push to `main`, and a
   published coordinate is immutable under ADR 0013.
@@ -160,13 +162,57 @@ implementation call; F-2's `ModelShaderVariant` is the precedent if they are.
 
 ## Wave 3 — placement
 
+### Task 8b — split tile selection and style acquisition from `drawBasemap`
+
+**Found by Task 4, and it blocks E7's orthogonality answer from meaning anything.** Two guards currently
+make `drawBasemap = false, drawLabels = true` render nothing at all:
+
+- `internal/planning/MercatorSpatialPlanner.kt:146` — `if (plan.drawBasemap && basemapStyleConfigured)`
+  gates **both** `clippedPhysicalPixelFootprint` and `selectBasemapTiles`, so that pairing selects no tiles
+  and `planLabelCandidates` has no tile list to take.
+- `internal/planning/FramePlanningCore.kt:226` — `if (plan.drawBasemap && basemapStyle != null)` gates
+  acquisition of `ResourceClass.BASEMAP_STYLE`, so that pairing acquires no style — and labels come *from*
+  the style.
+
+**Corrected during execution: the split is three sites, not two, and the two named guards are not
+independent.** Nothing downstream of them consults `drawBasemap` again — the ground instances are derived
+from the tile selection — so widening those two alone drags the ground along with them. Measured, not
+reasoned: a `drawBasemap = false` frame then draws **15,876** ground pixels on Apple's Metal path and
+**12,871** on `Apple Software Renderer`. A third edit gives the ground draw its own gate, which is what
+makes the rule below true.
+
+And `PlannedFrameCore` requires `basemapStyleRoutes == 0 || spatialPlan.tileSelection != null`, so widening
+only one of the two guards does not half-work — it throws out of the planner. That invariant is a safety
+net rather than an obstacle; both conditions must be the same expression.
+
+The rule after the split: **tile selection and style acquisition are needed when either flag is set**;
+only the *ground draw* is gated on `drawBasemap` alone.
+
+**One consequence worth knowing:** `drawLabels` defaults to `true`, so existing `drawBasemap = false`
+callers that meant "no basemap at all" now acquire a style and select tiles. Seven test sites had to say
+`drawLabels = false` explicitly. Label tile selection also shares `maximumBasemapTileInstances` with the
+ground, which is left as-is and is worth an explicit sentence in the spec when task 9 lands.
+
+**Vacuity warning:** a test asserting the split with both flags true passes without the change, and so does
+one with both false. The discriminating cases are exactly the two mixed pairings, and the `false/true` one
+is the one that is broken today.
+
+
 ### Task 9 — point placement, collision and priority
 
 Depends on tasks 3 and 8.
 
 Project each anchor, apply the pixel translate, place label-local quads. Then collision: `sortKey` and layer
-priority ascending, larger wins; `boundingBox` expanded by `padding`; `overlap` in its two used states
-(`never`, `always`) — **cooperative is out of scope, zero corpus occurrences**.
+priority ascending, larger wins; the candidate's `boundingBox` **as given**; `overlap` in its two used
+states (`never`, `always`) — **cooperative is out of scope, zero corpus occurrences**. Honour
+`text-ignore-placement`, which is a text-candidate field and not only an icon one: without it a
+`text-overlap: always` label blocks everything placed after it.
+
+**Corrected during execution — this instruction originally said "expanded by `padding`", and that was
+wrong.** Rentile's `LabelLayout.bounds` **already** expands the box by `text-padding` on all four sides, and
+`LabelCandidate.padding` is that same evaluated value carried for the consumer's information. Re-applying it
+doubles every style's padding — a silent, plausible-looking defect, because every label then claims twice
+the space it should, which reads as an over-aggressive collision policy rather than as a bug.
 
 `translateAlignment` decides whether the pixel translate rotates with the map or stays viewport-fixed; 60
 layers across 12 styles use it, so it is not hypothetical.
@@ -246,6 +292,147 @@ hit this, so it is a safety net — but it must not surface as opaque `BASEMAP_R
 
 ---
 
+## Wave 4b — connect the path
+
+### Task 20 — wire the label path end to end
+
+**Added mid-cycle, and it exists because the plan had a hole.** Tasks 6, 9, 10 and 13 each built a piece
+and each stopped at the scope boundary this plan gave it — correctly. Nobody owned the seams *between*
+them, so at the close of Wave 4 every component works in isolation and **no code path runs them in
+sequence**: nothing calls `BasemapEngineHost.acquireLabelCandidates` or `placeLabels` from `prepare()`, and
+`Scene.labels` is never populated. The cycle would otherwise reach its verification wave drawing nothing,
+with every unit test green.
+
+Depends on tasks 6, 9, 10 and 13. The sequence to connect, all of which already exists:
+
+1. `prepare()` — when `plan.drawLabels` and a basemap style is configured — hands the planned tile list to
+   `BasemapEngineHost.acquireLabelCandidates`, which owns the two-round preregistration.
+2. `placeLabels(camera, batch)` resolves point placement, collision and priority.
+3. `advanceLabelFade` folds in the previous frame's state, keyed by `LabelIdentity`, and its result is
+   committed beside `previousSelectedLod` **only on success**.
+4. The surviving faded labels become `Scene.labels`, which the phase-5 draw already consumes.
+
+**Where the label tile list comes from is the one real decision here.** Task 8b made tile selection run
+whenever either draw flag is set, so the tiles exist on a `drawBasemap = false, drawLabels = true` frame.
+Use that selection rather than deriving a second one — `labelCandidateRequestKey` deliberately does not
+canonicalise `x`, so a divergent tile set is a different set of routes and a different cache key.
+
+**Failure posture** is already decided and must not be re-litigated here: an unroutable label source fails
+the frame by name (Task 15), and an engine-side exclusion emits one aggregate diagnostic (Task 14). This
+task wires; it does not invent policy.
+
+**Verification.** The discriminating test is the one nothing has today: a frame that goes in as a
+`FramePlan` and comes out with drawn label pixels. Everything below that is already covered by the unit
+suites, so a call-log assertion that the four stages ran in order adds little — assert the **output**.
+
+*Vacuity warning:* a test asserting "labels drew" against a fixture whose collision drops every candidate
+passes for the wrong reason, and so does one whose fade starts every label at opacity zero. Assert a
+specific non-zero pixel, and assert the count changes when the fixture's candidate set changes.
+
+### Task 21 — the fade identity must separate line repeats
+
+**A defect at the seam between Tasks 11 and 13, found by Task 11 reading Task 13's merged output.** Neither
+task is wrong on its own; the bug lives between them and appeared only once both existed.
+
+`deriveLabelIdentity(batch, candidateIndex)` derives from the **candidate**: layer id, source tile, the
+candidate's geographic anchor, and the glyph codepoints. That is exactly right for a point label. But a
+line-placed candidate now yields **one `PlacedLabel` per repeat along the road**, and every repeat carries
+the same `candidateIndex` and therefore the same candidate anchor — so all of them collapse to **one
+identity and share one opacity**. Two instances of the same road name fade as if they were one label.
+
+**The screen anchor cannot be the discriminator**, tempting as it looks: `anchorPixelX`/`anchorPixelY` are
+what separate the repeats today, and they move every time the camera moves, so an identity built on them
+never matches across frames and fade becomes silently inert — one of the two failure modes ADR 0035 names.
+
+**Use the repeat's own along-line arc distance**, which is camera-independent, stable between frames, and
+already computed by the walk. A point label contributes nothing for it.
+
+*Vacuity warning:* a fixture with a single repeat cannot distinguish a fixed identity from a per-repeat one.
+The discriminating case needs a line long enough for at least two repeats, asserting their identities
+**differ** — and a second case asserting that the same repeat across two frames keeps the **same** identity,
+because an identity that varies per frame passes the first case and breaks fade entirely.
+
+### Task 23 — retain the label handover across frames
+
+**Measured by Task 17, and it is the cycle's largest cost by a wide margin.** On a real CGL context with a
+**stationary camera**, `prepare()` costs 0.05–0.15 ms with nothing, 93–102 ms with the ground alone, and
+**514–520 ms with labels alone** — the label path is roughly **85% of `prepare` and 5.5× the ground path
+over the same tiles**. Inside it: acquire 300 ms, atlas decode 122 ms, place 67 ms, fade 8 ms.
+
+The reason is that **nothing is retained**. Three acquisitions of an identical tile set re-fetched all 17
+label tiles and all 16 glyph ranges (17→34→51 and 16→32→48 requests) and re-packed a **byte-identical**
+atlas — the same `contentKey` all three times.
+
+**Rentile publishes `labelCandidateRequestKey` for exactly this cache, and RenG calls it nowhere.** That is
+the same shape as F-2's outstanding debt, where a `RESIDENT`-provenance model still pays all three GLB
+parses every frame. Here it is 5× worse and it is paid on a camera that has not moved.
+
+Absolutes are from a debug binary; the **ratios** are what survive, and they are what justify this task.
+
+Scope: key the handover on Rentile's own request key, reuse the batch and its uploaded atlas while the key
+holds, and invalidate when it does not. Do not invent a second key — the one the engine publishes is the one
+whose semantics match what it will actually return.
+
+*Vacuity warning:* a test asserting "the second acquisition is faster" measures a warm JIT as readily as a
+cache. Assert the **request count** — the consumer's transport must see 17 and 16 once, not twice.
+
+### Task 24 — a label's identity must survive an LOD change
+
+**Found by the harness pass, and invisible to every analytical assertion in the cycle.** This is the fifth
+defect the visual harness has caught that a passing suite did not, and the reason E8 kept a recorded look in
+the gate.
+
+`deriveLabelIdentity` keys on `candidate.sourceTile.z/x/y`. So **every LOD change gives every visible label a
+new identity and restarts its fade at zero** — the whole text layer blinks out and takes ten frames to
+return. Measured over 48-frame runs: strong label ink collapses to exactly **0** at frames 1, 19 and 38 —
+the storyboard's three `ceil(zoom − 0.5)` crossings — in **both** styles, and sits below half the run's own
+maximum on 25 of 48 frames for style 59 and 33 of 48 for style 86.
+
+**Task 13 considered this and reasoned it was correct**: at an LOD change the candidate set is replaced
+wholesale, and vector geometry is quantised per tile, so anchors differ across LODs anyway. The reasoning is
+sound and the visible result is a blinking map. It is the "too fine" failure `LabelIdentity.kt`'s own KDoc
+predicts, reached by argument rather than by measurement — which is exactly what the harness is for.
+
+**The fix must not overshoot into the "too coarse" failure**, where identities collide and a label inherits
+another's opacity. Both failure modes are silent in opposite directions: too fine and fade never engages,
+too coarse and it engages wrongly. The tile is doing two jobs in that field — separating same-named features
+in adjacent tiles, which it must keep doing, and pinning an LOD, which it must stop doing.
+
+*The cheap failing test, named by the harness pass:* two frames differing only by a zoom that crosses an LOD
+boundary, asserting the identity is unchanged. Pair it with the existing adjacent-tile case, which is what
+stops a fix from collapsing distinct labels together.
+
+### Task 22 — draw the icon
+
+**The second hole of the same shape as Task 20's, found by Task 12 the same way — an agent noticing the
+thing it built could not be seen.** §3 of the spec says RenG owns "resolving `LabelIconRef.imageName` to
+sprite pixels, **and the draw**", and §1 lists icons in scope. No task was ever written for the draw.
+
+Icons currently contribute their **claim** on the screen — they collide, they push text aside, `optional`
+couples them correctly — and none of their ink. That is not a regression, because Rentile's own rasteriser
+draws the icon into the tile underneath, so the map does not look broken. It does mean E2's scope is
+undelivered until this lands.
+
+Two things are missing and both are real:
+
+1. **A pipeline that samples a sprite atlas.** The label program thresholds sampled alpha at 0.75 because
+   that is where the `glyphs.pbf` generator puts a glyph outline. **A sprite has no distance field** — its
+   alpha is coverage and its RGB is artwork. Task 12 made `ResolvedIconQuad` a sibling of
+   `ResolvedGlyphQuad` rather than reusing it for exactly this reason: one type would make the wrong
+   thresholding a picture nobody reviews, two make it a compile error. The draw needs a second program, or
+   a variant, that samples coverage.
+2. **The sprite atlas's pixels.** The firewall parses the sprite manifest's geometry and **discards the
+   image**. Task 2 retained the manifest; nothing retains the bytes.
+
+Honour what Task 12 established rather than re-deriving it: `icon-color` and `icon-halo-*` apply **only to
+an `sdf` sprite** — Rentile tints under `SRC_IN` when the entry says so and passes no colour filter
+otherwise — which is why `SpriteAtlasEntry` now carries an `sdf` flag. Tinting artwork the style never asked
+to recolour is the failure this prevents.
+
+**Recorded and out of scope:** `icon-pitch-alignment` cannot be honoured by a screen-space quad — a
+`map`-pitched icon should reach the screen as a projected parallelogram. The text path has the identical
+gap for `text-pitch-alignment`, which nothing in placement reads. Both stay recorded rather than faked.
+
 ## Wave 5 — verification
 
 ### Task 16 — the label readback suite
@@ -287,6 +474,10 @@ in the cycle's completion record.
 ## Closing obligations
 
 - `CLAUDE.md` and `HANDOFF.md` updated with what shipped, what it costs, and both limits of it.
-- `CONTEXT.md` gains the label vocabulary, with `_Avoid_:` lists.
+- `CONTEXT.md` gains the label vocabulary, with `_Avoid_:` lists. **A live clash found in Task 9:**
+  `CONTEXT.md`'s only current use of "Collision" is *resource-key* collision under ADR 0018's identity
+  rules. Label collision is unrelated, and the glossary must separate them rather than let one word carry
+  both.
 - `docs/decomposition.md`'s E-labels row updated — its gate says "legible", which this cycle does not claim.
-- The ABI dump's delta is exactly five enum entries and one `FramePlan` parameter. Anything else is a defect.
+- The ABI dump's delta is exactly **four** enum entries — `ResourceClass`, `DiagnosticCode`, `RenGErrorCode`,
+  `PipelineStage` — plus one `FramePlan` parameter. Anything else is a defect.

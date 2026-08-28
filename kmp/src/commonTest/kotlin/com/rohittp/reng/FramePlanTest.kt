@@ -3,6 +3,7 @@ package com.rohittp.reng
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
 
 class FramePlanTest {
@@ -24,9 +25,42 @@ class FramePlanTest {
 
         assertEquals(ProjectionMode.MERCATOR, plan.projectionMode)
         assertEquals(true, plan.drawBasemap)
+        assertEquals(true, plan.drawLabels)
         assertEquals(emptyList(), plan.stickers)
         assertEquals(emptyList(), plan.models)
         assertEquals(emptyList(), plan.geometries)
+    }
+
+    /**
+     * `drawLabels` is orthogonal to `drawBasemap`: all four pairings construct, none is refused, and
+     * each is a distinct plan. Asserting the four are pairwise **different** rather than "a plan
+     * carrying `drawLabels = false` reads back `false`" is deliberate — the read-back holds for a
+     * field nothing else looks at.
+     *
+     * The comparison is an explicit pairwise loop rather than `distinct()`, and that is not a style
+     * choice: `distinct()` fills a `HashSet`, which only calls `equals` on entries that already share
+     * a bucket, so four distinct hash codes make it keep all four even when `equals` ignores
+     * `drawLabels` outright. Measured — the `distinct()` form passed against exactly that mutation.
+     */
+    @Test
+    fun allFourDrawBasemapAndDrawLabelsPairingsAreLegalAndDistinct() {
+        val pairings = listOf(false to false, false to true, true to false, true to true)
+        val plans = pairings.map { (basemap, labels) ->
+            FramePlan(0, camera(), drawBasemap = basemap, drawLabels = labels)
+        }
+
+        assertEquals(pairings, plans.map { it.drawBasemap to it.drawLabels })
+        for (first in plans.indices) {
+            for (second in first + 1 until plans.size) {
+                assertNotEquals(
+                    plans[first],
+                    plans[second],
+                    "${pairings[first]} and ${pairings[second]} must not be the same plan",
+                )
+            }
+        }
+        // The one pair that differs in drawLabels alone, so hashCode cannot be reading drawBasemap.
+        assertNotEquals(plans[2].hashCode(), plans[3].hashCode())
     }
 
     @Test

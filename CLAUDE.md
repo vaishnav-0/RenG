@@ -170,11 +170,16 @@ All six targets still publish at every release; which of them anyone has actuall
 release notes rather than being discovered by an Android consumer, and **ADR 0033 is where that promise now
 lives**.
 
-**Measured on this checkout:** `testAndroidHostTest` **1,134**, `macosArm64Test` **1,174**,
-`iosSimulatorArm64Test` **1,160** — 0 failures, 0 errors and 0 skips on each, summed from Gradle's own
+**Measured on this checkout:** `testAndroidHostTest` **1,298**, `macosArm64Test` **1,351**,
+`iosSimulatorArm64Test` **1,335** — 0 failures, 0 errors and 0 skips on each, summed from Gradle's own
 JUnit XML rather than from scrollback. 138 Python tests pass, and `check_repository_policy.py` passes.
-(Cycle H closed at 1,123 / 1,159 / 1,145; the X2 fix below added 11 `commonTest` cases everywhere plus 4
-that need a real GL context.)
+(Cycle H closed at 1,123 / 1,159 / 1,145; X2 took it to 1,134 / 1,174 / 1,160; E-labels added the rest.)
+
+**Read a gate's verdict from `BUILD SUCCESSFUL` or an unpiped `$?`, never from an exit code through a
+pipe.** `./gradlew … | tail` reports *tail's* status, so a failing build looks green. That cost this cycle
+two merges reported passing that were not compiling, and the tell was mistaken twice for stale results: the
+test counts did not move, and then no JUnit XML appeared at all, because the tests never ran. **An absent
+measurement is evidence, not noise.**
 
 **GPU residency is observable, and its two defaults no longer disagree — the X2 fix, landed between
 Cycle H and E-labels.** Three things were wrong at once and none of them was about either cycle.
@@ -205,7 +210,37 @@ the coverage gap is not, and closing it means reporting over the union of cache 
 diagnostic fires on the *leased* working set, so a frame exactly one tile over evicts that tile and stays
 silent; a quiet log is not proof of no eviction.
 
-**A visual harness exists, it found four defects the passing suite did not, and it is the reason `0.3.0`
+**Cycle E-labels is complete and unreleased.** RenG draws map text: point and line placement with halo,
+collision and priority, icons that claim space and draw, and fade across frames. Its authority is
+`docs/superpowers/specs/2026-08-28-cycle-e-labels-design.md`, its plan is
+`docs/superpowers/plans/2026-08-28-cycle-e-labels.md`, and eight preflight documents plus four measurement
+spikes sit in `docs/research/2026-08-2[89]-e-labels-*.md`. **Rentile moved to `0.6.0` for it** — read the
+catalog, never this paragraph. **ADRs 0034–0036** govern the label stack's position, fade as the only
+cross-frame label state, and the engine-diagnostic boundary; ADR 0016 gained a second erratum and ADR 0018
+gained one for the eighth Frame Plan field tag.
+
+**The public ABI grew by four enum entries and one `FramePlan` field**, all under a `VERSION_NAME` frozen at
+`0.4.0`: `ResourceClass.BASEMAP_GLYPH_RANGE`, `DiagnosticCode.LABEL_CONTENT_EXCLUDED`,
+`PipelineStage.LABEL_PREPARATION`, `RenGErrorCode.UNROUTABLE_LABEL_SOURCE`, and `FramePlan.drawLabels`.
+`ResourceLimits` did **not** grow — the chain that concluded otherwise was broken by measurement.
+
+**What the cycle owes, all measured rather than suspected.** `icon-text-fit` is out of scope by decision, so
+110 layers across 13 styles draw an unfitted icon — wrong size, not absent. `icon-pitch-alignment` and
+`text-pitch-alignment` cannot be honoured by a screen-space quad and are recorded rather than faked.
+Complex scripts still produce no glyphs — `ScriptSupport.kt` is byte-identical across the Rentile bump — and
+RenG's only answer is one aggregate diagnostic. The handover cache holds **one** entry, so an A→B→A camera
+oscillation misses every time. And `maximumDecodedImageBytes` was raised to 256 MiB to clear the engine's
+largest atlas but is still **shared** with every raster, which is F-2's debt unchanged.
+
+**The most expensive lesson of the cycle is about tests, not labels.** Twelve vacuous checks were found
+inside E-labels' own new tests, every one by deliberately breaking working code rather than by review — a
+`distinct()` assertion that passed against a broken `equals`, a probe that measured its own acceleration
+structure, a premultiplication check unfalsifiable by construction, and a collision case where the winner
+merely painted over the loser. **Two integration holes were also found this way**: the label path was fully
+built and wired to nothing, and icons claimed collision space and drew no ink — both invisible to every unit
+suite and both surfaced by an agent noticing its own work could not be observed.
+
+**A visual harness exists, it found five defects the passing suite did not, and it is the reason `0.3.0`
 draws.** It lives in `consumer-smoke/src/macosArm64Main/kotlin/com/rohittp/reng/smoke/harness/`, is invoked
 as `./gradlew -p consumer-smoke runHarness -PstyleUrl=<url>`, and writes 960×540 binary PPM frames for
 `ffmpeg` rather than PNG, because RenG owns a decoder and no encoder. Across all 34 styles the consumer

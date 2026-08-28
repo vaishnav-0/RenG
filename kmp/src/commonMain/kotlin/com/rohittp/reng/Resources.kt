@@ -48,6 +48,15 @@ public enum class ResourceClass {
     STICKER_IMAGE,
     MODEL_GLB,
     MODEL_TEXTURE,
+
+    /**
+     * One 256-codepoint block of one font stack, as fontnik/Mapbox protobuf, fetched by the Rentile
+     * engine's glyph acquirer while it resolves label candidates. Appended after the model classes
+     * rather than grouped with the other `BASEMAP_` constants so that no existing constant's ordinal,
+     * wire value or report order moves: both of the latter are explicit tables that a reordering would
+     * silently renumber.
+     */
+    BASEMAP_GLYPH_RANGE,
 }
 
 public enum class ResourceKind {
@@ -75,7 +84,23 @@ public data class ResourceLimits(
     public val maximumStickerImageBytes: Long = 32L * 1024L * 1024L,
     public val maximumModelGlbBytes: Long = 256L * 1024L * 1024L,
     public val maximumModelTextureBytes: Long = 32L * 1024L * 1024L,
-    public val maximumDecodedImageBytes: Long = 64L * 1024L * 1024L,
+    /**
+     * The decoded-pixel ceiling every image RenG expands is measured against. `decodePng` enforces it
+     * as `pixelCount > maximumDecodedImageBytes / 4`, so this value divided by four is a pixel count.
+     *
+     * **Raised from 64 MiB to 256 MiB by Cycle E-labels, because the engine packs glyph atlases this
+     * decoder would otherwise refuse.** Rentile's own recorded worst case is 159 glyph ranges in one
+     * plan at 8192x4357 -- 35,684,864 pixels, needing about 136 MiB. Against the old 64 MiB the
+     * ceiling was 16,777,216 pixels, roughly 73 full ranges, and a denser multilingual viewport did
+     * not degrade: `decodePng` answered `TooLarge` and the whole frame failed
+     * `RESOURCE_DECODE_FAILED`. 256 MiB clears the engine's worst case by 1.88x.
+     *
+     * This limit is still **shared** with every raster RenG decodes -- sticker images, model textures,
+     * basemap tiles -- which is Cycle F-2's recorded debt rather than a decision taken here. Raising it
+     * raises their ceiling too; giving the atlas its own public field was the alternative and was not
+     * taken, so a consumer tightening this for rasters can still starve the atlas.
+     */
+    public val maximumDecodedImageBytes: Long = 256L * 1024L * 1024L,
     public val maximumModelJsonChunkBytes: Long = 16L * 1024L * 1024L,
     /**
      * The byte budget for resident GPU texture memory: everything an unleased upload -- for

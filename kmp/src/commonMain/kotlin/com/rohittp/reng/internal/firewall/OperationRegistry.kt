@@ -206,6 +206,52 @@ internal class OperationRegistry(
     suspend fun observedTileJsonDocuments(): Map<String, ByteArray> =
         tileJsonObservationMutex.withLock { LinkedHashMap(observedTileJsonByUrl) }
 
+    // Every Glyph Range lookup this invocation REFUSED, by the redacted-url digest the refusal named.
+    //
+    // **Why this observation exists, and why only for this one class.** The firewall's own refusal is
+    // precise -- `AMBIGUOUS_RESOURCE_ROUTE`, "an exchange RenG never planned" -- and Rentile throws it
+    // away. `GlyphResourceAcquirer.acquireRaw` reads its raw store first, and Rentile's `readStore`
+    // helper converts whatever the store threw into its own `ResourceStoreException` with **no cause**;
+    // `acquireLabelCandidates` then wraps that in a `BatchRenderException`. What arrives at
+    // [BasemapEngineHost]'s classifying seam therefore carries `RESOURCE_STORE_FAILED` and no resource
+    // class at all, which [classifyEngineFailure] can only report as the opaque `BASEMAP_RENDER_FAILED`:
+    // a consumer whose glyph routes RenG failed to derive gets a labelless map and a failure code that
+    // says only "the basemap did not render". This map is how RenG recovers what it already knew.
+    //
+    // Scoped to `GLYPH_RANGE` rather than kept for every class, because the label handover is the one
+    // caller that reads it, and an observation nothing reads is bookkeeping that can rot. The same
+    // lossy wrapping does apply to Rentile's raster, vector and TileJSON acquirers; widening this is a
+    // separate decision with its own caller, not a freebie.
+    //
+    // Written only on the refusal path, which is by construction the path that then throws, so this
+    // costs one enum comparison per engine lookup and nothing else. Its own guard, for the same reason
+    // `lastTransportDigestByRoute` has one: concurrent routes genuinely race here.
+    private val refusedGlyphLookupMutex = Mutex()
+    private val refusedGlyphLookupDigests = mutableSetOf<String>()
+
+    /**
+     * Records a refused engine lookup when it named a Glyph Range, and does nothing otherwise.
+     *
+     * [redactedDigest] is `sha256Hex(withRedactedAuthenticationQuery(url))` in both callers -- a store
+     * key carries it directly as its `stableId`, and a transport request is reduced to it here -- so the
+     * set this fills is directly comparable against the digests of the routes RenG preregistered. That
+     * comparison is what separates the two failures this observation exists to tell apart: a digest RenG
+     * never preregistered means RenG derived no route for that Glyph Range at all, while a digest RenG
+     * *did* preregister means the redacted forms agree and the exact strings do not -- a credential the
+     * engine composes and RenG's copy of the template does not carry.
+     */
+    private suspend fun recordRefusedEngineLookup(engineResourceClass: EngineResourceClass, redactedDigest: String) {
+        if (engineResourceClass != EngineResourceClass.GLYPH_RANGE) return
+        refusedGlyphLookupMutex.withLock { refusedGlyphLookupDigests += redactedDigest }
+    }
+
+    /**
+     * The redacted-url digest of every Glyph Range lookup this invocation refused. A copy, taken under
+     * the same lock the writer takes, so the reader gets a happens-before edge on all of them.
+     */
+    suspend fun refusedGlyphLookupDigests(): Set<String> =
+        refusedGlyphLookupMutex.withLock { LinkedHashSet(refusedGlyphLookupDigests) }
+
     private val transportJoin = SuspendJoin<TransportLatchKey, EngineTransportResponse>()
     private val storeReadJoin = SuspendJoin<ResourceRouteKey, EngineStoredRawResource?>()
     private val storeWriteJoin = SuspendJoin<ResourceRouteKey, Unit>()
@@ -216,9 +262,52 @@ internal class OperationRegistry(
     // *before* compiling the pair, so without this a pair RenG can already prove will never compile is
     // persisted into a consumer Store that has no remove operation, and fails identically on every later
     // prepare(). [spriteRendezvous] carries each member's arrival; [spritePairJoin] runs the joint
-    // verdict exactly once per pair and replays it to whichever member did not run it.
+    // verdict exactly once per pair and replays it to whichever member did not run it. What it latches
+    // is that pair's parsed [SpriteAtlasManifest] rather than a bare verdict -- `null` is the verdict
+    // "declined" -- so the geometry every entry declared survives the gate that proved it, bounded by
+    // this registry's own operation lifetime and by the one sprite pair a style may declare.
     private val spriteRendezvous = SpriteRendezvous()
-    private val spritePairJoin = SuspendJoin<SpriteGroupKey, Boolean>()
+    private val spritePairJoin = SuspendJoin<SpriteGroupKey, SpriteAtlasManifest?>()
+
+    private val spriteManifestMutex = Mutex()
+    private var latchedSpriteManifest: SpriteAtlasManifest? = null
+
+    /**
+     * The sprite atlas this invocation's style declared, as [spritePairJointManifest] parsed it, or
+     * `null` when this invocation never held both members of a pair or the pair was not jointly valid.
+     *
+     * **It is the only route by which `LabelIconRef.imageName` becomes atlas pixels.** Rentile exposes
+     * no public sprite atlas -- the name is an opaque key into resources the consumer owns -- so a
+     * consumer that wants to draw an icon has to have kept the manifest it proxied. The gate above
+     * parses one anyway to decide whether the pair may be cached, which is why this costs nothing
+     * beyond a reference.
+     *
+     * A copy taken under the same lock the writer takes, exactly as [refusedGlyphLookupDigests] is, so
+     * the reader gets a happens-before edge on it. Read after the invocation's work has completed and
+     * before its [OperationRegistry] is discarded (ADR 0016): the manifest lives for one preparation,
+     * which is the same lifetime as the frame that uses it.
+     */
+    suspend fun spriteAtlasManifest(): SpriteAtlasManifest? =
+        spriteManifestMutex.withLock { latchedSpriteManifest }
+
+    /**
+     * Runs the pair's joint gate exactly once per group and keeps what it returned.
+     *
+     * Both callers reach the same latch: [approveSpriteMemberWrite], which needs the verdict, and
+     * [observeSpritePairFromStore], which needs nothing and exists only so that a pair served entirely
+     * out of the consumer's Store still produces a manifest. Without the second one an icon would
+     * resolve on the first frame after a cold start and on no frame after that, which is the failure
+     * mode a reader would blame on placement rather than on caching.
+     */
+    private suspend fun jointSpriteManifest(
+        member: SpriteMemberKey,
+        json: SpriteMemberContent,
+        image: SpriteMemberContent,
+    ): SpriteAtlasManifest? {
+        val manifest = spritePairJoin.run(member.group) { spritePairJointManifest(json.bytes, image.bytes) }
+        if (manifest != null) spriteManifestMutex.withLock { latchedSpriteManifest = manifest }
+        return manifest
+    }
 
     /**
      * Declares the static prelookup routes this invocation may need. Idempotent for an identical
@@ -323,7 +412,10 @@ internal class OperationRegistry(
 
     suspend fun executeTransport(request: EngineTransportRequest): EngineTransportResponse {
         val route = routeIndex.transportRoutes[TransportIndexKey(request.url, request.resourceClass)]
-            ?: throw ambiguousRouteFailure()
+            ?: run {
+                recordRefusedEngineLookup(request.resourceClass, redactedLocatorHex(request.url))
+                throw ambiguousRouteFailure()
+            }
         val latchKey = TransportLatchKey(
             route = route,
             ifNoneMatch = request.metadata.ifNoneMatch,
@@ -369,7 +461,11 @@ internal class OperationRegistry(
     // ---- Store ----------------------------------------------------------------------------------
 
     suspend fun readStore(key: EngineRawResourceKey): EngineStoredRawResource? {
-        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)] ?: throw ambiguousRouteFailure()
+        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)]
+            ?: run {
+                recordRefusedEngineLookup(key.resourceClass, key.stableId)
+                throw ambiguousRouteFailure()
+            }
         return storeReadJoin.run(route) {
             try {
                 val stored = store.read(RenGRawResourceKey(stableId = key.stableId, resourceClass = route.resourceClass))
@@ -409,7 +505,11 @@ internal class OperationRegistry(
     }
 
     suspend fun writeStore(key: EngineRawResourceKey, resource: EngineStoredRawResource) {
-        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)] ?: throw ambiguousRouteFailure()
+        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)]
+            ?: run {
+                recordRefusedEngineLookup(key.resourceClass, key.stableId)
+                throw ambiguousRouteFailure()
+            }
         // Digest self-consistency and the byte ceiling are NOT checked here: `copyValidStoredResource`
         // below enforces both, and throws the identical failure. Checking them twice cost a second
         // pure-Kotlin SHA-256 over the same bytes on every engine store write.
@@ -593,15 +693,40 @@ internal class OperationRegistry(
 
         val jsonMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_JSON) mine else theirs
         val imageMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_IMAGE) mine else theirs
-        // Latched per pair, so both members reach the same verdict and neither re-derives it.
-        return spritePairJoin.run(member.group) {
-            spritePairIsJointlyValid(jsonMember.bytes, imageMember.bytes)
-        }
+        // Latched per pair, so both members reach the same verdict and neither re-derives it -- and what
+        // is latched is the pair's parsed manifest rather than a bare verdict, so the geometry is parsed
+        // exactly once per pair. This path reads only whether one came back.
+        return jointSpriteManifest(member, jsonMember, imageMember) != null
     }
 
     private suspend fun contributeSpriteMember(route: ResourceRouteKey, validated: StoredRawResource) {
         val member = spriteMemberKeyOf(route) ?: return
         spriteRendezvous.contribute(member, SpriteMemberContent(validated.contentDigest, validated.bytes))
+        observeSpritePairFromStore(member, validated)
+    }
+
+    /**
+     * Runs the joint gate for a pair whose members both came out of the consumer's Store, so that
+     * [spriteAtlasManifest] has something to hand back on a frame that fetched nothing.
+     *
+     * **It peeks at the sibling and never waits for it**, which is the whole of why it is safe here.
+     * [approveSpriteMemberWrite] may park at the rendezvous because a write is always preceded by a
+     * fetch that its sibling's fetch is running concurrently with; a store *read* has no such
+     * guarantee -- Rentile may serve one member from the Store and fetch the other, or read them one
+     * after the other -- so a read that parked could wait for an arrival that only its own return
+     * would cause. Peeking makes the *later* of the two contributors compute the manifest and the
+     * earlier one do nothing, which covers every interleaving without a wait.
+     *
+     * Nothing here can fail the read: a `null` sibling, a `null` manifest and a pair that never
+     * completes are all simply an invocation with no icon geometry.
+     */
+    private suspend fun observeSpritePairFromStore(member: SpriteMemberKey, validated: StoredRawResource) {
+        val sibling = SpriteMemberKey(member.group, siblingSpriteClassOf(member.resourceClass))
+        val theirs = spriteRendezvous.peekContent(sibling) ?: return
+        val mine = SpriteMemberContent(validated.contentDigest, validated.bytes)
+        val jsonMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_JSON) mine else theirs
+        val imageMember = if (member.resourceClass == ResourceClass.BASEMAP_SPRITE_IMAGE) mine else theirs
+        jointSpriteManifest(member, jsonMember, imageMember)
     }
 
     /** Latches a sprite member as one that will contribute no content, releasing a parked sibling. */
@@ -869,11 +994,76 @@ private fun spriteBaseUrl(url: String, extension: String): String {
 }
 
 /**
- * The cross-member checks Rentile's own `SpriteResourceAcquirer.compile` performs, and only those that
- * are unconditional and independent of Rentile's configuration: the manifest is an object of entry
- * objects, each entry carries integer `x`/`y`/`width`/`height`, each rect is non-degenerate and lies
- * wholly inside the atlas image, a present `pixelRatio` is finite and positive, and no entry carries the
- * `stretchX`/`stretchY`/`content` fields Rentile refuses.
+ * One atlas entry as the manifest declared it: a rect already proved non-degenerate and wholly inside
+ * the atlas image, and the `pixelRatio` Rentile's compiler would read for it -- which for an absent or
+ * unreadable one is the 1.0 Rentile itself falls back to, recorded here rather than left for every later
+ * reader to re-derive.
+ */
+internal data class SpriteAtlasEntry(
+    val x: Int,
+    val y: Int,
+    val width: Int,
+    val height: Int,
+    val pixelRatio: Double,
+    /**
+     * The entry's `sdf` member, defaulting to `false` exactly as Rentile's own reader does.
+     *
+     * **It decides whether `icon-color` and `icon-halo-*` mean anything at all.** Rentile tints a
+     * sprite under `BlendMode.SRC_IN` when this is set and passes a `null` colour filter otherwise, so
+     * a consumer that tinted every sprite would repaint artwork the style never asked to recolour.
+     * Defaulted so that this file's own fixtures and every existing caller keep their arity, and read
+     * rather than assumed because an unread flag here becomes a wrong picture two layers away.
+     */
+    val sdf: Boolean = false,
+)
+
+/**
+ * A jointly valid sprite pair's contents: the atlas image's own dimensions, read from its `IHDR`, and
+ * every entry the manifest named, keyed by that name and in the manifest's own member order. It exists
+ * only for a pair that passed [spritePairJointManifest]'s checks, so every rect it holds is already known
+ * to lie inside [atlasWidth] x [atlasHeight].
+ *
+ * **[atlasPngBytes] is the image itself, and it travels with the geometry rather than beside it.** The
+ * geometry alone says where a sprite sits in an atlas nobody kept; drawing one needs the pixels, and the
+ * only moment RenG ever holds them is while it proxies the pair for the engine. Carrying them here means
+ * they follow the one path the manifest already travels -- [OperationRegistry.spriteAtlasManifest] out of
+ * the invocation, then the renderer's retained label handover -- instead of needing a second retention
+ * with its own lifetime to get wrong. The cost is one sprite atlas's encoded bytes held for as long as
+ * the handover that names them, which is the same bound the glyph atlas's own PNG already lives under.
+ *
+ * **Not a `data class`, and the array is why.** A generated `equals` over a [ByteArray] compares
+ * references, so two manifests parsed from identical bytes would compare unequal while reading as though
+ * they had been compared by content -- the exact shape of wrong answer a value type invites. Nothing
+ * compares two manifests; nothing copies one; so neither is provided.
+ */
+internal class SpriteAtlasManifest(
+    val atlasWidth: Int,
+    val atlasHeight: Int,
+    val entries: Map<String, SpriteAtlasEntry>,
+    val atlasPngBytes: ByteArray,
+)
+
+/**
+ * Runs the cross-member checks Rentile's own `SpriteResourceAcquirer.compile` performs -- and only those
+ * that are unconditional and independent of Rentile's configuration -- then hands back what the pair
+ * actually contained. The checks: the manifest is an object of entry objects, each entry carries integer
+ * `x`/`y`/`width`/`height`, each rect is non-degenerate and lies wholly inside the atlas image, a present
+ * `pixelRatio` is finite and positive, and no entry carries the `stretchX`/`stretchY`/`content` fields
+ * Rentile refuses.
+ *
+ * **`null` is the whole of "not jointly valid", and it is a cache verdict rather than a failure.** This
+ * function throws nothing and reports nothing; a `null` means one member's bytes lost the pair its cache,
+ * exactly as the `false` it replaces did. Nullable rather than a two-case result type precisely so the
+ * write path is not made to care about the payload -- [approveSpriteMemberWrite] asks only whether a
+ * manifest came back -- and because `null`-means-declined is already this seam's idiom, as in
+ * [spriteMemberKeyOf] and [SpriteRendezvous.awaitContent]. **The returned manifest is the point**: this
+ * geometry was always parsed here and always discarded, and an icon name cannot be resolved to atlas
+ * pixels without it.
+ *
+ * An empty manifest object is jointly valid and yields an empty [SpriteAtlasManifest.entries] --
+ * vacuously, since there is no entry left to fail a check -- so a reader resolving a name against a
+ * manifest must distinguish "no such entry" from "no manifest", and must not read a non-null return as
+ * evidence that any entry exists.
  *
  * Rentile's two limit-shaped checks are deliberately not mirrored, and **not** because RenG cannot know
  * them -- it can, exactly, at the pinned version: `MAX_SPRITE_ENTRIES` is a hardcoded `100_000` in
@@ -888,32 +1078,61 @@ private fun spriteBaseUrl(url: String, extension: String): String {
  * broken style cost less than repeated network on a working one, and an atlas above either bound is far
  * outside anything a real basemap style ships.
  *
- * Only the image's IHDR is needed, so this scans the container ([scanPng]) rather than decoding it; the
- * member gate already proved the same bytes decode in full.
+ * That omission was a caching decision, and it now has a second consequence worth stating plainly, since
+ * a returned manifest can be read where a cache verdict could not: **a manifest is not a promise that
+ * Rentile compiled this atlas.** A pair above either omitted bound returns a manifest here and still
+ * fails the engine's own compile, so a reader that needs pixels must take them from the atlas image it
+ * decoded, never from this having been non-null.
+ *
+ * Only the image's IHDR is needed *here*, so this scans the container ([scanPng]) rather than decoding
+ * it; the member gate already proved the same bytes decode in full. The bytes themselves are kept on the
+ * returned manifest, unchanged and undecoded -- see [SpriteAtlasManifest.atlasPngBytes] for why the
+ * pixels travel with the geometry rather than being fetched again by whoever draws them.
  */
-private fun spritePairIsJointlyValid(jsonBytes: ByteArray, imageBytes: ByteArray): Boolean {
-    val header = (scanPng(imageBytes) as? PngScan.Admitted)?.header ?: return false
+internal fun spritePairJointManifest(jsonBytes: ByteArray, imageBytes: ByteArray): SpriteAtlasManifest? {
+    val header = (scanPng(imageBytes) as? PngScan.Admitted)?.header ?: return null
     val parsed = parseJson(jsonBytes, 0, jsonBytes.size, SPRITE_JSON_MAXIMUM_DEPTH) as? JsonParse.Parsed
-    val root = parsed?.value as? JsonValue.Obj ?: return false
-    return root.members.values.all { entry -> spriteEntryFitsAtlas(entry, header.width, header.height) }
+    val root = parsed?.value as? JsonValue.Obj ?: return null
+    val entries = LinkedHashMap<String, SpriteAtlasEntry>(root.members.size)
+    for ((name, entry) in root.members) {
+        // One bad entry still rejects the whole pair, as the `all` this replaces did: Rentile compiles
+        // the manifest as a unit, so a pair with one unusable entry is a pair that cannot compile.
+        entries[name] = spriteEntryWithinAtlas(entry, header.width, header.height) ?: return null
+    }
+    return SpriteAtlasManifest(
+        atlasWidth = header.width,
+        atlasHeight = header.height,
+        entries = entries,
+        // The bytes that were scanned, not a re-fetch of them: this is the one place in RenG that holds
+        // a sprite atlas image at all, and an icon draw that took its pixels from anywhere else would be
+        // drawing from an atlas the geometry above was never checked against.
+        atlasPngBytes = imageBytes,
+    )
 }
 
-private fun spriteEntryFitsAtlas(entry: JsonValue, imageWidth: Int, imageHeight: Int): Boolean {
-    val members = (entry as? JsonValue.Obj)?.members ?: return false
-    if (members.keys.any { it in UNSUPPORTED_SPRITE_ENTRY_FIELDS }) return false
-    val x = spriteEntryInt(members["x"]) ?: return false
-    val y = spriteEntryInt(members["y"]) ?: return false
-    val width = spriteEntryInt(members["width"]) ?: return false
-    val height = spriteEntryInt(members["height"]) ?: return false
-    if (x < 0 || y < 0 || width <= 0 || height <= 0) return false
+/** The entry's own geometry when it passes every check above, `null` when it does not. */
+private fun spriteEntryWithinAtlas(entry: JsonValue, imageWidth: Int, imageHeight: Int): SpriteAtlasEntry? {
+    val members = (entry as? JsonValue.Obj)?.members ?: return null
+    if (members.keys.any { it in UNSUPPORTED_SPRITE_ENTRY_FIELDS }) return null
+    val x = spriteEntryInt(members["x"]) ?: return null
+    val y = spriteEntryInt(members["y"]) ?: return null
+    val width = spriteEntryInt(members["width"]) ?: return null
+    val height = spriteEntryInt(members["height"]) ?: return null
+    if (x < 0 || y < 0 || width <= 0 || height <= 0) return null
     // Widened deliberately: two in-range Ints can overflow their sum, and an overflowed rect would
     // compare as comfortably inside the atlas.
-    if (x.toLong() + width.toLong() > imageWidth.toLong()) return false
-    if (y.toLong() + height.toLong() > imageHeight.toLong()) return false
+    if (x.toLong() + width.toLong() > imageWidth.toLong()) return null
+    if (y.toLong() + height.toLong() > imageHeight.toLong()) return null
+    // Rentile reads `sdf` through `booleanOrNull` and falls back to false, so an absent or
+    // unreadable member is the ordinary case rather than a rejection -- most sprites are artwork.
+    val sdf = (members["sdf"] as? JsonValue.Bool)?.value == true
     // Absent, or present but unreadable as a number, is not a rejection: Rentile falls back to 1.0 in
-    // both cases, so refusing here would refuse a pair the engine compiles.
-    val pixelRatio = spriteEntryDouble(members["pixelRatio"]) ?: return true
-    return pixelRatio.isFinite() && pixelRatio > 0.0
+    // both cases, so refusing here would refuse a pair the engine compiles. That fallback is recorded on
+    // the entry rather than left implicit, so a later reader sees the ratio the engine would have used.
+    val pixelRatio = spriteEntryDouble(members["pixelRatio"])
+        ?: return SpriteAtlasEntry(x, y, width, height, ABSENT_SPRITE_PIXEL_RATIO, sdf)
+    if (!pixelRatio.isFinite() || pixelRatio <= 0.0) return null
+    return SpriteAtlasEntry(x, y, width, height, pixelRatio, sdf)
 }
 
 /** Rentile reads these through `JsonPrimitive.intOrNull`, which parses a quoted primitive's content
@@ -987,6 +1206,16 @@ private class SpriteRendezvous {
         signal?.complete(Unit)
     }
 
+    /**
+     * [member]'s content if it has already arrived, without waiting for it if it has not.
+     *
+     * The non-blocking counterpart of [awaitContent], for a caller that may not park -- see
+     * [OperationRegistry.observeSpritePairFromStore]. A `null` covers both "not latched yet" and
+     * "latched as contributing none", because neither gives the caller a pair to work with.
+     */
+    suspend fun peekContent(member: SpriteMemberKey): SpriteMemberContent? =
+        mutex.withLock { slots[member]?.content }
+
     /** Suspends until [member] is latched either way; `null` means no content will ever arrive. */
     suspend fun awaitContent(member: SpriteMemberKey): SpriteMemberContent? {
         val slot = mutex.withLock { slots.getOrPut(member) { Slot() } }
@@ -1000,6 +1229,9 @@ private class SpriteRendezvous {
         var withoutContent: Boolean = false
     }
 }
+
+/** What Rentile's own compiler reads for an entry that declares no readable `pixelRatio`. */
+private const val ABSENT_SPRITE_PIXEL_RATIO: Double = 1.0
 
 private const val SPRITE_JSON_EXTENSION = ".json"
 private const val SPRITE_IMAGE_EXTENSION = ".png"
