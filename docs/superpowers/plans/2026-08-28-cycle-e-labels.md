@@ -376,6 +376,32 @@ whose semantics match what it will actually return.
 *Vacuity warning:* a test asserting "the second acquisition is faster" measures a warm JIT as readily as a
 cache. Assert the **request count** — the consumer's transport must see 17 and 16 once, not twice.
 
+### Task 24 — a label's identity must survive an LOD change
+
+**Found by the harness pass, and invisible to every analytical assertion in the cycle.** This is the fifth
+defect the visual harness has caught that a passing suite did not, and the reason E8 kept a recorded look in
+the gate.
+
+`deriveLabelIdentity` keys on `candidate.sourceTile.z/x/y`. So **every LOD change gives every visible label a
+new identity and restarts its fade at zero** — the whole text layer blinks out and takes ten frames to
+return. Measured over 48-frame runs: strong label ink collapses to exactly **0** at frames 1, 19 and 38 —
+the storyboard's three `ceil(zoom − 0.5)` crossings — in **both** styles, and sits below half the run's own
+maximum on 25 of 48 frames for style 59 and 33 of 48 for style 86.
+
+**Task 13 considered this and reasoned it was correct**: at an LOD change the candidate set is replaced
+wholesale, and vector geometry is quantised per tile, so anchors differ across LODs anyway. The reasoning is
+sound and the visible result is a blinking map. It is the "too fine" failure `LabelIdentity.kt`'s own KDoc
+predicts, reached by argument rather than by measurement — which is exactly what the harness is for.
+
+**The fix must not overshoot into the "too coarse" failure**, where identities collide and a label inherits
+another's opacity. Both failure modes are silent in opposite directions: too fine and fade never engages,
+too coarse and it engages wrongly. The tile is doing two jobs in that field — separating same-named features
+in adjacent tiles, which it must keep doing, and pinning an LOD, which it must stop doing.
+
+*The cheap failing test, named by the harness pass:* two frames differing only by a zoom that crosses an LOD
+boundary, asserting the identity is unchanged. Pair it with the existing adjacent-tile case, which is what
+stops a fix from collapsing distinct labels together.
+
 ### Task 22 — draw the icon
 
 **The second hole of the same shape as Task 20's, found by Task 12 the same way — an agent noticing the
