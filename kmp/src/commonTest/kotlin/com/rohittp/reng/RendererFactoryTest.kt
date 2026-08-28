@@ -322,7 +322,7 @@ class RendererFactoryTest {
         assertEquals(
             INTERNAL_PIPELINE_PROGRAMS,
             created,
-            "setup compiles the composite, sticker, ground and label programs: ${binding.log}",
+            "setup compiles the composite, sticker, ground, label and icon programs: ${binding.log}",
         )
 
         renderer.close()
@@ -1304,6 +1304,8 @@ private fun bin(write: BinWriter.() -> Unit): ByteArray = BinWriter().apply(writ
 
 /**
  * The programs `createInternalGlState` compiles at setup: composite, sticker, ground and — since
- * ADR 0034's phase 5 — label.
+ * ADR 0034's phase 5 — label and icon. Phase 5 draws two textures and therefore needs two programs;
+ * a sprite atlas carries coverage where a glyph atlas carries a distance field, so one program
+ * cannot read both.
  */
-private const val INTERNAL_PIPELINE_PROGRAMS: Int = 4
+private const val INTERNAL_PIPELINE_PROGRAMS: Int = 5

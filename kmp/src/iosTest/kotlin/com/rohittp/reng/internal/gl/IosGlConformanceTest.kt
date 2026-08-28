@@ -216,6 +216,26 @@ class IosGlConformanceTest {
         }
     }
 
+    /**
+     * E-labels task 22's gate on iOS: the sprite pass's own coverage arithmetic, on the same
+     * rasteriser that drops the ground's large quads and keeps the label pass's small ones.
+     *
+     * An icon quad is a glyph quad's shape at a glyph quad's clip `w`, so the same probe opens this
+     * suite and the same 0-pixel measurement is expected here for the same reason.
+     */
+    @Test fun theIconReadbackSuitePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            println("RenG icon readback driver: ${binding.getString(GL_RENDERER)}")
+            binding.viewport(0, 0, ICON_READBACK_PIXELS, ICON_READBACK_PIXELS)
+            binding.scissor(0, 0, ICON_READBACK_PIXELS, ICON_READBACK_PIXELS)
+            runIconReadbackSuite(binding)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
     private fun bindOrFail(): GlBinding = when (val result = openPlatformGlBinding()) {
         is GlBindingResult.Bound -> result.binding
         is GlBindingResult.Unsupported -> throw AssertionError("platform.gles3 must bind on iOS")

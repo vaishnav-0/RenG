@@ -142,6 +142,39 @@ class MacosGlConformanceTest {
     }
 
     /**
+     * E-labels task 22's gate, on both Apple rasterisers this machine can offer.
+     *
+     * Three icon quads over one sprite atlas, and every assertion turns on the distinction the whole
+     * pipeline exists for: an atlas texel at half coverage draws at half coverage rather than being
+     * thresholded away at the glyph outline's iso-value, `icon-color` reaches an `sdf` sprite and
+     * only an `sdf` sprite, and `icon-opacity` attenuates artwork the tint never touches. See
+     * `runIconReadbackSuite` for what each texel discriminates and why a saturated fixture proves
+     * none of it.
+     *
+     * Both rasterisers, as the label readback runs on both, and for the same reason: these quads are
+     * eight pixels across and the defect that cost `0.3.0` a publication was a large-quad property
+     * of the software rasteriser rather than a RenG one.
+     */
+    @Test fun theIconReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG icon readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                println("RenG icon readback driver: ${binding.getString(GL_RENDERER)}")
+                binding.viewport(0, 0, ICON_READBACK_PIXELS, ICON_READBACK_PIXELS)
+                binding.scissor(0, 0, ICON_READBACK_PIXELS, ICON_READBACK_PIXELS)
+                runIconReadbackSuite(binding)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
      * E-labels task 20's gate: a `FramePlan` in, drawn label pixels out, through the public API on a
      * real Apple core-profile context.
      *
