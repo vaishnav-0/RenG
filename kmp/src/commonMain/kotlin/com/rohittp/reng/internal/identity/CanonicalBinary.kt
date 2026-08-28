@@ -12,6 +12,13 @@ internal enum class CanonicalRootKind(internal val wireByte: Int) {
     BASEMAP_TILE(6),
     MODEL_GEOMETRY(7),
     MODEL_IMAGE(8),
+
+    /**
+     * One engine-derived label, across frames (ADR 0035). The only root here that names no resource
+     * at all: nothing is fetched, decoded, uploaded or cached under it, and its digest is never taken
+     * -- see `deriveLabelIdentity`, which keys on these exact bytes.
+     */
+    LABEL(9),
 }
 
 internal class CanonicalFieldWriter internal constructor() {
@@ -82,6 +89,19 @@ internal object CanonicalBinary {
         require(value >= 0L) { "Value must be a non-negative unsigned 64-bit integer" }
         return CanonicalBytes(encodeLongBits(value))
     }
+
+    /**
+     * A **signed** 64-bit integer, two's complement and big-endian, for the values RenG reads out of
+     * the engine rather than derives itself.
+     *
+     * [u64] is the right encoding for a value RenG knows to be non-negative -- a LOD, a pixel extent,
+     * a document index -- and its `require` is a real check there. It is the wrong one for a
+     * `TileId`'s three coordinates or a `LabelGlyphEntry.codepoint`: those are plain `Int`s on
+     * Rentile's side with no validation behind them, and an identity derivation that throws on one is
+     * an identity derivation that can fail a frame over a number nobody promised. This encoding is
+     * total over every `Long`, so the caller needs no guard and no fallback.
+     */
+    internal fun i64(value: Long): CanonicalBytes = CanonicalBytes(encodeLongBits(value))
 
     internal fun boolean(value: Boolean): CanonicalBytes =
         CanonicalBytes(byteArrayOf(if (value) 1 else 0))

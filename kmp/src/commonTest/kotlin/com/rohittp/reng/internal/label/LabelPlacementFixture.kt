@@ -61,6 +61,13 @@ internal val PLACEMENT_ANCHOR: GeographicPosition =
 internal val PLACEMENT_ANCHOR_BEHIND: GeographicPosition =
     GeographicPosition(latitude = 48.832363, unwrappedLongitude = 2.244501, altitudeMetres = 0.0)
 
+/**
+ * The tile every candidate comes out of unless a case says otherwise. Task 13's label identity is
+ * scoped by it, so a case about two labels that differ only in provenance varies this and nothing
+ * else.
+ */
+internal val PLACEMENT_TILE: TileId = TileId(z = 13, x = 4237, y = 2887)
+
 /** Twice as tall as it is wide, so a transposed atlas extent produces the wrong `v`. */
 internal const val ATLAS_WIDTH: Int = 128
 internal const val ATLAS_HEIGHT: Int = 256
@@ -119,6 +126,7 @@ internal fun placementCandidate(
     ignorePlacement: Boolean = false,
     padding: Double = 0.0,
     position: GeographicPosition = PLACEMENT_ANCHOR,
+    sourceTile: TileId = PLACEMENT_TILE,
     placement: LabelPlacement = LabelPlacement.POINT,
     glyphs: List<LabelGlyphQuad> = listOf(PLACEMENT_GLYPH),
     translateX: Double = 0.0,
@@ -133,8 +141,8 @@ internal fun placementCandidate(
     haloBlur: Double = 0.0,
 ): LabelCandidate = LabelCandidate(
     layerStyleIndex = layerStyleIndex,
-    requestedTile = TileId(z = 13, x = 4237, y = 2887),
-    sourceTile = TileId(z = 13, x = 4237, y = 2887),
+    requestedTile = sourceTile,
+    sourceTile = sourceTile,
     longitude = position.unwrappedLongitude,
     latitude = position.latitude,
     placement = placement,

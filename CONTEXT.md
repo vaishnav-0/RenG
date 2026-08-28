@@ -36,10 +36,11 @@ different mode.
 _Avoid_: Anchoring mode, coordinate space, projection fallback
 
 **Frame History**:
-The renderer's clearable record of its last successfully prepared frame index, **Frame Plan**, and selected
-basemap tile LOD. Only one prepare invocation runs at a time. A batch's indices must be strictly increasing
-and above history; every item completes pure validation, projection, tile-budget, diff, and resource-reference
-planning in index order before any resource work begins. Independent resource work then runs in parallel.
+The renderer's clearable record of its last successfully prepared frame index, **Frame Plan**, selected
+basemap tile LOD, and label fade. Only one prepare invocation runs at a time. A batch's indices must be
+strictly increasing and above history; every item completes pure validation, projection, tile-budget, diff,
+and resource-reference planning in index order before any resource work begins. Independent resource work
+then runs in parallel.
 History commits only when the whole batch succeeds, and returned prepared frames preserve input order.
 Structural diffing uses the last successfully prepared plan as the first baseline and each immediately preceding
 input plan as the next baseline within a batch; missing history is an empty baseline.
@@ -48,10 +49,15 @@ from its own plan. Failure or cancellation exposes no partial history, though va
 remain cached. With prior selected integer LOD `L`, selection repeatedly increments while
 `zoom >= L + 0.75` and repeatedly decrements while `zoom < L - 0.75`, bounded to `[0, 22]`; this defines
 multi-level jumps as the same one-level hysteresis applied until stable. Without history, the nearest integer
-LOD is selected with midpoint ties downward. Every successfully prepared Mercator plan advances provisional
+LOD is selected with midpoint ties downward. Label fade is one opacity per label, easing toward opaque while
+the label is placed and back toward transparent while it is not, advanced one step per successful prepare and
+never by a draw; which labels are placed is recomputed from scratch every frame and is never carried (ADR
+0035), so a fade's duration in seconds is a function of the consumer's frame rate. An entry is retained only
+while its label is placed or still mid-fade. Every successfully prepared Mercator plan advances provisional
 LOD history even when no Basemap Style is configured or `drawBasemap` is false; those frames select and acquire
-no tiles. The context-free `clearFrameHistory()` clears the structural-diff and LOD baseline, permits a new
-sequence, and neither frees resources nor invalidates prepared frames. Drawing never changes history.
+no tiles. The context-free `clearFrameHistory()` clears the structural-diff, LOD and label-fade baseline,
+permits a new sequence, and neither frees resources nor invalidates prepared frames. Drawing never changes
+history.
 _Avoid_: Cache, draw order, partial batch commit, previous-frame mutation
 
 **Tile Budget**:
