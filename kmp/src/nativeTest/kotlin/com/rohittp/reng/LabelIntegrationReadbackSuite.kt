@@ -7,7 +7,6 @@ import com.rohittp.reng.internal.firewall.LABEL_SANS_STACK
 import com.rohittp.reng.internal.firewall.LABEL_SERIF_STACK
 import com.rohittp.reng.internal.firewall.LABEL_TILE_TEMPLATE
 import com.rohittp.reng.internal.firewall.ProtoBuffer
-import com.rohittp.reng.internal.firewall.VALID_TILE_PNG
 import com.rohittp.reng.internal.firewall.labelGlyph
 import com.rohittp.reng.internal.firewall.labelGlyphRange
 import com.rohittp.reng.internal.firewall.labelGlyphUrls
@@ -30,6 +29,7 @@ import com.rohittp.reng.internal.gl.RenderContextAdoption
 import com.rohittp.reng.internal.gl.RenderContextProbe
 import com.rohittp.reng.internal.gl.adoptRenderContext
 import com.rohittp.reng.internal.gl.measureGlyphQuadRasterisation
+import kotlin.io.encoding.Base64
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -90,10 +90,10 @@ import kotlinx.coroutines.runBlocking
  * genuinely asymmetric arc -- a straight horizontal line is the symmetry point of the whole feature
  * and passes with the tangent computation deleted -- and requires every glyph pixel to sit on it.
  *
- * **The driver is measured before eight of these ten cases are believed.** [measureGlyphQuadRasterisation]
+ * **The driver is measured before nine of these eleven cases are believed.** [measureGlyphQuadRasterisation]
  * draws the two labels' own glyph cells at the label pass's constant clip `w` of 1 and counts the
  * pixels that disagree with the analytic rectangle -- 0 on `Apple M3 Max`. Where it distrusts a
- * driver, the eight cases whose evidence is a drawn label pixel skip out loud and the two that
+ * driver, the nine cases whose evidence is a drawn label pixel skip out loud and the two that
  * require an empty frame still run. **The guard is why those two are not written behind it**: Cycle
  * H's most recent catch is that a guard which fires first masks every rule beneath it, so the cases
  * that need no rasterised glyph deliberately sit outside it. That matters here more than the printed
@@ -113,10 +113,11 @@ import kotlinx.coroutines.runBlocking
  * thing in this cycle that *looks* at a frame.
  *
  * Not covered either: the ground beneath the labels, which every frame here draws
- * `drawBasemap = false` for except the one case that needs it; icons, which nothing in RenG draws at
- * all; complex scripts, which produce no glyph quads to assert about; occlusion of labels by 3D
- * scene content, which does not exist; and any real mobile GPU, since ADR 0033 runs the mobile
- * targets in simulation only and this suite's only home is `macosArm64Test`.
+ * `drawBasemap = false` for except the one case that needs it; `icon-text-fit`, `icon-halo-*` and
+ * `icon-pitch-alignment`, none of which RenG honours; complex scripts, which produce no glyph quads
+ * to assert about; occlusion of labels by 3D scene content, which does not exist; and any real
+ * mobile GPU, since ADR 0033 runs the mobile targets in simulation only and this suite's only home
+ * is `macosArm64Test`.
  */
 internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderContextProbe) {
     val target = createLabelIntegrationTarget(binding)
@@ -145,12 +146,13 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
             assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
             assertOneAggregateDiagnosticWhateverTheEngineExcluded(binding, probe, target)
             assertAnIconClaimsTheScreenSpaceItsSymbolOccupies(binding, probe, target)
+            assertTheIconDrawsItsOwnInkBeneathItsOwnText(binding, probe, target)
             assertCollisionRejectsTheLowerPriorityLabelAndKeepsTheHigher(binding, probe, target)
             assertEveryDrawnPixelFallsInsideTheProjectedLabelBox(binding, probe, target)
             assertLineLabelGlyphsFollowTheProjectedPolyline(binding, probe, target)
         } else {
             println(
-                "RenG label integration readback SKIPPED [the eight cases that assert a drawn label " +
+                "RenG label integration readback SKIPPED [the nine cases that assert a drawn label " +
                     "pixel] " + rasterisation.describe() +
                     ": this driver does not rasterise the label pass's own quads. The two cases that " +
                     "assert an empty frame still ran.",
@@ -470,9 +472,9 @@ private fun assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(
  * E-labels task 12's own end-to-end gate: **an icon takes screen space, and the text that wanted that
  * space loses it.**
  *
- * Nothing here draws the icon -- RenG has no pipeline that samples a sprite atlas, and that gap is
- * recorded rather than hidden -- so the icon's *effect* is the only evidence available, and it is
- * exactly the evidence that matters. Placement, geometry and the coupling all have unit cases of their
+ * This case asserts the icon's *effect* and never its ink -- the ink is
+ * [assertTheIconDrawsItsOwnInkBeneathItsOwnText]'s, and keeping the two apart is what lets this one
+ * still fail for the reason it was written for if the draw is removed again. Placement, geometry and the coupling all have unit cases of their
  * own; what those cannot show is that the manifest the firewall parsed while the style compiled
  * actually reaches the pass. Six things have to be alive in sequence for this case to pass: the style
  * declaring a sprite, the firewall proxying and jointly gating the pair, the registry retaining what it
@@ -538,6 +540,121 @@ private fun assertAnIconClaimsTheScreenSpaceItsSymbolOccupies(
     }
 }
 
+
+/**
+ * E-labels task 22's end-to-end gate: **the icon puts its own ink in the frame, and it puts it
+ * underneath its own text.**
+ *
+ * Until this task an icon contributed its collision claim and no pixels, which
+ * [assertAnIconClaimsTheScreenSpaceItsSymbolOccupies] above measures and this one does not repeat.
+ * What is new here is the draw, and three separate things have to be alive for it that a claim never
+ * exercised: the firewall keeping the atlas *image* beside the geometry it parsed, `prepare()`
+ * decoding it and pairing every surviving symbol's icon with the fade its text got, and the icon
+ * pipeline sampling it.
+ *
+ * **The control is the same style with `icon-image` removed and nothing else changed** -- the sprite
+ * is still declared, still fetched, still gated and still parsed, so a frame that painted
+ * [ICON_COLOUR] without an `icon-image` would be painting something other than this style's icon.
+ *
+ * **The colours are disjoint from every other colour in the fixture**, which is the trap this case
+ * exists inside. An "the icon drew" assertion whose icon colour equalled its text colour would be
+ * satisfied by the *text* drawing, which is precisely what already worked; [ICON_COLOUR] shares no
+ * channel value with [PLACE_COLOUR], [TOWN_COLOUR], [GROUND_COLOUR] or [ABSENT].
+ *
+ * **[ICON_HALF_COLOUR] is the coverage half of the claim.** The sprite's right-hand column carries
+ * alpha 128, which is `0.502` of the byte range -- a third of the field *below* the `0.75` the glyph
+ * generator puts an outline at. A pass that thresholded a sprite the way the label program thresholds
+ * a glyph would leave those pixels showing the background, so this colour existing at all is what
+ * says the sprite was sampled rather than thresholded. `runIconReadbackSuite` makes the same
+ * statement texel by texel; this one makes it through the public API.
+ *
+ * **And the order.** The icon is 24 screen pixels across, centred on the place anchor, so its box
+ * contains the whole of the place label's ink -- measured on `Apple M3 Max` at x 55..71 by y 60..70,
+ * against an icon box of 52..76 in both axes. Every pixel of that box carries at least half the
+ * icon's coverage, so text drawn *after* the icon reads as the style's own [PLACE_COLOUR] and text
+ * drawn *before* it cannot: it would come back blended toward the icon. One pure place-coloured pixel
+ * inside the icon's own box is therefore the whole ordering assertion.
+ *
+ * **And the fade reaches the icon, which the ramp's own two ends are what show.** `advanceLabelFade`
+ * fades glyph quads and knows nothing about icons; the icon half is faded in `prepare()` from the
+ * same per-symbol number. So frame 1 carries a tenth of it and frame [LABEL_FADE_RAMP] carries all
+ * of it, and the first frame must *not* be able to produce [ICON_COLOUR] while the last one must --
+ * an icon that ignored the fade would pop to full strength while its own text was still arriving,
+ * and every assertion taken at the end of the ramp alone would be blind to it.
+ */
+private fun assertTheIconDrawsItsOwnInkBeneathItsOwnText(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+) {
+    val withoutIcon = labelRenderer(binding, probe, SPRITE_WITHOUT_ICON_STYLE_JSON)
+    try {
+        val renderTarget = withoutIcon.mintRenderTarget(FramebufferName(target.toUInt()))
+        var frame = clearAndDraw(binding, withoutIcon, renderTarget, target, labelPlan(0L))
+        for (frameIndex in 1L until LABEL_FADE_RAMP.toLong()) {
+            frame = clearAndDraw(binding, withoutIcon, renderTarget, target, labelPlan(frameIndex))
+        }
+        assertEquals(
+            null,
+            frame.nearest(ICON_COLOUR)?.describe(),
+            "a style with no icon-image must put no icon ink in the frame\n" + frame.asciiMap(),
+        )
+    } finally {
+        withoutIcon.close()
+    }
+
+    val withIcon = labelRenderer(binding, probe, SMALL_ICON_STYLE_JSON)
+    try {
+        val renderTarget = withIcon.mintRenderTarget(FramebufferName(target.toUInt()))
+        val firstFrame = clearAndDraw(binding, withIcon, renderTarget, target, labelPlan(0L))
+        var frame = firstFrame
+        for (frameIndex in 1L until LABEL_FADE_RAMP.toLong()) {
+            frame = clearAndDraw(binding, withIcon, renderTarget, target, labelPlan(frameIndex))
+        }
+        val map = frame.asciiMap(ICON_COLOUR to 'I', ICON_HALF_COLOUR to 'i')
+
+        val opaque = frame.nearest(ICON_COLOUR)
+            ?: throw AssertionError("the icon must draw its own ink\n" + map)
+        assertNear(opaque, PLACE_ANCHOR_X, ANCHOR_Y, "the icon's opaque column")
+        val half = frame.nearest(ICON_HALF_COLOUR)
+            ?: throw AssertionError(
+                "the sprite's half-covered column must draw at half coverage; a pass that " +
+                    "thresholded its alpha the way a glyph's is thresholded would leave the " +
+                    "background showing here\n" + map,
+            )
+        assertNear(half, PLACE_ANCHOR_X, ANCHOR_Y, "the icon's half-covered column")
+
+        val textOverIcon = frame.drawn().filter { sample ->
+            sample.pixel.isCloseTo(PLACE_COLOUR) &&
+                sample.x in ICON_BOX_LEFT..ICON_BOX_RIGHT &&
+                sample.y in ICON_BOX_TOP..ICON_BOX_BOTTOM
+        }
+        assertTrue(
+            textOverIcon.isNotEmpty(),
+            "the symbol's text must draw over its own icon rather than under it: no pixel " +
+                "carrying " + PLACE_COLOUR.describe() + " lies inside the icon's own box\n" + map,
+        )
+        // And the far label is untouched, so the icon claimed its own space rather than the frame.
+        assertTrue(frame.nearest(TOWN_COLOUR) != null, "the town label is nowhere near this icon\n" + map)
+
+        // The ramp's two ends. A tenth of the fade puts the icon far enough from its own colour that
+        // no pixel can carry it, and the saturated frame above carries it -- so the pair says the
+        // fade reached the icon rather than only its text.
+        assertEquals(
+            null,
+            firstFrame.nearest(ICON_COLOUR)?.describe(),
+            "an icon a tenth of the way through its fade cannot yet be its own colour\n" +
+                firstFrame.asciiMap(ICON_COLOUR to 'I', ICON_HALF_COLOUR to 'i'),
+        )
+        assertTrue(
+            firstFrame.drawn().any { it.x in ICON_BOX_LEFT..ICON_BOX_RIGHT && it.y in ICON_BOX_TOP..ICON_BOX_BOTTOM },
+            "but it is drawing, faintly, rather than absent\n" + firstFrame.asciiMap(),
+        )
+    } finally {
+        withIcon.close()
+    }
+}
+
 // ---- the fixture ---------------------------------------------------------------------------------
 
 internal const val LABEL_INTEGRATION_PIXELS: Int = 128
@@ -574,6 +691,21 @@ private val TOWN_COLOUR: IntArray = intArrayOf(255, 170, 0, 255)
 private val GROUND_COLOUR: IntArray = intArrayOf(16, 64, 192, 255)
 
 /**
+ * The sprite's own artwork, at full coverage. Disjoint from every other colour this fixture can
+ * paint -- an "the icon drew" assertion whose colour its text could also produce proves nothing about
+ * which pass drew it.
+ */
+private val ICON_COLOUR: IntArray = intArrayOf(0, 255, 255, 255)
+
+/**
+ * The same artwork at the atlas's alpha of 128, composited over [ABSENT]: `src + dst * (1 - 0.502)`,
+ * premultiplied throughout. Its existence is what says the sprite's alpha was read as coverage; a
+ * threshold at the glyph outline's iso-value leaves [ABSENT] standing here instead.
+ */
+private val ICON_HALF_COLOUR: IntArray = intArrayOf(0, 176, 144, 255)
+
+
+/**
  * How much ground has to survive a frame that also draws labels. The camera sits at a tile's centre at
  * zoom 4, so one tile covers the whole frame with no seam in it -- which is why the labelless frame
  * above can demand *every* pixel rather than a budget -- and the labels themselves cover a few hundred
@@ -590,6 +722,15 @@ private const val TOWN_TRANSLATE_X: Int = 40
 private const val PLACE_ANCHOR_X: Int = LABEL_INTEGRATION_PIXELS / 2
 private const val TOWN_ANCHOR_X: Int = LABEL_INTEGRATION_PIXELS / 2 + TOWN_TRANSLATE_X
 private const val ANCHOR_Y: Int = LABEL_INTEGRATION_PIXELS / 2
+/**
+ * The icon's own box, in y-down frame pixels: two sprite pixels at `icon-size` 12 is 24 screen
+ * pixels, centred on the place anchor. Derived from the fixture's own declarations rather than
+ * measured off a frame.
+ */
+private const val ICON_BOX_LEFT: Int = PLACE_ANCHOR_X - 12
+private const val ICON_BOX_RIGHT: Int = PLACE_ANCHOR_X + 12
+private const val ICON_BOX_TOP: Int = ANCHOR_Y - 12
+private const val ICON_BOX_BOTTOM: Int = ANCHOR_Y + 12
 
 /**
  * How far a label's ink may sit from its own anchor. A label is box-centred on its anchor and the
@@ -778,6 +919,37 @@ private val INTEGRATION_SPRITE_JSON: ByteArray =
     """{"marker":{"x":0,"y":0,"width":2,"height":2}}""".encodeToByteArray()
 
 /**
+ * The atlas those two pixels come out of: a 2x2 RGBA8 PNG whose **left column is opaque and whose
+ * right column carries alpha 128**.
+ *
+ * The partial column is the point. A sprite fixture that is uniformly opaque cannot tell a pass that
+ * samples coverage from one that thresholds an iso-value, because both draw the whole cell; `0.502`
+ * of the byte range is far enough below the glyph outline's `0.75` that the two readings differ by
+ * the whole of [ICON_HALF_COLOUR] against [ABSENT].
+ *
+ * Regenerate with:
+ *
+ *     python3 - <<'PY'
+ *     import struct, zlib, base64
+ *     def chunk(kind, payload):
+ *         return (struct.pack(">I", len(payload)) + kind + payload +
+ *                 struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff))
+ *     raw = b""
+ *     for row in range(2):
+ *         raw += b"\x00"
+ *         for col in range(2):
+ *             raw += bytes((0, 255, 255, 255 if col == 0 else 128))
+ *     png = (b"\x89PNG\r\n\x1a\n" +
+ *            chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 6, 0, 0, 0)) +
+ *            chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+ *     print(base64.b64encode(png).decode())
+ *     PY
+ */
+private val INTEGRATION_SPRITE_PNG: ByteArray = Base64.decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mNg+P//PxA3MMAYAGA3CvdhL52PAAAAAElFTkSuQmCC",
+)
+
+/**
  * `symbol-sort-key` puts the place layer's symbol first, ahead of the town layer that is declared
  * after it, so the icon reaches the collision index before the label it is meant to displace does. It
  * is in the control as well as in the icon style, so the case turns on `icon-image` and nothing else.
@@ -786,8 +958,22 @@ private const val PLACE_SORT_KEY_LAYOUT: String = ""","symbol-sort-key":10"""
 
 private const val ICON_LAYOUT: String = ""","icon-image":"marker","icon-size":60"""
 
+/**
+ * A 24-pixel icon: two sprite pixels at `icon-size` 12, small enough that it collides with nothing
+ * and large enough that its box contains the whole of the place label's ink.
+ */
+private const val SMALL_ICON_LAYOUT: String = ""","icon-image":"marker","icon-size":12"""
+
 private val SPRITE_WITHOUT_ICON_STYLE_JSON: String = integrationStyle(
     listOf(symbolLayer("place", "place", LABEL_SANS_STACK, "#ff00ff", 0, PLACE_SORT_KEY_LAYOUT), TOWN_LAYER),
+    SPRITE_MEMBER,
+)
+
+private val SMALL_ICON_STYLE_JSON: String = integrationStyle(
+    listOf(
+        symbolLayer("place", "place", LABEL_SANS_STACK, "#ff00ff", 0, SMALL_ICON_LAYOUT),
+        TOWN_LAYER,
+    ),
     SPRITE_MEMBER,
 )
 
@@ -844,7 +1030,7 @@ private class IntegrationTransport(
             url == labelGlyphUrls()[2] -> SERIF_RANGE_0
             url == LINE_GLYPH_URL -> LINE_GLYPH_RANGE_BYTES
             url == "$INTEGRATION_SPRITE_BASE.json" -> INTEGRATION_SPRITE_JSON
-            url == "$INTEGRATION_SPRITE_BASE.png" -> VALID_TILE_PNG
+            url == "$INTEGRATION_SPRITE_BASE.png" -> INTEGRATION_SPRITE_PNG
             else -> null
         } ?: return TransportResponse(statusCode = 404, body = ByteArray(0))
         return TransportResponse(

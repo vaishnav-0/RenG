@@ -2,6 +2,8 @@ package com.rohittp.reng.internal.label
 
 import com.rohittp.reng.internal.firewall.SpriteAtlasEntry
 import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
+import com.rohittp.reng.internal.gl.ResolvedIconPaint
+import com.rohittp.reng.internal.gl.ResolvedIconQuad
 import com.rohittp.rentile.IconTextFit
 import com.rohittp.rentile.LabelIconAnchor
 import com.rohittp.rentile.LabelIconRef
@@ -67,6 +69,10 @@ internal val SPRITE_MANIFEST: SpriteAtlasManifest = SpriteAtlasManifest(
     atlasWidth = SPRITE_ATLAS_WIDTH,
     atlasHeight = SPRITE_ATLAS_HEIGHT,
     entries = mapOf(SPRITE_NAME to SPRITE_ENTRY, SDF_SPRITE_NAME to SDF_SPRITE_ENTRY),
+    // Placement never reads the image, only the geometry the gate proved against it, so these cases
+    // carry no bytes. A fixture that supplied a plausible-looking PNG here would suggest placement
+    // consults one, which it must not: the pixels are the icon pass's input, not this pass's.
+    atlasPngBytes = ByteArray(0),
 )
 
 /** Wider than it is tall, and unequal to any atlas number, so a transposed extent is visible. */

@@ -157,6 +157,13 @@ internal class SceneModel(
  * per-frame uniform, so [SceneContent] builds the [LabelWorld] from this list and this class's own
  * [outputPixelSize] rather than carrying a second copy of the frame's size.
  *
+ * **[icons] is the other half of phase 5, and it is a separate list because it is a separate
+ * texture.** An icon and its text are one symbol, but a batch is per atlas texture and a sprite
+ * atlas is not a glyph atlas, so the two halves cannot share a draw however much they share a
+ * meaning. Keeping them as two lists is what makes the phase's internal order -- every icon, then
+ * every glyph -- a property of the phase rather than of how a frame's symbols happen to be
+ * interleaved; see [drawLabelPhase].
+ *
  * **[mapOrder] and [screenOrder] are the planner's answer, carried rather than re-derived.**
  * `MercatorSpatialPlanner` splits every drawn thing into its draw regime (from `Placement`'s
  * `positionMode`, `CONTEXT.md`) and sorts the screen stack by `screenCompositeZ`, then
@@ -188,6 +195,7 @@ internal class Scene(
     val groundTiles: List<SceneGroundTile> = emptyList(),
     val models: List<SceneModel> = emptyList(),
     val labels: List<LabelBatch> = emptyList(),
+    val icons: List<IconBatch> = emptyList(),
     mapOrder: List<DrawnThingReference> = emptyList(),
     screenOrder: List<DrawnThingReference> = emptyList(),
 ) {
@@ -343,6 +351,7 @@ internal class SceneContent(
     private val groundPipeline: GroundPipeline,
     private val modelPipelines: Map<ModelShaderVariant, ModelPipeline> = emptyMap(),
     private val labelPipeline: LabelPipeline? = null,
+    private val iconPipeline: IconPipeline? = null,
 ) : GlFrameContent {
 
     override fun draw(binding: GlBinding) {
@@ -350,7 +359,8 @@ internal class SceneContent(
             scene.geometries.isEmpty() &&
             scene.models.isEmpty() &&
             scene.stickers.isEmpty() &&
-            scene.labels.isEmpty()
+            scene.labels.isEmpty() &&
+            scene.icons.isEmpty()
         ) {
             return
         }
@@ -467,11 +477,41 @@ internal class SceneContent(
      * idempotently, exactly as it did before this phase existed.
      */
     private fun drawLabelPhase(binding: GlBinding) {
+        drawIconPass(binding)
         if (scene.labels.isEmpty()) return
         val pipeline = requireNotNull(labelPipeline) {
             "a scene carrying labels must be drawn with a label pipeline"
         }
         drawLabels(binding, pipeline, LabelWorld(scene.outputPixelSize, scene.labels))
+    }
+
+    /**
+     * Phase 5's first half: **every icon, before every glyph.**
+     *
+     * An icon and its text are one symbol, and MapLibre draws a symbol's icon beneath its text
+     * because a plate is a backdrop for a name -- a name half-covered by its own shield is
+     * unreadable, and a shield half-covered by its own name is still a shield. RenG takes the same
+     * order for the same reason.
+     *
+     * **It is stated as a phase order rather than a per-symbol one, and that is the batch's
+     * doing.** A batch is per atlas texture, glyphs and sprites are two different textures, and one
+     * program switch inside a batch is a flush. Interleaving symbol by symbol -- icon, its text,
+     * next icon, next text -- would cost a texture bind and a program bind per symbol and would make
+     * the label pass's draw count a function of how many symbols carry icons. Two draws, whole-phase
+     * ordered, is the only shape under which "icons beneath text" survives batching at all. The cost
+     * is real and stated: one symbol's icon is beneath *every* symbol's text, not only its own, so
+     * two symbols overlapping enough for it to matter would show the far label's glyphs over the
+     * near symbol's plate. Collision exists precisely to keep that pair off the screen together.
+     *
+     * The pass owns its own GL state ([beginIconPass]) exactly as [drawLabels] does, so this runs
+     * straight after phase 4's stickers with the depth test still on and turns it off itself.
+     */
+    private fun drawIconPass(binding: GlBinding) {
+        if (scene.icons.isEmpty()) return
+        val pipeline = requireNotNull(iconPipeline) {
+            "a scene carrying icons must be drawn with an icon pipeline"
+        }
+        drawIcons(binding, pipeline, IconWorld(scene.outputPixelSize, scene.icons))
     }
 
     /**

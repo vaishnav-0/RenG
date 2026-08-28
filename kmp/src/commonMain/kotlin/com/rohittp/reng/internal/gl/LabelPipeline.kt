@@ -232,8 +232,9 @@ internal class ResolvedGlyphQuad(
  * Every glyph quad sampling one atlas texture, drawn as one `glDrawElements`.
  *
  * A batch is per *texture* because a texture bind is the one thing a single draw cannot vary. Text
- * from one `prepare()` shares one glyph atlas, so the ordinary frame is one batch; a second texture
- * -- a sprite atlas, once icons land -- is a second batch and a second draw, and nothing else.
+ * from one `prepare()` shares one glyph atlas, so the ordinary frame is one batch. A sprite atlas is
+ * a second texture and therefore could never have joined one of these: it is [IconBatch], drawn by
+ * its own program before this one, because its alpha is coverage rather than a distance field.
  */
 internal class LabelBatch(
     val atlasTexture: Int,

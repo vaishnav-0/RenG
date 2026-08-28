@@ -18,6 +18,7 @@ internal enum class InternalPipelineRole(internal val wireValue: Int) {
     GROUND(3),
     MODEL(4),
     LABEL(5),
+    ICON(6),
 }
 
 /**

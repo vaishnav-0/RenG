@@ -192,12 +192,11 @@ internal class PlacedLabel(
      * an icon; the reverse is quads and no icon. Only a symbol that lost both is absent from
      * [placeLabels]' result entirely.
      *
-     * **Nothing draws it yet, and the reason is the sprite atlas rather than this pass.** The label
-     * program thresholds its texture's alpha as a signed distance field, which is the wrong
-     * arithmetic for a sprite; the sprite atlas's pixels are retained nowhere a draw could reach;
-     * and a fade multiplies [FadedLabel.opacity] into the glyph paints alone. All three are one
-     * seam, recorded in this cycle's report rather than hidden -- what this pass does deliver is the
-     * icon's *claim* on the screen, which is why text no longer places where a symbol already sits.
+     * **It is drawn beneath its own text**, by `com.rohittp.reng.internal.gl.drawIcons`, out of the
+     * sprite atlas the firewall retained beside the manifest this quad's geometry came from. The
+     * fade this pass knows nothing about is applied to it in `RenGRenderer.prepare`, where
+     * [FadedLabel.opacity] is: [FadedLabel.quads] carries the glyph half alone, so the icon half is
+     * faded from the same number at the point the two are reassembled into one frame's draw.
      */
     val icon: PlacedIcon? = null,
 )

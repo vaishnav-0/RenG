@@ -276,6 +276,43 @@ internal class ResourceKeyDeriver(
         )
     }
 
+    /**
+     * The identity of one **sprite atlas**: the image half of the sprite pair a style declares, as the
+     * firewall proxied it.
+     *
+     * **Keyed on the encoded bytes, which is the only content input available.** [glyphAtlas] can key on
+     * `LabelGlyphAtlas.contentKey` because the engine publishes one; a sprite pair has no such digest,
+     * and the url it was fetched from never leaves the engine's own acquisition, so there is nothing
+     * else to be the identity of. Hashing the bytes is therefore not a fallback: it is a *complete*
+     * description of the texture, which is exactly what the key is required to be.
+     *
+     * **It is paid once per parsed pair, not once per frame**, because the parsed manifest is retained
+     * with the label handover and the renderer memoises this derivation against that same retention.
+     * A frame served from the retained handover derives nothing.
+     *
+     * `EXTERNAL`/[ResourceClass.BASEMAP_SPRITE_IMAGE] rather than a kind of its own, for [glyphAtlas]'s
+     * reason: [ResourceKind] is public API and this is the GPU residency of exactly that class of bytes.
+     * There is no [RawResourceKey] -- the engine, not RenG, owns the fetch and the Store record.
+     */
+    internal fun spriteAtlas(atlasPngBytes: ByteArray): DerivedResourceKey {
+        val identity = derive(
+            CanonicalBinary.root(CanonicalRootKind.SPRITE_ATLAS) {
+                field(1, CanonicalBinary.u16(ResourceKind.EXTERNAL.wireValue))
+                field(2, CanonicalBinary.u16(ResourceClass.BASEMAP_SPRITE_IMAGE.wireValue))
+                field(3, CanonicalBinary.opaqueBytes(atlasPngBytes))
+            },
+        )
+        return DerivedResourceKey(
+            key = ResourceKey(
+                kind = ResourceKind.EXTERNAL,
+                stableId = identity.digest.lowercaseHex,
+                resourceClass = ResourceClass.BASEMAP_SPRITE_IMAGE,
+            ),
+            rawKey = null,
+            identity = identity,
+        )
+    }
+
     private fun derive(canonicalBytes: CanonicalBytes): HashedCanonicalBytes = HashedCanonicalBytes(
         digest = sha256.digest(canonicalBytes),
         canonicalBytes = canonicalBytes,
