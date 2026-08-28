@@ -288,10 +288,24 @@ note already sized for 512 instances.
 1. **Terrain, entirely.** E-terrain is undesigned and precedes G. Every statement in this spec is about a
    scene whose ground is a smooth sphere. Displacement, ground radiance and the DEM path are not covered,
    and this spec must be revisited once E-terrain has a design.
-2. **`Geometry`'s 360° longitude span.** `DrawnThings.kt:274` permits it, and it is a valid rectangle in
-   mercator and a **degenerate sliver on a sphere**. This is a public invariant a globe makes *wrong*
-   rather than merely insufficient — worse than a missing field, and it needs a decision before the cycle
-   starts.
+2. **`Geometry`'s 360° longitude span — settled 2026-08-29, and the question was posed wrongly.** It was
+   put as a degeneracy: a span whose east and west edges coincide. It is not one. **A `Geometry` is a
+   lat/lon-bounded *region*, and a globe projects that region onto the sphere** — a geometry covering India
+   covers India, and a 360° span covers the whole globe as a band with no seam. Edges meeting is what a
+   closed band does, not a failure of one.
+
+   So: **no rejection, no clamp on the declared span, and no constructor change.** The invariant at
+   `DrawnThings.kt:274` stands unaltered in both modes, and nothing a consumer legally constructs today
+   stops working.
+
+   **What the camera clamps is the *work*, not the geometry.** G4 has RenG subdividing a `Geometry` and
+   CPU-projecting its vertices, so a declared span of 360° would otherwise mean subdividing and projecting
+   an entire planet's worth of grid every frame — most of it behind the limb, and all of it discarded by
+   G2's backface and horizon culling *after* being paid for. Subdivision density and extent are therefore
+   driven by **what the camera can currently see**, not by what the geometry declares. The drawn result is
+   identical; the cost is bounded by the viewport rather than by the input.
+
+   This is the same shape as the ground: a tile set is chosen from the camera, not from the world.
 3. **`Camera.unwrappedLongitude` on a sphere.** Longitude is genuinely periodic on a globe and the
    antimeridian is not a seam, so "unwrapped" buys nothing there — but it costs nothing either, and whether
    the two modes should agree on what a longitude of 400° means is unsettled.
