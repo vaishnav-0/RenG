@@ -55,11 +55,18 @@ internal val GLYPH_ATLAS_SAMPLER: TextureSamplerState = TextureSamplerState(
  *
  * **Enrolled in the byte budget rather than exempt from it.** [GlObjectRegistry.registerTexture],
  * not [GlObjectRegistry.register], so the atlas's bytes are counted in
- * [com.rohittp.reng.ResourceLimits.maximumResidentGpuTextureBytes] (512 MiB by default) and are
- * visible through `queryResources` as measured bytes rather than `GpuByteAccount.Unmeasurable`. Tiles
- * were that budget's only tenant until now; an atlas is its second, and the two compete honestly.
- * The alternative -- an atlas that never counts and never evicts -- would make the reported total
- * understate the GPU by however many atlases a style's font stacks require.
+ * [com.rohittp.reng.ResourceLimits.maximumResidentGpuTextureBytes] (512 MiB by default) and its
+ * [GlObjectRegistry.gpuByteAccount] is a measured number rather than `GpuByteAccount.Unmeasurable`.
+ * Tiles were that budget's only tenant until now; an atlas is its second, and the two compete
+ * honestly. The alternative -- an atlas that never counts and never evicts -- would leave the budget
+ * short by however many atlases a style's font stacks require.
+ *
+ * **It does not appear in `queryResources`, and neither does a ground tile.** That report enumerates
+ * [com.rohittp.reng.internal.cache.ResidentCache] entries and asks the registry for each one's GPU
+ * bytes, so a texture whose bytes were never installed in that cache -- an engine-produced tile PNG,
+ * an engine-packed atlas -- has no entry to be reported under. The measured account above is real and
+ * governs eviction; it is simply not reachable through the public report. Stated here because the
+ * distinction is invisible from this function and easy to assume the other way.
  *
  * A live lease is what keeps the atlas safe from eviction for the duration of the draw that needs
  * it, exactly as a ground tile's lease does: eviction iterates only unleased keys, so a frame

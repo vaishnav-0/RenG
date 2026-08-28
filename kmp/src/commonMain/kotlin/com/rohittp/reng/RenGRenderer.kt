@@ -263,8 +263,10 @@ internal class RenGPreparedFrame(
     internal val drawBasemap: Boolean,
     /**
      * Carried beside [drawBasemap] because a Prepared Frame records the whole plan's draw switches,
-     * not the subset the current draw happens to consult. Nothing reads it yet — the label pass that
-     * will is not written — and it is orthogonal to [drawBasemap] rather than implied by it.
+     * not the subset the current draw happens to consult, and orthogonal to [drawBasemap] rather than
+     * implied by it. The draw does not consult it: by the time a frame exists, `prepare()` has already
+     * answered the flag by leaving [labels] `null`, and re-reading a switch whose consequence is
+     * already decided is how two authorities on one rule get created.
      */
     internal val drawLabels: Boolean,
     stickers: List<PreparedSticker>,
@@ -582,7 +584,9 @@ internal class RenGRenderer(
      * style, so that pairing acquires and compiles one. Cleared rather than left standing on a frame that
      * asked for neither, so that a reader never has to cross-check the plan to know whether
      * this belongs to the frame in front of it — "the last style compiled" is a subtly different claim
-     * and would be a trap for Cycle E-C3, which consumes this. Nothing draws with it yet.
+     * and would be a trap for Cycle E-C3, which consumes this. Nothing draws with it: the ground and
+     * the Label handover both take the style from the acquisition that produced it rather than from
+     * here, for exactly the reason the paragraph above gives.
      *
      * Read back from [basemapEngineHost] rather than taken from the driver's compile action, because a
      * `RESIDENT`-provenance frame emits no compile action at all.
