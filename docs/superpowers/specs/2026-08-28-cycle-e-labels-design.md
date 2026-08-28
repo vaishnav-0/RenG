@@ -216,6 +216,20 @@ batch rule for free; the hazard is deviating, not conforming.
 **The state is self-bounding** and needs no public ceiling: an entry is retained only while its label is
 either a current candidate or still mid-fade, so the map is O(labels in view), not O(labels ever seen).
 
+**Fade advances per successful `prepare()`, over a duration RenG owns as an internal constant.** `FramePlan`
+carries `frameIndex` and no wall-clock time, and `prepare()` cannot read a clock without destroying the
+determinism this whole section rests on — the repeatability guard added by the X2 fix would catch it.
+
+The consequence is stated rather than hidden: **a fade's duration in seconds is a function of the consumer's
+frame rate.** A ten-step fade is 167 ms at 60 fps and 333 ms at 30 fps. That is accepted for a cosmetic ease.
+
+The rejected alternative was a `FramePlan.timeSeconds` field, following `AnimationTrack.timeSeconds`, where
+the consumer already supplies time rather than RenG reading a clock. It is more correct and was rejected
+anyway: defaulting to `0.0` means a consumer who does not thread a clock gets a fade that never advances —
+labels pop exactly as if the feature were absent, silently. That is the failure mode `CLAUDE.md` names, and
+frame-count fade works correctly with no consumer action at all. The duration constant is RenG's own, on the
+same footing as ADR 0026's scene light: not a consumer-visible feature.
+
 **Still owed:** a **label identity** derivation under ADR 0018. Get it wrong and fade is either useless
 (identities never match, everything pops anyway) or wrong (identities collide, a label inherits another's
 opacity).
