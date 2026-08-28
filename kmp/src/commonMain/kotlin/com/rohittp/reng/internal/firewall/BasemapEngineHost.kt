@@ -506,6 +506,36 @@ internal class BasemapEngineHost(
     }
 
     /**
+     * The engine's **own** identity for the Label acquisition [acquireLabelCandidates] would perform for
+     * [style] over [tiles], available before any adapter is touched. Performs no engine work beyond the
+     * digest, no consumer exchange, and needs no open invocation.
+     *
+     * **RenG does not derive this key and must not.** Rentile computes it from its compiled style digest,
+     * the sorted de-duplicated tile identities, and a private label-semantics version it bumps whenever a
+     * change to label evaluation, text layout or glyph packing would alter a batch that this key would
+     * otherwise leave looking unchanged. That version is the only signal a consumer gets that its cached
+     * candidates went stale, and it is not reachable from outside the engine — so a key RenG derived
+     * itself would be a second opinion about someone else's cache validity, correct only until the day
+     * the engine's own answer moved. It also deliberately does **not** canonicalise `x`: two world copies
+     * of one tile are two different batches, each tagged for its own copy, so folding them onto one key
+     * would hand a consumer panning the antimeridian the other copy's candidates.
+     *
+     * What it deliberately omits is credentials, sessions, validators and the Glyph Closure — which
+     * ranges a tile set needs is not knowable until its features are decoded — so it identifies the
+     * *request*, never the answer. [LabelCandidateBatch.contentKey] identifies the answer, and
+     * `ResourceKeyDeriver.glyphAtlas` is what RenG names the atlas with.
+     *
+     * Routed through [engineCall] like every other engine entry point: `labelCandidateRequestKey`
+     * rejects a style this engine does not own and validates every tile against the style's own
+     * compatibility policy, so it throws exactly what the acquisition it stands in for would throw, one
+     * step earlier and at no adapter cost.
+     */
+    fun labelCandidateRequestKey(style: PreparedStyle, tiles: List<CanonicalBasemapTile>): String {
+        requireOpen()
+        return engineCall { engine.labelCandidateRequestKey(style, tiles.distinct().map(::engineTileIdOf)) }
+    }
+
+    /**
      * The Label handover: one plan, one closure, one second round of preregistration, one acquisition.
      *
      * ```
