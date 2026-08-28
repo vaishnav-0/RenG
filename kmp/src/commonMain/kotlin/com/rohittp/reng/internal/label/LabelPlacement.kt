@@ -140,6 +140,9 @@ internal fun placeLabels(
                 // the anchor and would otherwise move when a symbol lost its icon.
                 PlacedLabel(
                     candidateIndex = label.candidateIndex,
+                    // Carried, not recomputed: this rebuild only decides which halves survive, and a
+                    // line repeat's identity must stay the one it was placed with or its fade restarts.
+                    lineRepeat = label.lineRepeat,
                     anchorPixelX = label.anchorPixelX,
                     anchorPixelY = label.anchorPixelY,
                     collisionBox = label.collisionBox,
