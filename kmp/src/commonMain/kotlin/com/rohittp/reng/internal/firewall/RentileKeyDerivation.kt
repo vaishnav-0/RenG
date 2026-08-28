@@ -11,7 +11,7 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
 
 /**
  * Derives the private key ADR 0016's firewall latches Rentile requests under, for real, against the
- * actual Rentile 0.2.0-through-0.5.0 derivation -- the placeholder `DeterministicRentilePrivateKeyResolver`
+ * actual Rentile 0.2.0-through-0.6.0 derivation -- the placeholder `DeterministicRentilePrivateKeyResolver`
  * this replaces (removed once `RenGRenderer` was rewired onto this class, basemap task 17) only ever
  * needed process-local determinism, never agreement with Rentile's own cache keys.
  *
@@ -20,13 +20,14 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
  * onto `RasterResourceAcquirer` for `DEM_TILE`) key every entry by
  * `sha256Hex(url.withRedactedAuthenticationQuery())` paired with Rentile's own [RentileResourceClass] --
  * verified by diffing Rentile's `ContentIdentity.kt` directly between its `0.2.0` release commit
- * (`2d0a5bf`) and the `0.5.0` release commit `d899cb2` the version `libs.versions.toml` pins --
- * byte-identical across every release in that range, so the
- * scheme below is not inferred from any single measurement run. RenG must reproduce that exact
- * derivation for the seven [ResourceClass] values Rentile itself fetches and keys, or RenG's own
- * diffing and eviction bookkeeping silently stops matching Rentile's actual cache entries: **a
- * permanent, unannounced cache miss, never a thrown failure** -- there is no failure surface for a
- * wrong-but-well-formed key to trip.
+ * (`2d0a5bf`) and the `0.6.0` release commit `87ccba2` whose version `libs.versions.toml` pins --
+ * byte-identical across every release in that range. The `0.5.0 -> 0.6.0` step was re-confirmed against
+ * the two *published* sources jars rather than against a checkout, since the published bytes are what
+ * actually ships, so the scheme below is not inferred from any single measurement run. RenG must
+ * reproduce that exact derivation for the seven [ResourceClass] values Rentile itself fetches and
+ * keys, or RenG's own diffing and eviction bookkeeping silently stops matching Rentile's actual
+ * cache entries: **a permanent, unannounced cache miss, never a thrown failure** -- there is no
+ * failure surface for a wrong-but-well-formed key to trip.
  *
  * The remaining four classes never reach Rentile's transport at all: [ResourceClass.BASEMAP_STYLE] has
  * no Rentile raw-store write (ADR 0016 -- style compiles privately and is never Rentile-cache-keyed),
@@ -38,7 +39,7 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
  * `AMBIGUOUS_RESOURCE_ROUTE`. Those four instead derive from RenG's own canonical resource identity
  * ([ResourceKeyDeriver.external]), which is already proven injective in locator and class.
  *
- * Rentile 0.3.0's ninth class, `GLYPH_RANGE` -- still the ninth and last at the pinned `0.5.0` -- is
+ * Rentile 0.3.0's ninth class, `GLYPH_RANGE` -- still the ninth and last at the pinned `0.6.0` -- is
  * deliberately absent from [engineKeyedResourceClassOf]:
  * it is reachable only through `acquireLabelCandidates`, which RenG never calls this cycle. The `when`
  * below is exhaustive over RenG's own [ResourceClass] -- an eleven-value enum this dependency's version
@@ -151,8 +152,8 @@ private val AUTHENTICATION_QUERY_PARAMETER_NAMES: Set<String> = setOf(
  * other parameter and the fragment untouched, and returns the url unchanged when it carries no query
  * component at all. Byte-for-byte the same rewrite as Rentile's private
  * `com.rohittp.rentile.internal.withRedactedAuthenticationQuery` -- confirmed by reading that source at
- * Rentile's `0.2.0` release commit (`2d0a5bf`) and diffing it against the pinned `0.5.0` release
- * commit `d899cb2` -- unchanged across that range. Any
+ * Rentile's `0.2.0` release commit (`2d0a5bf`) and diffing it against the pinned `0.6.0` release
+ * commit `87ccba2` -- unchanged across that range. Any
  * divergence here changes the hash input for all seven engine-keyed classes and silently breaks their
  * key agreement with Rentile.
  */

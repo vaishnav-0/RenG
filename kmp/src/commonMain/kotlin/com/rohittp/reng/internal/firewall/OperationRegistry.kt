@@ -415,7 +415,7 @@ internal class OperationRegistry(
         // pure-Kotlin SHA-256 over the same bytes on every engine store write.
         // ADR 0016 permits a Rentile write callback to reach the consumer "only after RenG verifies that
         // it matches the latched response". A route with NO latched transport response has nothing to
-        // verify against, so it is refused outright rather than skipping verification: Rentile 0.5.0
+        // verify against, so it is refused outright rather than skipping verification: Rentile 0.6.0
         // cannot produce such a write -- every raw-store write sits immediately after a transport on the
         // same key -- but the firewall's whole premise is that the engine is untrusted, and "no latch"
         // was previously the one shape that walked straight through.
@@ -629,7 +629,7 @@ internal class OperationRegistry(
             // Deliberate, and the reason is specific rather than "nothing else needs checking". Rentile's
             // raster, vector, TileJSON and GeoJSON acquirers each re-run their own bounded parser or
             // decoder on a store hit and remove-then-refetch when it fails (e.g. `RasterResourceAcquirer`
-            // at Rentile 0.5.0), so a bad record in one of those classes self-heals on the next access and
+            // at Rentile 0.6.0), so a bad record in one of those classes self-heals on the next access and
             // is never terminal. The sprite pair is the one exception -- its acquirer checks only size and
             // digest on a hit and never parses -- which is exactly why ADR 0016 records only the sprite
             // pair as terminal and why only it earns a class-specific gate here. Widening this branch
@@ -824,7 +824,7 @@ private class SuspendJoin<K : Any, V> {
  * The two members of one sprite atlas, identified by the base url Rentile derived both from. Rentile's
  * `SpriteResourceAcquirer` composes `<base>.json` and `<base>.png` through its own
  * `appendSpriteExtension` (extension before the query and fragment, not after), so stripping that
- * class's extension back off a member's locator recovers the base the two share. Rentile 0.5.0 admits
+ * class's extension back off a member's locator recovers the base the two share. Rentile 0.6.0 admits
  * exactly one string-valued `sprite` reference per style, so one invocation holds at most one pair --
  * this derivation's job is to confirm two routes belong together, not to disambiguate among several.
  */
