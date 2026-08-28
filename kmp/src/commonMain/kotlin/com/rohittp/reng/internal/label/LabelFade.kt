@@ -116,7 +116,10 @@ internal class LabelFadeAdvance(
  * **Two placed labels that derive one identity advance it once.** The raised step is computed from
  * [previous] rather than from the map being built, so a feature that a source duplicates -- or one
  * that a tile buffer repeats -- gets one entry, one advance, and the same opacity on both copies,
- * instead of a fade that runs twice as fast on the labels that happen to be duplicated.
+ * instead of a fade that runs twice as fast on the labels that happen to be duplicated. The repeats
+ * of one `line` candidate are **not** that case and must not be collapsed into it: they are one
+ * feature drawn at several places along its own road, they carry `PlacedLabel.lineRepeat` to say
+ * which is which, and [deriveLabelIdentity] reads it so each of them fades on its own.
  */
 internal fun advanceLabelFade(
     previous: LabelFadeState,
@@ -126,7 +129,7 @@ internal fun advanceLabelFade(
     val next = previous.decayed()
     val faded = ArrayList<FadedLabel>(placed.size)
     for (label in placed) {
-        val identity = batch?.let { deriveLabelIdentity(it, label.candidateIndex) }
+        val identity = batch?.let { deriveLabelIdentity(it, label.candidateIndex, label.lineRepeat) }
         if (identity == null) {
             // A label whose identity this batch cannot describe is drawn exactly as every label was
             // drawn before fade existed. It joins no entry, so it cannot leak one either.

@@ -108,7 +108,9 @@ internal fun layOutLineLabels(
         // centre of the *whole* line is not available: a line broken by the near plane has a gap
         // whose length is not a screen distance, so a midpoint measured across it names no pixel.
         val longest = runs.maxByOrNull { it.length } ?: return emptyList()
-        return listOfNotNull(instance.layOut(longest, longest.length / 2.0))
+        // No [LineRepeat]: one instance has nothing to be told apart from, and the distance this
+        // arm would carry is half a projected run's length, which moves with the camera.
+        return listOfNotNull(instance.layOut(longest, longest.length / 2.0, runIndex = null))
     }
 
     val spacing = candidate.symbolSpacing
@@ -118,15 +120,20 @@ internal fun layOutLineLabels(
     if (!(spacing >= MINIMUM_LINE_SPACING_PIXELS) || !spacing.isFinite()) return emptyList()
 
     val placed = ArrayList<PlacedLabel>()
-    for (run in runs) {
+    for ((runIndex, run) in runs.withIndex()) {
         // Anchors sit at half a spacing from the run's start and every spacing after it, so the
         // repeats are centred within the run and the set is unchanged when the run is reversed --
         // which matters because `keepUpright` reverses the *reading* direction and must not
         // therefore move the labels.
+        //
+        // **The distance and the run are carried out of the walk, as [LineRepeat].** They are the
+        // only thing that separates one repeat of a road name from the next, and every consumer
+        // that needs them is downstream of the pixels: the anchor a repeat lands on is a fact about
+        // this camera, and `symbolSpacing * (repeat + 0.5)` along run *r* is a fact about the road.
         var distance = spacing / 2.0
         var anchors = 0
         while (distance <= run.length && anchors < MAXIMUM_ANCHORS_PER_RUN) {
-            instance.layOut(run, distance)?.let { placed += it }
+            instance.layOut(run, distance, runIndex)?.let { placed += it }
             distance += spacing
             anchors += 1
         }
@@ -157,8 +164,15 @@ private class LineInstanceInputs(
  * polyline has *there*. That is the whole of "distribute the glyphs along the curve" -- there is no
  * separate bending step, because a glyph placed at its own arc length with its own tangent is
  * already bent.
+ *
+ * [runIndex] is `run`'s own position among the candidate's runs, or `null` for the `line-center`
+ * arm, which places one instance and therefore records no [LineRepeat] at all.
  */
-private fun LineInstanceInputs.layOut(run: ProjectedRun, anchorDistance: Double): PlacedLabel? {
+private fun LineInstanceInputs.layOut(
+    run: ProjectedRun,
+    anchorDistance: Double,
+    runIndex: Int?,
+): PlacedLabel? {
     val anchor = run.sampleAt(anchorDistance)
     val direction = uprightDirection(candidate.keepUpright, anchor.tangentX)
 
@@ -236,6 +250,7 @@ private fun LineInstanceInputs.layOut(run: ProjectedRun, anchorDistance: Double)
 
     return PlacedLabel(
         candidateIndex = candidateIndex,
+        lineRepeat = runIndex?.let { LineRepeat(runIndex = it, anchorDistancePixels = anchorDistance) },
         anchorPixelX = anchor.x + translateX,
         anchorPixelY = anchor.y + translateY,
         collisionBox = collisionBox,
