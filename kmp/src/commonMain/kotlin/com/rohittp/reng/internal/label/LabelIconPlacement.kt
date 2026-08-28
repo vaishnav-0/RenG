@@ -2,6 +2,8 @@ package com.rohittp.reng.internal.label
 
 import com.rohittp.reng.internal.firewall.SpriteAtlasEntry
 import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
+import com.rohittp.reng.internal.gl.ResolvedIconPaint
+import com.rohittp.reng.internal.gl.ResolvedIconQuad
 import com.rohittp.rentile.LabelCandidate
 import com.rohittp.rentile.LabelIconAnchor
 import com.rohittp.rentile.LabelIconRef
@@ -63,72 +65,17 @@ import kotlin.math.sin
  * Honouring it means projecting four map-plane corners rather than rotating four screen-space ones,
  * and it is recorded rather than silently approximated.
  *
- * **The paint reaches no shader yet.** `icon-color` and `icon-halo-*` apply to an **SDF** sprite
- * only -- Rentile tints under `BlendMode.SRC_IN` when `entry.sdf` and passes `null` otherwise -- so
- * [SpriteAtlasEntry.sdf] is carried onto [ResolvedIconPaint.tintable] rather than left for a later
- * reader to rediscover. What no code in RenG has yet is a pipeline that samples a sprite atlas: the
- * label program thresholds its texture's alpha as a signed distance field, which is the wrong
- * arithmetic for an ordinary sprite, and the sprite atlas's *pixels* are not retained anywhere a
- * draw could reach. That is why [ResolvedIconQuad] is a sibling of
- * [com.rohittp.reng.internal.gl.ResolvedGlyphQuad] rather than the same type.
- */
-internal class ResolvedIconPaint(
-    /** `icon-color` as straight RGBA in `[0, 1]`, unpacked from the engine's `0xAARRGGBB`. */
-    val colour: FloatArray,
-    /** `icon-halo-color`, same encoding. */
-    val haloColour: FloatArray,
-    /** `icon-opacity`, carried separately so a fade can multiply into the same field. */
-    val opacity: Float,
-    /** `icon-halo-width` in **screen pixels**, not in the field units a glyph's halo is measured in. */
-    val haloWidthPixels: Float,
-    /** `icon-halo-blur` in screen pixels. */
-    val haloBlurPixels: Float,
-    /**
-     * Whether this sprite is a signed-distance-field image, from the manifest entry's own `sdf`
-     * member. **[colour], [haloColour], [haloWidthPixels] and [haloBlurPixels] mean nothing when this
-     * is `false`**: Rentile draws a non-SDF sprite with its own pixels and no colour filter at all,
-     * so tinting one would repaint artwork the style never asked to recolour.
-     */
-    val tintable: Boolean,
-) {
-    init {
-        require(colour.size == RGBA_COMPONENTS) { "colour must be four components" }
-        require(haloColour.size == RGBA_COMPONENTS) { "haloColour must be four components" }
-    }
-}
-
-/**
- * One icon's quad, already placed: four screen corners in `CONTEXT.md`'s continuous output-pixel
- * space (origin top-left, positive y downward) in the corner order top-left, top-right,
- * bottom-right, bottom-left, and the same four corners in normalised sprite-atlas coordinates.
+ * **The paint is drawn by [com.rohittp.reng.internal.gl.IconPipeline], not by the label program.**
+ * `icon-color` applies to an **SDF** sprite only -- Rentile tints under `BlendMode.SRC_IN` when
+ * `entry.sdf` and passes `null` otherwise -- so [SpriteAtlasEntry.sdf] is carried onto
+ * [ResolvedIconPaint.tintable] here, where the manifest is, rather than re-derived where it is not.
+ * `icon-halo-*` is evaluated and reaches no shader: a sprite's alpha is coverage, which carries no
+ * outline for a halo to dilate, and Rentile paints no icon halo either.
  *
- * **A sibling of [com.rohittp.reng.internal.gl.ResolvedGlyphQuad] rather than the same type, and the
- * reason is arithmetic rather than taste.** The two carry identically shaped geometry -- and if
- * geometry were all a quad carried, reuse would be right. It is not: a `ResolvedGlyphQuad` carries a
- * [com.rohittp.reng.internal.gl.ResolvedLabelPaint], every field of which is measured in the glyph
- * atlas's signed-distance field. `scale` is `text-size / 24`; `haloWidthPixels` is converted through
- * that scale into an iso-value by `labelHaloEdgeDistance`; and the fragment shader thresholds the
- * sampled alpha at `0.75` because that is where the `glyphs.pbf` generator puts a glyph outline. A
- * sprite has no field: its alpha is coverage, its RGB is artwork, and `icon-halo-width` is a number
- * of screen pixels rather than a distance into a field that does not exist.
- *
- * So an icon quad appended to a [com.rohittp.reng.internal.gl.LabelBatch] would not be slightly
- * wrong -- it would be hard-thresholded at an iso-value that means nothing, tinted by a colour the
- * style may never have intended to apply, and drawn with its artwork discarded. Two types make that
- * a compile error; one type makes it a picture nobody reviews. The geometry duplication is eight
- * floats and a corner-order comment; the alternative is a silent wrong answer.
+ * [ResolvedIconQuad] lives beside [com.rohittp.reng.internal.gl.ResolvedGlyphQuad] rather than being
+ * the same type, and that separation is what kept an icon out of a distance-field threshold long
+ * enough for a coverage pipeline to be written for it.
  */
-internal class ResolvedIconQuad(
-    val cornersXy: FloatArray,
-    val cornersUv: FloatArray,
-    val paint: ResolvedIconPaint,
-) {
-    init {
-        require(cornersXy.size == ICON_QUAD_CORNERS * 2) { "cornersXy must be four (x, y) pairs" }
-        require(cornersUv.size == ICON_QUAD_CORNERS * 2) { "cornersUv must be four (u, v) pairs" }
-    }
-}
-
 /**
  * One symbol's icon, placed and ready to collide.
  *
@@ -461,6 +408,4 @@ internal fun LabelIconRef.hasFinitePlacementInputs(): Boolean =
         haloWidth.isFinite() && haloWidth >= 0.0 &&
         haloBlur.isFinite() && haloBlur >= 0.0
 
-private const val ICON_QUAD_CORNERS: Int = 4
-private const val RGBA_COMPONENTS: Int = 4
 private const val ICON_RADIANS_PER_DEGREE: Double = PI / 180.0

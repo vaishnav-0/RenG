@@ -1,6 +1,8 @@
 package com.rohittp.reng.internal.label
 
 import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
+import com.rohittp.reng.internal.gl.ResolvedIconPaint
+import com.rohittp.reng.internal.gl.ResolvedIconQuad
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.rentile.LabelCandidate
 import com.rohittp.rentile.LabelIconAnchor
@@ -656,8 +658,8 @@ class LabelIconPlacementTest {
         val unresolvable = mapOf(
             "no retained manifest" to (symbol to null),
             "no entry under that name" to (symbol.withIcon(iconRef(imageName = "absent")) to SPRITE_MANIFEST),
-            "an empty manifest" to (symbol to SpriteAtlasManifest(SPRITE_ATLAS_WIDTH, SPRITE_ATLAS_HEIGHT, emptyMap())),
-            "a zero-dimension atlas" to (symbol to SpriteAtlasManifest(0, 0, SPRITE_MANIFEST.entries)),
+            "an empty manifest" to (symbol to SpriteAtlasManifest(SPRITE_ATLAS_WIDTH, SPRITE_ATLAS_HEIGHT, emptyMap(), ByteArray(0))),
+            "a zero-dimension atlas" to (symbol to SpriteAtlasManifest(0, 0, SPRITE_MANIFEST.entries, ByteArray(0))),
         )
         for ((description, fixture) in unresolvable) {
             val placed = placeLabels(camera, placementBatch(fixture.first), fixture.second).single()

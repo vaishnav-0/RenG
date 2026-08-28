@@ -1022,11 +1022,25 @@ internal data class SpriteAtlasEntry(
  * every entry the manifest named, keyed by that name and in the manifest's own member order. It exists
  * only for a pair that passed [spritePairJointManifest]'s checks, so every rect it holds is already known
  * to lie inside [atlasWidth] x [atlasHeight].
+ *
+ * **[atlasPngBytes] is the image itself, and it travels with the geometry rather than beside it.** The
+ * geometry alone says where a sprite sits in an atlas nobody kept; drawing one needs the pixels, and the
+ * only moment RenG ever holds them is while it proxies the pair for the engine. Carrying them here means
+ * they follow the one path the manifest already travels -- [OperationRegistry.spriteAtlasManifest] out of
+ * the invocation, then the renderer's retained label handover -- instead of needing a second retention
+ * with its own lifetime to get wrong. The cost is one sprite atlas's encoded bytes held for as long as
+ * the handover that names them, which is the same bound the glyph atlas's own PNG already lives under.
+ *
+ * **Not a `data class`, and the array is why.** A generated `equals` over a [ByteArray] compares
+ * references, so two manifests parsed from identical bytes would compare unequal while reading as though
+ * they had been compared by content -- the exact shape of wrong answer a value type invites. Nothing
+ * compares two manifests; nothing copies one; so neither is provided.
  */
-internal data class SpriteAtlasManifest(
+internal class SpriteAtlasManifest(
     val atlasWidth: Int,
     val atlasHeight: Int,
     val entries: Map<String, SpriteAtlasEntry>,
+    val atlasPngBytes: ByteArray,
 )
 
 /**
@@ -1070,8 +1084,10 @@ internal data class SpriteAtlasManifest(
  * fails the engine's own compile, so a reader that needs pixels must take them from the atlas image it
  * decoded, never from this having been non-null.
  *
- * Only the image's IHDR is needed, so this scans the container ([scanPng]) rather than decoding it; the
- * member gate already proved the same bytes decode in full.
+ * Only the image's IHDR is needed *here*, so this scans the container ([scanPng]) rather than decoding
+ * it; the member gate already proved the same bytes decode in full. The bytes themselves are kept on the
+ * returned manifest, unchanged and undecoded -- see [SpriteAtlasManifest.atlasPngBytes] for why the
+ * pixels travel with the geometry rather than being fetched again by whoever draws them.
  */
 internal fun spritePairJointManifest(jsonBytes: ByteArray, imageBytes: ByteArray): SpriteAtlasManifest? {
     val header = (scanPng(imageBytes) as? PngScan.Admitted)?.header ?: return null
@@ -1083,7 +1099,15 @@ internal fun spritePairJointManifest(jsonBytes: ByteArray, imageBytes: ByteArray
         // the manifest as a unit, so a pair with one unusable entry is a pair that cannot compile.
         entries[name] = spriteEntryWithinAtlas(entry, header.width, header.height) ?: return null
     }
-    return SpriteAtlasManifest(atlasWidth = header.width, atlasHeight = header.height, entries = entries)
+    return SpriteAtlasManifest(
+        atlasWidth = header.width,
+        atlasHeight = header.height,
+        entries = entries,
+        // The bytes that were scanned, not a re-fetch of them: this is the one place in RenG that holds
+        // a sprite atlas image at all, and an icon draw that took its pixels from anywhere else would be
+        // drawing from an atlas the geometry above was never checked against.
+        atlasPngBytes = imageBytes,
+    )
 }
 
 /** The entry's own geometry when it passes every check above, `null` when it does not. */

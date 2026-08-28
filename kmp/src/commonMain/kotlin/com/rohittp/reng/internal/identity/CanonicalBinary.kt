@@ -26,6 +26,14 @@ internal enum class CanonicalRootKind(internal val wireByte: Int) {
      * Glyph Ranges the firewall did fetch, so it has no url of its own to be the identity of.
      */
     GLYPH_ATLAS(10),
+
+    /**
+     * One sprite atlas, identified by the encoded image the firewall proxied. Named here for the same
+     * reason [GLYPH_ATLAS] is -- nothing fetches it under a locator RenG can see, because the sprite
+     * pair's urls are composed inside the engine's own acquisition -- but identified by its bytes
+     * rather than by an engine-supplied content key, because a sprite pair has none.
+     */
+    SPRITE_ATLAS(11),
 }
 
 internal class CanonicalFieldWriter internal constructor() {
@@ -112,6 +120,20 @@ internal object CanonicalBinary {
 
     internal fun boolean(value: Boolean): CanonicalBytes =
         CanonicalBytes(byteArrayOf(if (value) 1 else 0))
+
+    /**
+     * Bytes RenG did not author and does not interpret, carried into an identity verbatim.
+     *
+     * Every other encoder here turns a *value* into a canonical form, which is what makes two equal
+     * values derive one key. This one has nothing to canonicalise: an encoded image is already exactly
+     * as canonical as it is going to be, and re-encoding it would only invent a second opinion about
+     * what "the same atlas" means. The field's own length header is what keeps the encoding unambiguous,
+     * exactly as it does for [exactUtf8].
+     */
+    internal fun opaqueBytes(value: ByteArray): CanonicalBytes {
+        requireCanonicalSize(value.size.toLong())
+        return CanonicalBytes(value)
+    }
 
     internal fun binary64(value: Double): CanonicalBytes {
         val canonical = canonicalDouble(value, "canonical binary64 value")
