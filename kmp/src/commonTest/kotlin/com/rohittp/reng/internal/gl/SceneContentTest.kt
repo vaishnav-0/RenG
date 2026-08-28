@@ -305,6 +305,15 @@ class SceneContentTest {
      * - **exactly one** phase turns writes on, and it is the model pass;
      * - the mask is off again **on the way out of the model pass**, before the sticker pass runs.
      *
+     * **The fixture carries a label batch, and ADR 0034 is what put it there.** Labels are not a
+     * member of the map regime, so ADRs 0027 and 0030 do not describe them — but this invariant is
+     * over the *whole scene*, so it does: a label pass that enabled a depth write would take the
+     * count of `depthMask(true)` calls to two and fail here, which is the intended binding. The
+     * model pass's draw and the label pass's are both `glDrawElements` and are told apart by their
+     * index type: `GL_UNSIGNED_SHORT` for the model fixture, `GL_UNSIGNED_INT` for every label
+     * batch. Reading them as one kind of draw would assert ADR 0030's "must write depth" over the
+     * one pass that must not.
+     *
      * That last claim is deliberately checked at the model pass's own exit rather than at the first
      * sticker draw. [drawStickers] sets `depthMask(false)` for itself, so a check taken at the
      * sticker's draw call sits at a symmetry point and would stay green with the model pass's exit
@@ -320,6 +329,7 @@ class SceneContentTest {
         val stickerPipeline = newStickerPipeline(binding)
         val groundPipeline = newGroundPipeline(binding)
         val modelPipelines = newModelPipelines(binding)
+        val labelPipeline = newLabelPipeline(binding)
 
         val scene = Scene(
             outputPixelSize = OUTPUT_SIZE,
@@ -331,17 +341,19 @@ class SceneContentTest {
             geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
             groundTiles = listOf(groundTile(canonicalX = 0, tileY = 0, texture = 303)),
             models = listOf(sceneModel(indexCounts = listOf(OPAQUE_INDEX_COUNT))),
+            labels = listOf(labelBatch()),
             mapOrder = listOf(StickerAt(0), ModelAt(0)),
             screenOrder = listOf(StickerAt(1)),
         )
         binding.log.clear()
 
-        SceneContent(camera, scene, stickerPipeline, groundPipeline, modelPipelines).draw(binding)
+        SceneContent(camera, scene, stickerPipeline, groundPipeline, modelPipelines, labelPipeline).draw(binding)
 
         // `drawFrame` leaves the mask on for its depth clear, so that is the state a scene inherits.
         var depthWrites = true
         var flatDraws = 0
         var modelDraws = 0
+        var labelDraws = 0
         binding.log.forEachIndexed { index, call ->
             when {
                 call == "depthMask(true)" -> depthWrites = true
@@ -352,6 +364,15 @@ class SceneContentTest {
                         depthWrites,
                         "call $index ($call) draws with depth writes still on; ADR 0027 requires " +
                             "the ground, every Geometry and every sticker to turn them off",
+                    )
+                }
+                call.startsWith("drawElements(${hex(GL_TRIANGLES)},") &&
+                    call.endsWith(",${hex(GL_UNSIGNED_INT)},0)") -> {
+                    labelDraws += 1
+                    assertFalse(
+                        depthWrites,
+                        "call $index ($call) is the label batch and ADR 0034 gives phase 5 no depth " +
+                            "write at all, so the model pass stays the one phase that has one",
                     )
                 }
                 call.startsWith("drawElements") -> {
@@ -366,11 +387,12 @@ class SceneContentTest {
         }
         assertEquals(4, flatDraws, "the scene must issue one ground, one geometry and two sticker draws")
         assertEquals(1, modelDraws, "the scene must issue exactly one model draw")
+        assertEquals(1, labelDraws, "the scene must issue exactly one label draw")
 
         assertEquals(
             1,
             binding.log.count { it == "depthMask(true)" },
-            "exactly one map-regime phase may enable depth writes: ${binding.log}",
+            "exactly one phase in the whole scene may enable depth writes: ${binding.log}",
         )
         // The enable belongs to the model pass, pinned by position rather than by name: `drawModels`
         // sets the mask before it binds any program, so the ground and the geometry -- and only
@@ -493,6 +515,190 @@ class SceneContentTest {
         val stickers = binding.log.indexOf("useProgram(${stickerPipeline.program})")
         assertTrue(opaque in 0 until blended, "the opaque primitive draws before the blended one")
         assertTrue(blended in 0 until stickers, "both halves of the model pass precede the stickers")
+    }
+
+    // --- ADR 0034: labels are phase 5, between the two regimes --------------------------------
+
+    /**
+     * ADR 0034's whole contract in one call log: the label draw lands after **every** map-regime
+     * draw and before the screen regime's first one.
+     *
+     * **The fixture carries both a map-anchored and a screen-anchored sticker, and that is what
+     * makes this test say anything.** A scene with labels and no stickers cannot tell "labels last
+     * in the map regime" from "labels first in the screen regime" — the two orderings produce an
+     * identical log — and neither can a scene whose only sticker is on one side. With one of each,
+     * phase 5 has to land strictly between them, so moving the call to either neighbouring phase
+     * fails here.
+     *
+     * **Each pass is located by its own draw, never by a program bind.** `beginLabelPass` binds the
+     * label program before it uploads anything, so a `useProgram` assertion would stay green with
+     * `drawLabelBatch`'s `glDrawElements` deleted outright — the pass would set itself up in the
+     * right place and paint nothing. The label draw is identified by its exact call, whose index
+     * count ([LABEL_QUADS] quads x [LABEL_INDICES_PER_QUAD]) and `GL_UNSIGNED_INT` index type
+     * distinguish it from the model pass's `GL_UNSIGNED_SHORT` draw.
+     */
+    @Test
+    fun labelsDrawAfterEveryMapRegimeDrawAndBeforeTheScreenRegimesFirstDraw() {
+        val frame = labelledFrame()
+        frame.content.draw(frame.binding)
+        val log = frame.binding.log
+
+        val groundDraw = log.firstDrawAfter(log.indexOf("useProgram(${frame.ground.program})"))
+        val geometryDraw = log.firstDrawAfter(log.indexOf("useProgram(${frame.geometry.program})"))
+        val modelDraw = log.indexOfFirst {
+            it == "drawElements(${hex(GL_TRIANGLES)},$OPAQUE_INDEX_COUNT,${hex(GL_UNSIGNED_SHORT)},0)"
+        }
+        val mapStickerDraw = log.firstDrawAfter(log.indexOf("bindTexture(${hex(GL_TEXTURE_2D)},$MAP_STICKER_TEXTURE)"))
+        val labelDraw = log.indexOfFirst { it == LABEL_DRAW_CALL }
+        val screenStickerDraw =
+            log.firstDrawAfter(log.indexOf("bindTexture(${hex(GL_TEXTURE_2D)},$SCREEN_STICKER_TEXTURE)"))
+
+        assertTrue(
+            groundDraw >= 0 && geometryDraw >= 0 && modelDraw >= 0 && mapStickerDraw >= 0 &&
+                labelDraw >= 0 && screenStickerDraw >= 0,
+            "all six phases must have drawn: $log",
+        )
+        assertTrue(groundDraw < labelDraw, "phase 1's ground draws before the labels")
+        assertTrue(geometryDraw < labelDraw, "phase 2's geometry draws before the labels")
+        assertTrue(modelDraw < labelDraw, "phase 3's model draws before the labels")
+        assertTrue(
+            mapStickerDraw < labelDraw,
+            "ADR 0034: phase 5 draws after phase 4's map-anchored sticker, so a label covers it",
+        )
+        assertTrue(
+            labelDraw < screenStickerDraw,
+            "ADR 0034: phase 5 draws before the screen regime, so a consumer's screen sticker covers a label",
+        )
+        assertEquals(
+            1,
+            log.count { it == LABEL_DRAW_CALL },
+            "$LABEL_QUADS glyph quads are one batch and therefore exactly one draw: $log",
+        )
+    }
+
+    /**
+     * ADR 0034's depth ruling, read off the same log as a state machine rather than as the presence
+     * of a `disable` call.
+     *
+     * The disable is genuinely load-bearing rather than a restatement: `drawStickers` sets
+     * `enable(GL_DEPTH_TEST)` for itself, so phase 4 hands phase 5 a context with the test **on**.
+     * Walking the log with the state `drawFrame` establishes before the scene runs is what proves
+     * that — every map-regime draw is depth-tested, the label draw is not, and deleting
+     * `beginLabelPass`'s `disable` flips exactly the one reading that matters.
+     *
+     * The counterpart claim — that no depth *write* is enabled in the pass — is checked by
+     * [exactlyOnePhaseWritesDepthItIsTheModelPassAndTheMaskIsOffAgainOnTheWayOut], whose fixture
+     * carries labels for exactly that reason. Keeping it there rather than duplicating it here is
+     * what ADR 0034 means by binding labels to the amended form of that invariant.
+     */
+    @Test
+    fun theLabelPassDrawsWithDepthTestingOffWhileEveryMapRegimeDrawKeepsItOn() {
+        val frame = labelledFrame()
+        frame.content.draw(frame.binding)
+        val log = frame.binding.log
+
+        // `drawFrame` enables GL_DEPTH_TEST before it hands the scene the context, so that -- not
+        // `false` -- is the state a scene inherits, and a pass that never touches it stays tested.
+        var depthTest = true
+        val drawsWithDepthTest = ArrayList<Pair<Int, Boolean>>()
+        log.forEachIndexed { index, call ->
+            when {
+                call == "enable(${hex(GL_DEPTH_TEST)})" -> depthTest = true
+                call == "disable(${hex(GL_DEPTH_TEST)})" -> depthTest = false
+                call.startsWith("drawArrays") || call.startsWith("drawElements") ->
+                    drawsWithDepthTest += index to depthTest
+            }
+        }
+
+        val labelDraw = log.indexOfFirst { it == LABEL_DRAW_CALL }
+        assertTrue(labelDraw >= 0, "the label pass must have drawn: $log")
+
+        val mapRegimeDraws = drawsWithDepthTest.filter { it.first < labelDraw }
+        assertEquals(
+            4,
+            mapRegimeDraws.size,
+            "the ground, the geometry, the model and one map-anchored sticker precede the labels: $log",
+        )
+        assertTrue(
+            mapRegimeDraws.all { it.second },
+            "ADR 0027: every map-regime pass draws with GL_DEPTH_TEST enabled: $log",
+        )
+        assertFalse(
+            drawsWithDepthTest.single { it.first == labelDraw }.second,
+            "ADR 0034: the label pass disables the depth test, and phase 4 leaves it enabled behind it",
+        )
+
+        val afterTheLabels = drawsWithDepthTest.filter { it.first > labelDraw }
+        assertEquals(1, afterTheLabels.size, "only the screen-anchored sticker draws after the labels: $log")
+        assertTrue(
+            afterTheLabels.none { it.second },
+            "the screen regime still composites with the depth test off after phase 5: $log",
+        )
+    }
+
+    /**
+     * The phase order is a *relative* order and not a claim that any earlier phase produced pixels.
+     * `FramePlan.drawLabels` is orthogonal to `drawBasemap`, so `drawBasemap = false,
+     * drawLabels = true` is a legal frame and phase 5 has to run on it with no ground, no geometry,
+     * no model and no sticker in front of it.
+     *
+     * This is the case the nothing-to-draw guard at the top of [SceneContent.draw] gets wrong by
+     * omission: a guard listing only the four `FramePlan`-derived lists returns before phase 5 and
+     * silently renders an empty frame for every labels-only plan.
+     */
+    @Test
+    fun aSceneCarryingOnlyLabelsStillDrawsThem() {
+        val binding = RecordingGlBinding().withNoDeclaredNames()
+        val stickerPipeline = newStickerPipeline(binding)
+        val groundPipeline = newGroundPipeline(binding)
+        val labelPipeline = newLabelPipeline(binding)
+        val scene = Scene(outputPixelSize = OUTPUT_SIZE, frameIndex = 0L, labels = listOf(labelBatch()))
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, stickerPipeline, groundPipeline, emptyMap(), labelPipeline)
+            .draw(binding)
+
+        assertEquals(1, binding.log.count { it == LABEL_DRAW_CALL }, "a labels-only scene still draws: ${binding.log}")
+    }
+
+    /**
+     * The same rule [aSceneWithModelsAndNoPipelinesFailsLoudlyRatherThanDrawingNothing] states for
+     * models: omitting the pipeline for content the scene actually carries must not be silent. A
+     * map drawn with every label dropped looks finished, which is the failure mode worth being loud
+     * about.
+     */
+    @Test
+    fun aSceneWithLabelsAndNoLabelPipelineFailsLoudlyRatherThanDrawingATextlessMap() {
+        val binding = RecordingGlBinding().withNoDeclaredNames()
+        val scene = Scene(outputPixelSize = OUTPUT_SIZE, frameIndex = 0L, labels = listOf(labelBatch()))
+
+        assertFailsWith<IllegalArgumentException> {
+            SceneContent(topDownCamera(), scene, newStickerPipeline(binding), newGroundPipeline(binding))
+                .draw(binding)
+        }
+    }
+
+    /**
+     * ADR 0034: `Scene`'s construction-time bijection counts stickers and models, and labels are
+     * outside it. A label is engine-derived — no entry in any of the caller's three `FramePlan`
+     * lists corresponds to one — so there is no reference that could name it and nothing for the
+     * bijection to check. Two batches beside one sticker is the shape that catches a bijection
+     * widened to `stickers.size + models.size + labels.size`, which would refuse every label-bearing
+     * scene at construction.
+     */
+    @Test
+    fun labelsSitOutsideTheBijectionThatCountsStickersAndModelsOnly() {
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(SceneSticker(mapPlacement(), texture = MAP_STICKER_TEXTURE)),
+            labels = listOf(labelBatch(), labelBatch(atlasTexture = SECOND_LABEL_ATLAS_TEXTURE)),
+            mapOrder = listOf(StickerAt(0)),
+        )
+
+        assertEquals(2, scene.labels.size, "both batches survive construction unreferenced by either order list")
+        assertEquals(listOf(StickerAt(0)), scene.mapOrder, "the order lists still name stickers and models only")
+        assertTrue(scene.screenOrder.isEmpty())
     }
 
     // --- what SceneContent derives per model, on top of what Task 16 hands it --------------------
@@ -1202,6 +1408,75 @@ class SceneContentTest {
         assertTrue(!rendered.contains("GL_", ignoreCase = false))
     }
 
+
+    /**
+     * One whole frame with content in every phase ADR 0034 orders: a ground tile, a `Geometry`, a
+     * model, a **map-anchored** sticker, a label batch and a **screen-anchored** sticker. Both
+     * stickers are mandatory rather than incidental — see
+     * [labelsDrawAfterEveryMapRegimeDrawAndBeforeTheScreenRegimesFirstDraw] for why one of each is
+     * the minimum that can tell phase 5 from phase 4 or phase 6.
+     */
+    private fun labelledFrame(): LabelledFrame {
+        val binding = modelCapableBinding()
+        val geometryPipeline = newGeometryPipeline(binding)
+        val stickerPipeline = newStickerPipeline(binding)
+        val groundPipeline = newGroundPipeline(binding)
+        val modelPipelines = newModelPipelines(binding)
+        val labelPipeline = newLabelPipeline(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(
+                SceneSticker(mapPlacement(), texture = MAP_STICKER_TEXTURE),
+                SceneSticker(screenPlacement(z = 5.0), texture = SCREEN_STICKER_TEXTURE),
+            ),
+            geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
+            groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = GROUND_TEXTURE)),
+            models = listOf(sceneModel()),
+            labels = listOf(labelBatch()),
+            mapOrder = listOf(StickerAt(0), ModelAt(0)),
+            screenOrder = listOf(StickerAt(1)),
+        )
+        binding.log.clear()
+        return LabelledFrame(
+            binding = binding,
+            ground = groundPipeline,
+            geometry = geometryPipeline,
+            content = SceneContent(
+                topDownCamera(),
+                scene,
+                stickerPipeline,
+                groundPipeline,
+                modelPipelines,
+                labelPipeline,
+            ),
+        )
+    }
+
+    private fun newLabelPipeline(binding: RecordingGlBinding): LabelPipeline =
+        (createLabelPipeline(binding, ShaderDialect.GLES, GlProgramCache()) as LabelPipelineResult.Created).pipeline
+
+    /**
+     * [LABEL_QUADS] hand-built glyph quads — placement is task 9's and nothing here computes one
+     * from a candidate. More than one quad on purpose: a single-quad batch cannot tell one draw for
+     * many glyphs from one draw per glyph, which is the property the label pipeline exists for.
+     */
+    private fun labelBatch(atlasTexture: Int = LABEL_ATLAS_TEXTURE): LabelBatch = LabelBatch(
+        atlasTexture = atlasTexture,
+        quads = (0 until LABEL_QUADS).map { index ->
+            val left = 10.0f * index
+            ResolvedGlyphQuad(
+                cornersXy = floatArrayOf(left, 0.0f, left + 8.0f, 0.0f, left + 8.0f, 12.0f, left, 12.0f),
+                cornersUv = floatArrayOf(0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f),
+                paint = ResolvedLabelPaint(
+                    textColour = floatArrayOf(1.0f, 1.0f, 1.0f, 1.0f),
+                    haloColour = floatArrayOf(0.0f, 0.0f, 0.0f, 1.0f),
+                    haloWidthPixels = 1.0f,
+                ),
+            )
+        },
+    )
+
     private fun mapPlacementAt(position: Vector3): Placement = Placement(
         positionMode = AnchoringMode.MAP,
         position = position,
@@ -1467,6 +1742,41 @@ private val UNTEXTURED_ATTRIBUTES: Set<ModelVertexAttribute> =
  * the untextured variant draws, binds nothing, and the assertion has nothing to find.
  */
 private val TEXTURED_ATTRIBUTES: Set<ModelVertexAttribute> = UNTEXTURED_ATTRIBUTES + ModelVertexAttribute.TEX_COORD
+
+/**
+ * The pipelines and the assembled content of one [SceneContentTest.labelledFrame], kept together so
+ * both ADR 0034 tests read the same log against the same pass identities.
+ */
+private class LabelledFrame(
+    val binding: RecordingGlBinding,
+    val ground: GroundPipeline,
+    val geometry: GeometryPipeline,
+    val content: SceneContent,
+)
+
+/** The index of the first draw call at or after [index], or `-1` when there is none. */
+private fun List<String>.firstDrawAfter(index: Int): Int {
+    if (index < 0) return -1
+    val at = subList(index, size).indexOfFirst { it.startsWith("drawArrays") || it.startsWith("drawElements") }
+    return if (at < 0) -1 else index + at
+}
+
+private const val MAP_STICKER_TEXTURE: Int = 101
+private const val SCREEN_STICKER_TEXTURE: Int = 202
+private const val GROUND_TEXTURE: Int = 303
+private const val LABEL_ATLAS_TEXTURE: Int = 909
+private const val SECOND_LABEL_ATLAS_TEXTURE: Int = 910
+private const val LABEL_QUADS: Int = 3
+
+/**
+ * The exact `glDrawElements` the label pass issues for [LABEL_QUADS] quads. Its `GL_UNSIGNED_INT`
+ * index type is what distinguishes it from the model pass's draw, which the fixtures here index
+ * with `GL_UNSIGNED_SHORT`.
+ */
+private val LABEL_DRAW_CALL: String = "drawElements(" +
+    "0x${GL_TRIANGLES.toString(16).uppercase()}," +
+    "${LABEL_QUADS * LABEL_INDICES_PER_QUAD}," +
+    "0x${GL_UNSIGNED_INT.toString(16).uppercase()},0)"
 
 private fun minimalShaderPair(): ShaderPair = ShaderPair(
     vertexSource = "#version 300 es\nvoid main() {\n    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n}\n",

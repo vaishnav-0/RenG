@@ -40,6 +40,23 @@ private fun frameGeometry(): Geometry = Geometry(
 
 private fun hex(value: Int): String = "0x${value.toString(16).uppercase()}"
 
+/** A label atlas name no other fixture in this file can produce. */
+private const val FRAME_LABEL_ATLAS_TEXTURE: Int = 909
+
+/** Two hand-built glyph quads; placement is E-labels task 9's and nothing here derives one. */
+private fun frameGlyphQuads(): List<ResolvedGlyphQuad> = (0 until 2).map { index ->
+    val left = 12.0f * index
+    ResolvedGlyphQuad(
+        cornersXy = floatArrayOf(left, 0.0f, left + 8.0f, 0.0f, left + 8.0f, 10.0f, left, 10.0f),
+        cornersUv = floatArrayOf(0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f),
+        paint = ResolvedLabelPaint(
+            textColour = floatArrayOf(1.0f, 1.0f, 1.0f, 1.0f),
+            haloColour = floatArrayOf(0.0f, 0.0f, 0.0f, 1.0f),
+            haloWidthPixels = 1.0f,
+        ),
+    )
+}
+
 class GlFrameDrawerTest {
     /**
      * DEVIATION FROM BRIEF (sanctioned, discovered while running this test red-then-green): the
@@ -256,6 +273,53 @@ class GlFrameDrawerTest {
                 "${hex(GL_ONE)},${hex(GL_ONE_MINUS_SRC_ALPHA)})",
             call,
             "the offscreen colour attachment is already premultiplied; GL_SRC_ALPHA multiplies it again",
+        )
+    }
+
+    /**
+     * ADR 0034's phase 5 turns `GL_DEPTH_TEST` off *inside* the frame; ADR 0023's Restore Set is
+     * what gives it back. The caller here arrives with the test enabled, the label pass disables
+     * it, and the frame hands it back enabled — so phase 5's disable is contained by
+     * [withCapturedGlState] rather than leaking into whatever the consumer draws next.
+     *
+     * **Both halves are asserted, because either alone is vacuous.** A frame whose content drew
+     * nothing at all restores just as cleanly, so the restore assertion needs the label draw beside
+     * it; and a disable with no restore still shows a disable, so the label assertion needs the
+     * restore beside it.
+     */
+    @Test fun theCallersDepthTestSurvivesTheLabelPassThatTurnedItOff() {
+        val world = drawWorld()
+        world.binding.enabled[GL_DEPTH_TEST] = true
+        val labelPipeline = (
+            createLabelPipeline(world.binding, ShaderDialect.GLES, GlProgramCache())
+                as LabelPipelineResult.Created
+            ).pipeline
+        world.binding.log.clear()
+
+        val failure = world.draw { binding ->
+            drawLabels(
+                binding,
+                labelPipeline,
+                LabelWorld(
+                    outputPixelSize = OutputPixelSize(width = 64, height = 64),
+                    batches = listOf(LabelBatch(atlasTexture = FRAME_LABEL_ATLAS_TEXTURE, quads = frameGlyphQuads())),
+                ),
+            )
+        }
+
+        assertNull(failure)
+        val log = world.binding.log
+        val labelDraw = log.indexOfFirst { it.startsWith("drawElements") }
+        val depthTestOff = log.indexOfFirst { it == "disable(${hex(GL_DEPTH_TEST)})" }
+        assertTrue(labelDraw >= 0, "the label pass must have drawn inside the frame: $log")
+        assertTrue(
+            depthTestOff in 0 until labelDraw,
+            "the label pass turns the depth test off before it draws: $log",
+        )
+        assertEquals(
+            "enable(${hex(GL_DEPTH_TEST)})",
+            log.last { hex(GL_DEPTH_TEST) in it },
+            "the caller left GL_DEPTH_TEST enabled and ADR 0023's Restore Set owes it back: $log",
         )
     }
 

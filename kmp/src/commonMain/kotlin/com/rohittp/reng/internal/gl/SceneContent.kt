@@ -145,6 +145,18 @@ internal class SceneModel(
  * [groundTiles] is empty whenever the frame draws no basemap, no style is configured, or the frame
  * selected no tile.
  *
+ * **[labels] is the fourth scene list, and it is outside [mapOrder] and [screenOrder] on purpose
+ * (ADR 0034).** Labels are engine-derived: no entry in any of the caller's three `FramePlan` lists
+ * corresponds to one, so a label cannot be named by a [DrawnThingReference], whose two members both
+ * mean "the *n*th entry of the caller's own list". [geometries] and [groundTiles] are already that
+ * shape — a list drawn at a fixed phase, named by no reference — and this is the third of them. The
+ * bijection below therefore keeps counting [stickers] and [models] and nothing else; labels are
+ * outside it for exactly the reason they are outside the two order lists.
+ *
+ * A [LabelBatch] carries its own atlas texture, and [outputPixelSize] is the label pass's only
+ * per-frame uniform, so [SceneContent] builds the [LabelWorld] from this list and this class's own
+ * [outputPixelSize] rather than carrying a second copy of the frame's size.
+ *
  * **[mapOrder] and [screenOrder] are the planner's answer, carried rather than re-derived.**
  * `MercatorSpatialPlanner` splits every drawn thing into its draw regime (from `Placement`'s
  * `positionMode`, `CONTEXT.md`) and sorts the screen stack by `screenCompositeZ`, then
@@ -175,6 +187,7 @@ internal class Scene(
     val geometries: List<SceneGeometry> = emptyList(),
     val groundTiles: List<SceneGroundTile> = emptyList(),
     val models: List<SceneModel> = emptyList(),
+    val labels: List<LabelBatch> = emptyList(),
     mapOrder: List<DrawnThingReference> = emptyList(),
     screenOrder: List<DrawnThingReference> = emptyList(),
 ) {
@@ -200,6 +213,9 @@ internal class Scene(
             }
             require(index in 0 until available) { "a draw order may only reference a drawn thing the scene carries" }
         }
+        // Stickers and models only, and ADR 0034 keeps it that way: `labels` is engine-derived, has
+        // no `FramePlan` entry to be the n-th of, and is named by neither order list. Adding it to
+        // this sum would make every label-bearing scene fail construction.
         require(referenced.size == stickers.size + models.size) {
             "every sticker and every model must appear in exactly one of mapOrder and screenOrder"
         }
@@ -210,12 +226,40 @@ internal class Scene(
  * The [GlFrameContent] Cycle D always left a seam for: its own KDoc says "Cycle D draws no frame
  * content of its own; Cycle E replaces this with the real scene draw." This is that replacement.
  *
- * **Ordering (ADRs 0024, 0025, 0027 and 0030).** The map regime draws first, depth-tested; the screen
- * regime then composites on top with depth testing off. Within the map regime the order is fixed as:
- * the **ground** first, then every [Geometry] (map-anchored by definition — `CONTEXT.md` says "A
- * Geometry carries no Placement") in `FramePlan.geometries` order, then every **model**, then every
- * map-anchored sticker. That is ADR 0025's order with ADR 0030's models inserted before the stickers,
- * because a map-anchored sticker is a marker and a marker paints over the scene it marks.
+ * **Ordering (ADRs 0024, 0025, 0027, 0030 and 0034).** The map regime draws first, depth-tested; the
+ * screen regime then composites on top with depth testing off. Within the map regime the order is
+ * fixed as: the **ground** first, then every [Geometry] (map-anchored by definition — `CONTEXT.md`
+ * says "A Geometry carries no Placement") in `FramePlan.geometries` order, then every **model**, then
+ * every map-anchored sticker. That is ADR 0025's order with ADR 0030's models inserted before the
+ * stickers, because a map-anchored sticker is a marker and a marker paints over the scene it marks.
+ * ADR 0034 then adds **phase 5, the labels**, between the two regimes:
+ *
+ * ```
+ * map regime (depth tested throughout, ADR 0027)
+ *   1 ground   2 geometries   3 models (test AND write, ADR 0030)   4 map-anchored stickers
+ *   5 LABELS   depth test OFF   <-- ADR 0034, and OUTSIDE both regimes
+ * screen regime (no depth)
+ *   6 consumer screen-anchored stickers, by z (ADR 0024)
+ * ```
+ *
+ * **Labels are not a member of the map regime, and saying so is what keeps ADR 0034 from
+ * contradicting ADRs 0027 and 0030.** ADR 0027 requires *every map-regime pass* to enable
+ * `GL_DEPTH_TEST` and set `glDepthMask(GL_FALSE)`, and ADR 0030 amends that for the model pass alone.
+ * [beginLabelPass] *disables* the test, which would read as a third exception if the label pass were
+ * inside the map regime. It is not: it is a fourth scene list drawn between the regimes, described by
+ * a phase number rather than by a regime name, so both of those ADRs continue to describe every pass
+ * that *is* in the map regime without amendment. So a consumer's screen-anchored sticker covers a
+ * label, and a label covers a map-anchored sticker. What still binds the label pass is
+ * `SceneContentTest.exactlyOnePhaseWritesDepthItIsTheModelPassAndTheMaskIsOffAgainOnTheWayOut`:
+ * exactly one phase in a whole scene enables depth writes and it is the model pass. The label pass
+ * enables none, and the test off is genuinely *needed* here rather than merely restated — phase 4
+ * leaves `GL_DEPTH_TEST`
+ * enabled behind it, unlike the depth mask, which the model pass already turned off on its way out.
+ *
+ * **The phase order is a relative order, not a claim that any earlier phase produced pixels.** The
+ * label pass is orthogonal to the basemap (`FramePlan.drawLabels` against `FramePlan.drawBasemap`), so
+ * phase 5 runs on a frame with no ground at all — which is why [scene]'s label list joins the
+ * nothing-to-draw guard below rather than being reachable only past a ground tile.
  *
  * **Which regime each drawn thing is in, and its order within its own type, is
  * [Scene.mapOrder]/[Scene.screenOrder] — never re-derived here.** `MercatorSpatialPlanner` computes
@@ -287,6 +331,10 @@ internal class Scene(
  * models and no pipelines fails loudly at the first primitive rather than drawing anything at all. A
  * frame with no models needs no pipelines, and making every such caller pass an empty map buys
  * nothing.
+ *
+ * [labelPipeline] is nullable on the same terms and for the same reason: a frame with no labels needs
+ * none, and a frame *with* labels and none supplied hits a `requireNotNull` at phase 5 rather than
+ * silently drawing a labelless map that looks finished.
  */
 internal class SceneContent(
     private val camera: ResolvedMercatorCamera,
@@ -294,13 +342,15 @@ internal class SceneContent(
     private val stickerPipeline: StickerPipeline,
     private val groundPipeline: GroundPipeline,
     private val modelPipelines: Map<ModelShaderVariant, ModelPipeline> = emptyMap(),
+    private val labelPipeline: LabelPipeline? = null,
 ) : GlFrameContent {
 
     override fun draw(binding: GlBinding) {
         if (scene.groundTiles.isEmpty() &&
             scene.geometries.isEmpty() &&
             scene.models.isEmpty() &&
-            scene.stickers.isEmpty()
+            scene.stickers.isEmpty() &&
+            scene.labels.isEmpty()
         ) {
             return
         }
@@ -384,7 +434,44 @@ internal class SceneContent(
             )
         }
 
+        drawLabelPhase(binding)
         drawScreenStack(binding)
+    }
+
+    /**
+     * ADR 0034's phase 5: every label the placement pass left standing, drawn after the whole map
+     * regime and before the screen regime's first bind, with the depth test off.
+     *
+     * **This sits here, between [drawStickers] and [drawScreenStack], and the position is the whole
+     * contract.** A label carries its meaning by being *readable* — a half-covered pin is still a pin
+     * and a half-covered label is nothing — so it wins over every map-regime pass. It loses to the
+     * screen regime, because that is where a consumer puts a HUD, an attribution badge or a cursor,
+     * and a label painting over those would make the consumer's own overlay unreliable in a way they
+     * cannot fix: they do not control where labels land. Both halves of that are things the losing
+     * party can do something about, which is why phase 5 rather than 4 or 6.
+     *
+     * **One batch, and the phase is what guarantees it.** [drawLabels] issues one `glDrawElements`
+     * per [LabelBatch] however many glyphs the batch carries, and a program switch inside a batch is
+     * a flush. Merging labels into [Scene.screenOrder] would let one consumer sticker landing between
+     * two labels split the batch in two, making the label draw count a function of the consumer's
+     * plan rather than of the label content. A fourth list drawn as its own phase has exactly one
+     * batch by construction.
+     *
+     * The depth state belongs to [beginLabelPass], not here, which is the one departure from how
+     * phases 1, 2 and 4 above are written: those set `enable(GL_DEPTH_TEST)` / `depthMask(false)` at
+     * this level because [drawGeometry] runs a consumer's shader pair and establishes no state of its
+     * own. The label pass owns a program RenG wrote, so it owns its own state — including the
+     * `disable(GL_DEPTH_TEST)` that phase 4 genuinely leaves it needing, and including writing no
+     * depth at all, so nothing about ADR 0027's billboard fix or ADR 0030's exit mask moves.
+     * [drawScreenStack] then disables the test again for itself, idempotently, exactly as it did
+     * before this phase existed.
+     */
+    private fun drawLabelPhase(binding: GlBinding) {
+        if (scene.labels.isEmpty()) return
+        val pipeline = requireNotNull(labelPipeline) {
+            "a scene carrying labels must be drawn with a label pipeline"
+        }
+        drawLabels(binding, pipeline, LabelWorld(scene.outputPixelSize, scene.labels))
     }
 
     /**
