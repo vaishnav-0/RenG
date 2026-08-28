@@ -327,6 +327,29 @@ suites, so a call-log assertion that the four stages ran in order adds little �
 passes for the wrong reason, and so does one whose fade starts every label at opacity zero. Assert a
 specific non-zero pixel, and assert the count changes when the fixture's candidate set changes.
 
+### Task 21 — the fade identity must separate line repeats
+
+**A defect at the seam between Tasks 11 and 13, found by Task 11 reading Task 13's merged output.** Neither
+task is wrong on its own; the bug lives between them and appeared only once both existed.
+
+`deriveLabelIdentity(batch, candidateIndex)` derives from the **candidate**: layer id, source tile, the
+candidate's geographic anchor, and the glyph codepoints. That is exactly right for a point label. But a
+line-placed candidate now yields **one `PlacedLabel` per repeat along the road**, and every repeat carries
+the same `candidateIndex` and therefore the same candidate anchor — so all of them collapse to **one
+identity and share one opacity**. Two instances of the same road name fade as if they were one label.
+
+**The screen anchor cannot be the discriminator**, tempting as it looks: `anchorPixelX`/`anchorPixelY` are
+what separate the repeats today, and they move every time the camera moves, so an identity built on them
+never matches across frames and fade becomes silently inert — one of the two failure modes ADR 0035 names.
+
+**Use the repeat's own along-line arc distance**, which is camera-independent, stable between frames, and
+already computed by the walk. A point label contributes nothing for it.
+
+*Vacuity warning:* a fixture with a single repeat cannot distinguish a fixed identity from a per-repeat one.
+The discriminating case needs a line long enough for at least two repeats, asserting their identities
+**differ** — and a second case asserting that the same repeat across two frames keeps the **same** identity,
+because an identity that varies per frame passes the first case and breaks fade entirely.
+
 ## Wave 5 — verification
 
 ### Task 16 — the label readback suite
