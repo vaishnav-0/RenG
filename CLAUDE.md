@@ -4,7 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**RenG draws a basemap, and three releases are public.** `VERSION_NAME` is `0.3.0`. Anything in this file
+**RenG draws a basemap, and three releases are public.** The newest *published* version is `0.3.0`;
+`VERSION_NAME` is `0.4.0` and unreleased — see the freeze below. Anything in this file
 or in an older document that says RenG "renders nothing", "exposes no public runtime API", that the KLIB
 ABI dump "contains no renderer factory", or that the basemap is an unmerged branch is obsolete.
 
@@ -32,10 +33,11 @@ over public HTTP with no credentials. The version was declared explicitly in `6e
 the resolver, which would have advanced to `0.2.1` and understated the release. **Unlike the first two
 releases, its CI and publication run IDs are recorded nowhere in this repository — do not invent them.**
 
-**Cycles F-2 and H are both complete and both unreleased.** F-2 has since merged into local `main` at
-`63528ce`, so `feat/f2-models` is no longer ahead of it — the branch survives only as history. Local `main`
-is `00f26dc`, 63 commits ahead of `origin/main`, which is still at the released `49cc1d5`. Cycle H lives on
-`feat/h-mobile-bring-up` and is not merged into `main`. **Nothing of either cycle is published to R2.**
+**Cycles F-2 and H are both complete, both merged into local `main`, and both unreleased.** Their branches
+`feat/f2-models` and `feat/h-mobile-bring-up` survive only as history. `origin/main` is still at the
+released `49cc1d5`, so **nothing of either cycle is published to R2** — and neither is the X2 residency fix
+nor the Rentile `0.6.0` pin that followed them. Do not quote a commit or an ahead-of-origin count from this
+file; read them from git, because both move every session.
 
 **`VERSION_NAME` is `0.4.0`, declared deliberately rather than left to the resolver.** F-2
 grows the public ABI by three enum entries, so a patch bump would understate it — and the resolver would
