@@ -84,3 +84,58 @@ without adopting the entry point that reaches it. The firewall's existing postur
 enumerate is unchanged by this erratum: it fails closed on an unrecognised URL or resource class rather than
 special-casing one it cannot handle, which is what keeps `GLYPH_RANGE` safely absent rather than silently
 mishandled.
+
+## Second erratum (2026-08-28, Cycle E-labels)
+
+The first erratum reasons entirely about why enumerating `GLYPH_RANGE` *without* adopting the entry point
+that reaches it would be wrong. That reasoning was correct for the situation it described and is kept as the
+record of the posture RenG held while it did not call that entry point. It has nothing to say about the
+situation that now exists, which is RenG adopting it: E-labels adds `ResourceClass.BASEMAP_GLYPH_RANGE`,
+drives the label handover, and brings the class **inside** this firewall rather than leaving it deliberately
+outside.
+
+**One clause of the first erratum is already false and is corrected here rather than in its body.** It says
+the class "is reachable only through a new entry point, `acquireLabelCandidates(style, tiles,
+resourceAccess)`". Since Rentile `0.5.0` there have been **two** overloads of `acquireLabelCandidates` — a
+plan-taking one and the one-shot one that clause names (`Api.kt:789` and `:798` at `0.6.0`) — and the
+plan-taking overload is the one RenG calls. The other half of that clause, "never through `prepare`,
+`prepareBatch`, or `render`", remains true and is the load-bearing half: it is why everything this ADR's
+body guarantees about those three entry points is untouched by anything below. RenG must **never** call the
+one-shot overload, and now for a stronger reason than tidiness — its three-line body plans and acquires
+inside one uninterruptible call, which closes the exact window preregistration needs.
+
+**The handover spans two resource classes inside one operation.** `planLabelCandidates` acquires the label
+layers' `VECTOR_TILE`s under this same firewall and freezes the glyph closure without fetching a byte;
+`acquireLabelCandidates(plan)` then acquires `GLYPH_RANGE` and nothing else. The sequence is: open one
+operation, preregister the draw routes and the label-layer tile routes, call `planLabelCandidates`, read
+`plan.glyphUrls(template)`, call `registerRoutes` again with those URLs, call `acquireLabelCandidates(plan)`.
+`glyphUrls` dies with the plan's `close()`, so the URLs are read before it closes.
+
+**Exact-string preregistration survives, with a second mid-invocation `registerRoutes` round and nothing
+else — and this was measured rather than inferred.** A spike drove one real handover end to end
+(`docs/research/2026-08-28-e-labels-handover-spike.md`): `glyphUrls` returned **3** URLs across two font
+stacks and two codepoint blocks, the consumer's Transport was then asked for exactly those 3, each exactly
+once, all under `BASEMAP_GLYPH_RANGE` — no fourth URL, nothing unpreregistered fetched, nothing
+preregistered left unfetched — and planning fetched **zero** glyph bytes. The closure is exact by
+construction rather than by promise: `glyphClosure` and the acquisition read the same frozen
+`assembly.requiredRanges` on the same plan object. The second `registerRoutes` round is the same bend this
+ADR already took for style-derived routes and not a new one; `BasemapEngineHost.registerRoutes` exists for
+that reason and its KDoc already says why preregistration cannot all happen when the invocation opens.
+
+**Three things the same spike found that this erratum records so they are not rediscovered.** An
+unpreregistered glyph URL is refused by the **store** index rather than the transport index, because
+Rentile's glyph acquirer reads its raw store first — so it does not surface as `AMBIGUOUS_RESOURCE_ROUTE`,
+as two preflight documents predicted, but as an opaque `BASEMAP_RENDER_FAILED`. The *refusal* is complete,
+which is what this ADR guarantees; what was wrong was the diagnosis, and E-labels gives it a name. Second,
+`glyphUrls` compares only the **redacted** template forms, so it cannot catch a stale credential: a caller
+passing one gets back a plausible, non-empty list whose every URL is wrong, which under this firewall
+presents as every glyph route preregistered and none matched. Third, `GlyphTemplateMismatchException` and
+`LabelCandidatePlanClosedException` escape RenG **unwrapped**, because `glyphUrls` is a plan method rather
+than a call through `engineCall` — an engine exception type crossing the public boundary breaches this ADR's
+own sanitized-failure rule, and E-labels closes that gap.
+
+Everything else in the first erratum stands: the `accept = application/x-protobuf` value, the DEM-like
+ordering that reaches Rentile's raw-store write before decode validation, the non-terminal
+remove-then-refetch on a stored digest mismatch, and this ADR's fail-closed posture toward a URL or resource
+class it does not recognise. That posture is what kept `GLYPH_RANGE` safely absent while it was unenumerated;
+what changes now is only that it is enumerated, routed, and measured.
