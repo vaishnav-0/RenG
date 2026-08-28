@@ -26,6 +26,8 @@ import com.rohittp.reng.internal.gl.GlProgramCache
 import com.rohittp.reng.internal.gl.GpuTextureResidency
 import com.rohittp.reng.internal.gl.GroundPipeline
 import com.rohittp.reng.internal.gl.GroundPipelineResult
+import com.rohittp.reng.internal.gl.LabelPipeline
+import com.rohittp.reng.internal.gl.LabelPipelineResult
 import com.rohittp.reng.internal.gl.OffscreenSurface
 import com.rohittp.reng.internal.gl.OffscreenSurfaceResult
 import com.rohittp.reng.internal.gl.RenderContextProfile
@@ -48,6 +50,7 @@ import com.rohittp.reng.internal.gl.allModelShaderVariants
 import com.rohittp.reng.internal.gl.createCompositePipeline
 import com.rohittp.reng.internal.gl.createGeometryPipeline
 import com.rohittp.reng.internal.gl.createGroundPipeline
+import com.rohittp.reng.internal.gl.createLabelPipeline
 import com.rohittp.reng.internal.gl.createModelPipeline
 import com.rohittp.reng.internal.gl.createOffscreenSurface
 import com.rohittp.reng.internal.gl.createStickerPipeline
@@ -56,6 +59,7 @@ import com.rohittp.reng.internal.gl.deleteCompositePipeline
 import com.rohittp.reng.internal.gl.deleteGeometryPipeline
 import com.rohittp.reng.internal.gl.deleteGlObjects
 import com.rohittp.reng.internal.gl.deleteGroundPipeline
+import com.rohittp.reng.internal.gl.deleteLabelPipeline
 import com.rohittp.reng.internal.gl.deleteModelPipeline
 import com.rohittp.reng.internal.gl.deleteOffscreenSurface
 import com.rohittp.reng.internal.gl.deleteStickerPipeline
@@ -330,6 +334,7 @@ internal class InternalGlState(
     val compositePipeline: CompositePipeline,
     val stickerPipeline: StickerPipeline,
     val groundPipeline: GroundPipeline,
+    val labelPipeline: LabelPipeline,
 )
 
 internal sealed interface InternalGlStateResult {
@@ -361,25 +366,29 @@ internal fun createInternalGlState(
     val compositeResult = createCompositePipeline(binding, profile.dialect, programs, deriver)
     val stickerResult = createStickerPipeline(binding, profile.dialect, programs, deriver)
     val groundResult = createGroundPipeline(binding, profile.dialect, programs, deriver)
+    val labelResult = createLabelPipeline(binding, profile.dialect, programs, deriver)
 
     val surface = (surfaceResult as? OffscreenSurfaceResult.Created)?.surface
     val composite = (compositeResult as? CompositePipelineResult.Created)?.pipeline
     val sticker = (stickerResult as? StickerPipelineResult.Created)?.pipeline
     val ground = (groundResult as? GroundPipelineResult.Created)?.pipeline
+    val label = (labelResult as? LabelPipelineResult.Created)?.pipeline
 
-    if (surface != null && composite != null && sticker != null && ground != null) {
-        return InternalGlStateResult.Created(InternalGlState(surface, composite, sticker, ground))
+    if (surface != null && composite != null && sticker != null && ground != null && label != null) {
+        return InternalGlStateResult.Created(InternalGlState(surface, composite, sticker, ground, label))
     }
 
     surface?.let { deleteOffscreenSurface(binding, it) }
     composite?.let { deleteCompositePipeline(binding, programs, it) }
     sticker?.let { deleteStickerPipeline(binding, programs, it) }
     ground?.let { deleteGroundPipeline(binding, programs, it) }
+    label?.let { deleteLabelPipeline(binding, programs, it) }
 
     val failure = (surfaceResult as? OffscreenSurfaceResult.Failed)?.failure
         ?: (compositeResult as? CompositePipelineResult.Failed)?.failure
         ?: (stickerResult as? StickerPipelineResult.Failed)?.failure
         ?: (groundResult as? GroundPipelineResult.Failed)?.failure
+        ?: (labelResult as? LabelPipelineResult.Failed)?.failure
         ?: error("createInternalGlState: no result failed despite an incomplete allocation set")
     return InternalGlStateResult.Failed(failure)
 }
@@ -480,6 +489,15 @@ internal class RenGRenderer(
     private var compositePipeline: CompositePipeline? = initialGlState.compositePipeline
     private var stickerPipeline: StickerPipeline? = initialGlState.stickerPipeline
     private var groundPipeline: GroundPipeline? = initialGlState.groundPipeline
+
+    /**
+     * ADR 0034's phase 5, allocated at setup with the composite, sticker and ground pipelines rather
+     * than lazily with the model ones. There is exactly one label program with no variants, it needs
+     * nothing of the context the other three do not, and `FramePlan.drawLabels` defaults to `true` —
+     * so none of the three reasons `modelPipelines` is lazy (sixteen compilations, a
+     * `GL_MAX_UNIFORM_BLOCK_SIZE` refusal, and a renderer that may never draw one) applies here.
+     */
+    private var labelPipeline: LabelPipeline? = initialGlState.labelPipeline
 
     private var identityRegistry: CanonicalIdentityRegistry = CanonicalIdentityRegistry()
     private var framePlanningCore: FramePlanningCore = newFramePlanningCore(identityRegistry)
@@ -1129,6 +1147,7 @@ internal class RenGRenderer(
         compositePipeline = null
         stickerPipeline = null
         groundPipeline = null
+        labelPipeline = null
         geometryPipelines.clear()
         // The model pipelines and every uploaded primitive are forgotten on exactly the same terms and
         // in exactly the same place as the geometry pipelines above: the joint uniform buffers, the
@@ -1155,6 +1174,7 @@ internal class RenGRenderer(
                         compositePipeline = recreated.state.compositePipeline
                         stickerPipeline = recreated.state.stickerPipeline
                         groundPipeline = recreated.state.groundPipeline
+                        labelPipeline = recreated.state.labelPipeline
                     }
 
                     is InternalGlStateResult.Failed -> {
@@ -1217,6 +1237,7 @@ internal class RenGRenderer(
         val composite = requireNotNull(compositePipeline) { "drawing requires the composite pipeline" }
         val sticker = requireNotNull(stickerPipeline) { "drawing requires the sticker pipeline" }
         val ground = requireNotNull(groundPipeline) { "drawing requires the ground pipeline" }
+        val label = requireNotNull(labelPipeline) { "drawing requires the label pipeline" }
 
         val resolvedCamera = resolveFrameCamera(frame.camera)
 
@@ -1237,6 +1258,7 @@ internal class RenGRenderer(
                     composite = composite,
                     sticker = sticker,
                     ground = ground,
+                    label = label,
                     resolvedCamera = resolvedCamera,
                     sceneGroundTiles = resolved.tiles,
                 )
@@ -1300,6 +1322,7 @@ internal class RenGRenderer(
         composite: CompositePipeline,
         sticker: StickerPipeline,
         ground: GroundPipeline,
+        label: LabelPipeline,
         resolvedCamera: ResolvedMercatorCamera,
         sceneGroundTiles: List<SceneGroundTile>,
     ): FailureDescriptor? {
@@ -1361,10 +1384,14 @@ internal class RenGRenderer(
             geometries = sceneGeometries,
             groundTiles = sceneGroundTiles,
             models = sceneModels,
+            // `labels` -- ADR 0034's fourth scene list -- is left at its empty default until
+            // E-labels task 9's placement pass fills it, and it will arrive on the prepared frame
+            // rather than be derived at this call site: collision resolves during `prepare()` and
+            // never during `draw()`.
             mapOrder = frame.mapOrder,
             screenOrder = frame.screenOrder,
         )
-        val content = SceneContent(resolvedCamera, scene, sticker, ground, modelPipelines)
+        val content = SceneContent(resolvedCamera, scene, sticker, ground, modelPipelines, label)
 
         return drawFrame(
             binding = binding,
@@ -1591,6 +1618,7 @@ internal class RenGRenderer(
                 compositePipeline?.let { deleteCompositePipeline(binding, programs, it) }
                 stickerPipeline?.let { deleteStickerPipeline(binding, programs, it) }
                 groundPipeline?.let { deleteGroundPipeline(binding, programs, it) }
+                labelPipeline?.let { deleteLabelPipeline(binding, programs, it) }
                 geometryPipelines.values.forEach { deleteGeometryPipeline(binding, programs, it) }
                 geometryPipelines.clear()
                 // The model pipelines are deleted here and the uploaded primitives are not, and the
@@ -1613,6 +1641,7 @@ internal class RenGRenderer(
                 compositePipeline = null
                 stickerPipeline = null
                 groundPipeline = null
+                labelPipeline = null
                 residentCache.closeAll()
                 // The renderer owns exactly one Rentile engine (ADR 0016), so closing the renderer closes
                 // it. Its close() is idempotent and, unlike everything above it here, not GL-scoped -- so

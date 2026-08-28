@@ -301,6 +301,44 @@ class RendererFactoryTest {
         )
     }
 
+    /**
+     * Every program the renderer compiles for itself is deleted when it closes, counted rather than
+     * named.
+     *
+     * **A leaked program is invisible from every other angle**, which is why this is a count and not
+     * an assertion about one pipeline: `close()` deletes the offscreen surface, the registry's
+     * textures and three other programs whatever happens to the fourth, so "some `deleteProgram`
+     * ran" distinguishes nothing. Creating and deleting exactly [INTERNAL_PIPELINE_PROGRAMS] of them
+     * does: dropping any one pipeline's delete leaves the two counts unequal, and adding a fifth
+     * internal pipeline without deleting it fails here rather than leaking silently on a consumer's
+     * context.
+     */
+    @Test
+    fun closeDeletesEveryProgramTheRendererCompiledForItself() = runTest {
+        val binding = validGlesBinding()
+        val renderer = createRenderer(testConfiguration(transport = CountingTransport()), binding, fixedProbe())
+
+        val created = binding.log.count { it.startsWith("createProgram") }
+        assertEquals(
+            INTERNAL_PIPELINE_PROGRAMS,
+            created,
+            "setup compiles the composite, sticker, ground and label programs: ${binding.log}",
+        )
+
+        renderer.close()
+
+        assertEquals(
+            created,
+            binding.log.count { it.startsWith("deleteProgram") },
+            "close() must delete every program it compiled, or one leaks on the consumer's context",
+        )
+        assertEquals(
+            INTERNAL_PIPELINE_PROGRAMS,
+            binding.log.count { it.startsWith("deleteVertexArrays") },
+            "each internal pipeline owns one vertex array and close() must delete all of them",
+        )
+    }
+
     @Test
     fun notifyGpuObjectsGoneForgetsWithoutDeletingAndTheNextDrawReUploadsFreshly() = runTest {
         // ADR 0007/0015's other half of item 1: losing the GL context is NOT freeing. The registry
@@ -1263,3 +1301,9 @@ private class BinWriter {
 }
 
 private fun bin(write: BinWriter.() -> Unit): ByteArray = BinWriter().apply(write).build()
+
+/**
+ * The programs `createInternalGlState` compiles at setup: composite, sticker, ground and — since
+ * ADR 0034's phase 5 — label.
+ */
+private const val INTERNAL_PIPELINE_PROGRAMS: Int = 4
