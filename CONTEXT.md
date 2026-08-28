@@ -11,7 +11,9 @@ frames; it owns no window, no render loop, no capture path, and no encoder.
 **Frame Plan**:
 A complete, self-contained definition of one frame's content, drawn by whichever renderer prepared it.
 Its required non-negative `frameIndex` orders strict, history-aware preparation within that renderer;
-`drawBasemap`, defaulting to true, may suppress ground for that frame. Plan list inputs are snapshotted, and
+`drawBasemap`, defaulting to true, may suppress ground for that frame, and `drawLabels`, also defaulting to
+true, may suppress **Map Label**s. The two are fully orthogonal: all four pairings are legal, including a
+frame that draws labels over no ground at all. Plan list inputs are snapshotted, and
 every public list read returns a defensive copy whose platform mutation cannot change the plan, its equality,
 or its canonical identity.
 _Avoid_: Scene graph, render command, frame delta, mutation batch
@@ -359,6 +361,42 @@ the viewer rather than by the world, which is wrong for something pinned to a co
 **Geometries** and the ground are unlit and unaffected — a **Geometry** is painted by its own shader pair,
 and lighting it would contradict that.
 _Avoid_: Sun, headlight, illumination, lighting model, shading mode
+
+### Map labels
+
+**Map Label**:
+Text the basemap style asks for, drawn by RenG as screen-space primitives from a **Label Candidate** the
+engine hands over. Rentile decides everything the style document says — which features are labelled, glyph
+identity and metrics, label-local layout, the atlas — and RenG owns everything that needs a camera:
+projecting the anchor, placing the quads, resolving **Label Collision**, and the draw. Labels are neither a
+map-regime nor a screen-regime **Drawn Thing**; they are engine-derived, have no **Frame Plan** entry, and
+draw in their own phase between the two regimes (ADR 0034).
+_Avoid_: Text layer, annotation, caption, POI label, symbol
+
+**Label Candidate**:
+One labellable feature as the engine reports it: a geographic anchor, laid-out glyph quads in label-local
+coordinates, per-feature paint, a collision box, and the style's placement intent. A candidate is an offer,
+not a placement — whether it reaches the screen is **Label Collision**'s answer.
+_Avoid_: Label instance, placed label, glyph run, symbol candidate
+
+**Label Collision**:
+The screen-space contest that decides which **Label Candidate**s are drawn, resolved during preparation and
+never during drawing. Higher `symbol-sort-key` wins, then style layer order. **This is the only thing in
+RenG that exists to drop content** — every other budget fails preparation rather than dropping, and the
+**Tile Budget**'s rule that RenG never drops required tiles does not extend here.
+_Avoid_: Label culling, overlap rejection, deconfliction, label budget
+
+Note this is unrelated to the *resource-key* collision that `IDENTITY_COLLISION` reports, which is two sets
+of canonical bytes claiming one digest. The two share a word and nothing else; prefer the qualified form
+whenever both could be meant.
+
+**Label Fade**:
+The only label state carried between frames: an opacity per label, eased so a label entering or leaving does
+not pop. *Which* labels are placed is recomputed from scratch every frame — there is no placement
+hysteresis, because the corpus never asks for a second candidate position and incumbency would only let a
+minor label block a major one. Fade lives in **Frame History**, advances once per successful preparation
+rather than on a clock, and is cleared by `clearFrameHistory` (ADR 0035).
+_Avoid_: Label animation, transition, hysteresis, label memory
 
 ### Resources
 
