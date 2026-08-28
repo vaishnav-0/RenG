@@ -352,6 +352,30 @@ The discriminating case needs a line long enough for at least two repeats, asser
 **differ** — and a second case asserting that the same repeat across two frames keeps the **same** identity,
 because an identity that varies per frame passes the first case and breaks fade entirely.
 
+### Task 23 — retain the label handover across frames
+
+**Measured by Task 17, and it is the cycle's largest cost by a wide margin.** On a real CGL context with a
+**stationary camera**, `prepare()` costs 0.05–0.15 ms with nothing, 93–102 ms with the ground alone, and
+**514–520 ms with labels alone** — the label path is roughly **85% of `prepare` and 5.5× the ground path
+over the same tiles**. Inside it: acquire 300 ms, atlas decode 122 ms, place 67 ms, fade 8 ms.
+
+The reason is that **nothing is retained**. Three acquisitions of an identical tile set re-fetched all 17
+label tiles and all 16 glyph ranges (17→34→51 and 16→32→48 requests) and re-packed a **byte-identical**
+atlas — the same `contentKey` all three times.
+
+**Rentile publishes `labelCandidateRequestKey` for exactly this cache, and RenG calls it nowhere.** That is
+the same shape as F-2's outstanding debt, where a `RESIDENT`-provenance model still pays all three GLB
+parses every frame. Here it is 5× worse and it is paid on a camera that has not moved.
+
+Absolutes are from a debug binary; the **ratios** are what survive, and they are what justify this task.
+
+Scope: key the handover on Rentile's own request key, reuse the batch and its uploaded atlas while the key
+holds, and invalidate when it does not. Do not invent a second key — the one the engine publishes is the one
+whose semantics match what it will actually return.
+
+*Vacuity warning:* a test asserting "the second acquisition is faster" measures a warm JIT as readily as a
+cache. Assert the **request count** — the consumer's transport must see 17 and 16 once, not twice.
+
 ### Task 22 — draw the icon
 
 **The second hole of the same shape as Task 20's, found by Task 12 the same way — an agent noticing the
