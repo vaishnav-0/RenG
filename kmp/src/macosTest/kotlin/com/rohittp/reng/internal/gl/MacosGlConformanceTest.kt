@@ -104,6 +104,39 @@ class MacosGlConformanceTest {
         }
     }
 
+    /**
+     * Cycle E-labels task 8's gate, on both Apple rasterisers this machine can offer.
+     *
+     * Three glyph quads, six colours and one `glDrawElements`. The call-log suite pins that it *is*
+     * one draw; nothing in a fake can pin that the shader links, that the five interleaved attribute
+     * offsets line up with what the linked program reads, that a y-down screen pixel reaches clip
+     * space the right way up, or that the halo band admits a field value the fill band does not.
+     * See `runLabelReadbackSuite` for exactly what each pixel discriminates.
+     *
+     * Run on both rasterisers because the quads here are small -- eight pixels across -- and the
+     * large-quad defect that cost `0.3.0` a publication was a rasteriser property rather than a RenG
+     * one. Task 18 measures the label pass's own footprints against that probe; this pair is the
+     * cheap early signal, and it skips rather than fails when a renderer is unavailable.
+     */
+    @Test fun theLabelReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG label readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                println("RenG label readback driver: ${binding.getString(GL_RENDERER)}")
+                binding.viewport(0, 0, LABEL_READBACK_PIXELS, LABEL_READBACK_PIXELS)
+                binding.scissor(0, 0, LABEL_READBACK_PIXELS, LABEL_READBACK_PIXELS)
+                runLabelReadbackSuite(binding)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
     private fun runReadbackOn(renderer: MacosGlRenderer) {
         val fixture = CglCoreProfileContext.createOrNull(renderer)
         if (fixture == null) {
