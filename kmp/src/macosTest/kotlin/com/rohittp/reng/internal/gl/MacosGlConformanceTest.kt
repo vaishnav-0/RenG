@@ -73,6 +73,37 @@ class MacosGlConformanceTest {
         runReadbackOn(MacosGlRenderer.SOFTWARE)
     }
 
+    /**
+     * Cycle E-labels task 7's gate, on both Apple rasterisers this machine can offer.
+     *
+     * The glyph atlas is the one texture RenG uploads that neither `defaultSamplerStateFor` answer
+     * fits, and the half of that choice with a visible consequence — linear filtering over the
+     * `TextureContent.DATA` default's `GL_NEAREST` — is invisible to every assertion made against a
+     * fake. See `runGlyphAtlasSamplerReadback` for what each of its three draws discriminates.
+     *
+     * Run twice deliberately: filtering is not rasterisation, so the software renderer is expected
+     * to agree with the GPU here, and a disagreement is exactly the thing worth finding early. It
+     * skips when a renderer is unavailable, like the basemap readback above.
+     */
+    @Test fun theGlyphAtlasSamplerReadbackPassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG glyph atlas readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                println("RenG glyph atlas readback driver: ${binding.getString(GL_RENDERER)}")
+                binding.viewport(0, 0, GLYPH_ATLAS_READBACK_PIXELS, GLYPH_ATLAS_READBACK_PIXELS)
+                binding.scissor(0, 0, GLYPH_ATLAS_READBACK_PIXELS, GLYPH_ATLAS_READBACK_PIXELS)
+                runGlyphAtlasSamplerReadback(binding)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
     private fun runReadbackOn(renderer: MacosGlRenderer) {
         val fixture = CglCoreProfileContext.createOrNull(renderer)
         if (fixture == null) {
