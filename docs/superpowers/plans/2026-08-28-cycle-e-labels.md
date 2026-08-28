@@ -10,7 +10,9 @@ Ledger: `.superpowers/sdd/2026-08-28-cycle-e-labels/progress.md`.
 
 - **Every task ends green.** Python suite, `check_repository_policy.py`, `checkKotlinAbi`,
   `:kmp:testAndroidHostTest`, `:kmp:macosArm64Test`, `:kmp:iosSimulatorArm64Test`. Counts summed from
-  Gradle's JUnit XML, never from scrollback. Baseline entering the cycle is **1,134 / 1,174 / 1,160**.
+  Gradle's JUnit XML, never from scrollback. **Measure your own baseline by stashing rather than trusting a
+  quoted one** — the cycle-entry figure was 1,134 / 1,174 / 1,160 and six tasks have now found a quoted
+  number stale by the time they read it.
 - **`VERSION_NAME` stays `0.4.0`.** Frozen until E-terrain, G and J complete. Do not touch it.
 - **Nothing is pushed.** `publish.yml` cuts a release on any non-documentation push to `main`, and a
   published coordinate is immutable under ADR 0013.
@@ -349,6 +351,37 @@ already computed by the walk. A point label contributes nothing for it.
 The discriminating case needs a line long enough for at least two repeats, asserting their identities
 **differ** — and a second case asserting that the same repeat across two frames keeps the **same** identity,
 because an identity that varies per frame passes the first case and breaks fade entirely.
+
+### Task 22 — draw the icon
+
+**The second hole of the same shape as Task 20's, found by Task 12 the same way — an agent noticing the
+thing it built could not be seen.** §3 of the spec says RenG owns "resolving `LabelIconRef.imageName` to
+sprite pixels, **and the draw**", and §1 lists icons in scope. No task was ever written for the draw.
+
+Icons currently contribute their **claim** on the screen — they collide, they push text aside, `optional`
+couples them correctly — and none of their ink. That is not a regression, because Rentile's own rasteriser
+draws the icon into the tile underneath, so the map does not look broken. It does mean E2's scope is
+undelivered until this lands.
+
+Two things are missing and both are real:
+
+1. **A pipeline that samples a sprite atlas.** The label program thresholds sampled alpha at 0.75 because
+   that is where the `glyphs.pbf` generator puts a glyph outline. **A sprite has no distance field** — its
+   alpha is coverage and its RGB is artwork. Task 12 made `ResolvedIconQuad` a sibling of
+   `ResolvedGlyphQuad` rather than reusing it for exactly this reason: one type would make the wrong
+   thresholding a picture nobody reviews, two make it a compile error. The draw needs a second program, or
+   a variant, that samples coverage.
+2. **The sprite atlas's pixels.** The firewall parses the sprite manifest's geometry and **discards the
+   image**. Task 2 retained the manifest; nothing retains the bytes.
+
+Honour what Task 12 established rather than re-deriving it: `icon-color` and `icon-halo-*` apply **only to
+an `sdf` sprite** — Rentile tints under `SRC_IN` when the entry says so and passes no colour filter
+otherwise — which is why `SpriteAtlasEntry` now carries an `sdf` flag. Tinting artwork the style never asked
+to recolour is the failure this prevents.
+
+**Recorded and out of scope:** `icon-pitch-alignment` cannot be honoured by a screen-space quad — a
+`map`-pitched icon should reach the screen as a projected parallelogram. The text path has the identical
+gap for `text-pitch-alignment`, which nothing in placement reads. Both stay recorded rather than faked.
 
 ## Wave 5 — verification
 
