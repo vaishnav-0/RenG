@@ -101,6 +101,25 @@ internal fun residentGpuTexturesOverBudgetDiagnostic(residentBytes: Long, budget
         actual = residentBytes,
     )
 
+/**
+ * The engine reported that some label content is missing from this frame, and this is the whole of
+ * what RenG says about it (ADR 0036). One aggregate per successful `prepare` that saw any exclusion
+ * at all -- never one per excluded label, per layer or per engine diagnostic, because the grouping
+ * itself is engine vocabulary -- and it names neither the script, the layer, the font stack nor the
+ * feature: [severity] is the only field the engine moves, and [Diagnostic]'s own `init` is what makes
+ * every other field unconstructible here.
+ *
+ * A warning at most. An exclusion is not a failure: the frame prepared and it drew, with less text on
+ * it than the style asked for, so the severity says how much was lost rather than whether anything
+ * broke. RenG's own [DiagnosticSeverity.ERROR] means the frame failed, which this one did not.
+ */
+internal fun labelContentExcludedDiagnostic(severity: DiagnosticSeverity): Diagnostic =
+    Diagnostic(
+        code = DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+        severity = severity,
+        stage = PipelineStage.LABEL_PREPARATION,
+    )
+
 internal fun renGFailure(
     code: RenGErrorCode,
     stage: PipelineStage,

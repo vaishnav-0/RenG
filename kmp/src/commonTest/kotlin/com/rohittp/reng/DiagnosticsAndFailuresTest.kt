@@ -3,6 +3,7 @@ package com.rohittp.reng
 import com.rohittp.reng.internal.DiagnosticField
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failureContextDiagnostic
+import com.rohittp.reng.internal.labelContentExcludedDiagnostic
 import com.rohittp.reng.internal.renGFailure
 import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
 import com.rohittp.reng.internal.resourceReloadedAfterFreeDiagnostic
@@ -49,7 +50,7 @@ class DiagnosticsAndFailuresTest {
         assertEquals(
             listOf(
                 "RESOURCE_RELOADED_AFTER_FREE", "FAILURE_CONTEXT", "BASEMAP_NOT_CONFIGURED",
-                "RESIDENT_GPU_TEXTURES_OVER_BUDGET",
+                "RESIDENT_GPU_TEXTURES_OVER_BUDGET", "LABEL_CONTENT_EXCLUDED",
             ),
             DiagnosticCode.entries.map { it.name },
         )
@@ -383,6 +384,74 @@ class DiagnosticsAndFailuresTest {
         assertEquals("RenG failure: BASEMAP_RENDER_FAILED at BASEMAP_RENDER", failure.message)
         assertNull(failure.cause)
         assertEquals(emptyList(), failure.diagnostics)
+    }
+
+    @Test
+    fun labelContentExclusionCarriesASeverityAndIsUnconstructibleWithAnythingElse() {
+        val info = labelContentExcludedDiagnostic(DiagnosticSeverity.INFO)
+
+        assertEquals(DiagnosticCode.LABEL_CONTENT_EXCLUDED, info.code)
+        assertEquals(DiagnosticSeverity.INFO, info.severity)
+        assertEquals(PipelineStage.LABEL_PREPARATION, info.stage)
+        assertEquals(
+            DiagnosticSeverity.WARNING,
+            labelContentExcludedDiagnostic(DiagnosticSeverity.WARNING).severity,
+        )
+
+        // An exclusion is never a failure -- the frame prepared, and it drew -- so RenG's ERROR, which
+        // is what a failure's own context diagnostic carries, is refused here rather than clamped by
+        // whichever call site happened to build one (ADR 0036).
+        assertFailsWith<IllegalArgumentException> {
+            labelContentExcludedDiagnostic(DiagnosticSeverity.ERROR)
+        }
+
+        PipelineStage.entries.filter { it != PipelineStage.LABEL_PREPARATION }.forEach { stage ->
+            assertFailsWith<IllegalArgumentException>("$stage accepted a label exclusion") {
+                Diagnostic(DiagnosticCode.LABEL_CONTENT_EXCLUDED, DiagnosticSeverity.INFO, stage)
+            }
+        }
+
+        // Every field an engine diagnostic could tempt a call site into carrying. `resource` is a
+        // legal field *at this stage* -- the unroutable-source failure uses it -- so this rejection
+        // comes from the code's own rule rather than from the stage allowlist.
+        val key = ResourceKey(ResourceKind.EXTERNAL, stableId('a'), ResourceClass.BASEMAP_VECTOR_TILE)
+        val rejected: List<() -> Diagnostic> = listOf(
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    fieldName = DiagnosticField.RESOURCE.wireName,
+                )
+            },
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    resourceClass = key.resourceClass,
+                    resourceKey = key,
+                )
+            },
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    statusCode = 200,
+                )
+            },
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    limit = 1L,
+                    actual = 2L,
+                )
+            },
+        )
+        rejected.forEach { build -> assertFailsWith<IllegalArgumentException> { build() } }
     }
 
     @Test

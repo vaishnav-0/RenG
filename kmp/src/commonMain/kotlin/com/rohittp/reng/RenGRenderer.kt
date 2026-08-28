@@ -12,6 +12,7 @@ import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
 import com.rohittp.reng.internal.firewall.AcquiredLabelCandidates
+import com.rohittp.reng.internal.firewall.reportLabelContentExclusions
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
 import com.rohittp.reng.internal.firewall.ProductionRentilePrivateKeyResolver
 import com.rohittp.reng.internal.firewall.RenderedBasemapTile
@@ -1278,18 +1279,27 @@ internal class RenGRenderer(
         style: PreparedStyle,
         labelTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
-    ): AcquiredLabelCandidates = basemapEngineHost.acquireLabelCandidates(
-        style = style,
-        tiles = labelTiles,
-        glyphTemplate = manifest.glyphTemplate,
-        labelTileRoutes = tileTimeRoutes(
-            manifest = manifest,
+    ): AcquiredLabelCandidates {
+        val acquired = basemapEngineHost.acquireLabelCandidates(
+            style = style,
             tiles = labelTiles,
-            accessMode = accessMode,
+            glyphTemplate = manifest.glyphTemplate,
+            labelTileRoutes = tileTimeRoutes(
+                manifest = manifest,
+                tiles = labelTiles,
+                accessMode = accessMode,
+                limits = configuration.resourceLimits,
+            ),
             limits = configuration.resourceLimits,
-        ),
-        limits = configuration.resourceLimits,
-    )
+        )
+        // ADR 0036's "once per prepare", and this call site is the whole of the mechanism: the
+        // handover runs once per prepare, so an aggregate emitted beside it does too, however many
+        // exclusions the batch reported and however many layers or tiles they came from. The batch's
+        // own diagnostics never travel further than this line -- `reportLabelContentExclusions`
+        // returns nothing, and what it emits is RenG's own code with a severity and no other field.
+        reportLabelContentExclusions(acquired.batch.diagnostics, configuration.diagnosticSink)
+        return acquired
+    }
 
     override suspend fun cancelPreparations() {
         val outcome = driver.run(RendererLifecycleOperation.CancelPreparations) { null }

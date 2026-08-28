@@ -48,8 +48,11 @@ private const val MAXIMUM_UNWRAP_DEPTH: Int = 8
  *
  * **Redaction.** Exactly three engine values are ever carried across: the [RentileErrorCode] itself,
  * `resourceClass` (an enum), and `sanitizedResourceId` (already `sha256Hex` of a credential-redacted
- * url). The engine's `message` is dropped whole, its `diagnostics` are never read (Rentile's
- * `RenderDiagnostic` carries free-form `details`), and neither is `affectedTiles`.
+ * url). The engine's `message` is dropped whole, the `diagnostics` hanging off a *failure* are never
+ * read (Rentile's `RenderDiagnostic` carries free-form `details`), and neither is `affectedTiles`.
+ * The one place RenG does read an engine diagnostic is [reportLabelContentExclusions], on a batch
+ * that succeeded, and it carries across a severity and nothing else (ADR 0036) -- never a `details`
+ * entry, and never here.
  * [com.rohittp.reng.RenGException] has no `cause` parameter at all, so forwarding a cause is
  * structurally impossible. [ResourceAcquisitionException.statusCode] is available and still not carried:
  * RenG's allowlist leaves a status code `FORBIDDEN` at every stage an engine failure can reach.
