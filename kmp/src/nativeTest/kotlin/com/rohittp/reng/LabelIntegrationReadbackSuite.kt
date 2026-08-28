@@ -21,7 +21,11 @@ import com.rohittp.reng.internal.gl.GL_SCISSOR_TEST
 import com.rohittp.reng.internal.gl.GL_TEXTURE_2D
 import com.rohittp.reng.internal.gl.GL_UNSIGNED_BYTE
 import com.rohittp.reng.internal.gl.GlBinding
+import com.rohittp.reng.internal.gl.GlyphQuadFootprint
+import com.rohittp.reng.internal.gl.RenderContextAdoption
 import com.rohittp.reng.internal.gl.RenderContextProbe
+import com.rohittp.reng.internal.gl.adoptRenderContext
+import com.rohittp.reng.internal.gl.measureGlyphQuadRasterisation
 import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -67,6 +71,14 @@ import kotlinx.coroutines.runBlocking
  * has to be "nothing but ground reached the frame" rather than "no pure label colour is present" --
  * a first frame carries a tenth of the fade, so the weaker form passes with the switch dead.
  *
+ * **The driver is measured before four of these six cases are believed.** [measureGlyphQuadRasterisation]
+ * draws the two labels' own glyph cells at the label pass's constant clip `w` of 1 and counts the
+ * pixels that disagree with the analytic rectangle -- 0 on `Apple M3 Max`. Where it distrusts a
+ * driver, the four cases whose evidence is a drawn label pixel skip out loud and the two that require
+ * an empty frame still run. That matters here more than the printed driver name suggests: this test
+ * asks for `MacosGlRenderer.DEFAULT`, and on a hosted runner the default *is* `Apple Software
+ * Renderer` -- the rasteriser that failed `0.3.0`'s publication on the ground's much larger quads.
+ *
  * **What this does not claim.** Not legibility: the fixture's glyphs are saturated distance fields,
  * so each draws as a solid block of its cell rather than as a letter, and legibility stays unverified
  * until Cycle J. Not line placement, not icons, not the ground -- every frame here draws
@@ -74,18 +86,96 @@ import kotlinx.coroutines.runBlocking
  */
 internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderContextProbe) {
     val target = createLabelIntegrationTarget(binding)
-    println("RenG label integration readback driver: " + binding.getString(GL_RENDERER))
+    val dialect = (adoptRenderContext(binding) as? RenderContextAdoption.Adopted)?.profile?.dialect
+        ?: throw AssertionError("the fixture context must satisfy the ES 3.0 requirement")
+    val rasterisation = measureGlyphQuadRasterisation(
+        binding,
+        dialect,
+        target,
+        LABEL_INTEGRATION_PIXELS,
+        labelIntegrationFootprints(),
+    )
+    println(
+        "RenG label integration readback driver: " + binding.getString(GL_RENDERER) + " " +
+            rasterisation.describe(),
+    )
     try {
-        assertTwoLabelsDrawAtTheirOwnAnchorsInTheirOwnColours(binding, probe, target)
-        assertDroppingALayerDropsExactlyThatLabel(binding, probe, target)
+        // The four cases whose evidence is a drawn label pixel. On a driver that will not rasterise
+        // this pass's own quads they would measure the driver rather than RenG, so they say so and
+        // stand down; see `measureGlyphQuadRasterisation` for why that is a measurement and not a
+        // driver-name check, and `theLabelIntegrationReadbackSuitePassesOnARealAppleCoreProfileContext`
+        // for why a hosted runner reaches this file on `Apple Software Renderer` whatever it asks for.
+        if (rasterisation.isTrustworthy) {
+            assertTwoLabelsDrawAtTheirOwnAnchorsInTheirOwnColours(binding, probe, target)
+            assertDroppingALayerDropsExactlyThatLabel(binding, probe, target)
+            assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
+            assertOneAggregateDiagnosticWhateverTheEngineExcluded(binding, probe, target)
+        } else {
+            println(
+                "RenG label integration readback SKIPPED [the four cases that assert a drawn label " +
+                    "pixel] " + rasterisation.describe() +
+                    ": this driver does not rasterise the label pass's own quads. The two cases that " +
+                    "assert an empty frame still ran.",
+            )
+        }
+        // Neither of these asserts that anything drew, so neither can be answered by the driver's
+        // rasterisation of a glyph quad: both require the frame to come back exactly as it was left.
         assertAStyleWithNoSymbolLayersDrawsNothing(binding, probe, target)
         assertDrawLabelsFalseDrawsNothing(binding, probe, target)
-        assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
-        assertOneAggregateDiagnosticWhateverTheEngineExcluded(binding, probe, target)
     } finally {
         binding.deleteFramebuffers(1, intArrayOf(target))
     }
 }
+
+/**
+ * The glyph cells this suite's own two labels are drawn as, for E-labels task 18's probe: two side by
+ * side at the place anchor, one at the town anchor, each box-centred on it the way the placement pass
+ * centres a label.
+ *
+ * **Every number is derived from the fixture's own declarations rather than measured off a frame.**
+ * [labelGlyphRange] emits each glyph 8 by 10 pixels; Rentile's packer surrounds it with
+ * `GlyphRangeDecoder.BUFFER_PX` -- the 3 pixels
+ * [com.rohittp.reng.internal.gl.LABEL_SDF_PIXELS_PER_UNIT]'s KDoc names -- on all four sides, making
+ * the packed cell 14 by 16; and the style's `text-size` of 16 over the 24-pixel SDF em scales it by
+ * two thirds. The place label carries two glyphs (codepoints 65 and 256, one from each sans range)
+ * and the town label one (codepoint 66).
+ *
+ * Confirmed against a real frame at the time it was written: on `Apple M3 Max` the place label's ink
+ * spans x 55..71 by y 60..70 and the town label's x 99..107 by y 60..70, which is two 9.33-pixel cells
+ * and one, each 10.67 tall, centred on their own anchors -- the ink being inset from the cell by the
+ * SDF buffer the fill band does not paint.
+ *
+ * No cell edge lands on a pixel centre, which is what makes the probe's analytic rectangle the only
+ * correct answer rather than a fill-rule opinion.
+ *
+ * **One thing this footprint set cannot discriminate, said rather than hidden.** The fixture centres
+ * its labels on the frame's own centre row, so these three rectangles are their own mirror image
+ * about the horizontal axis: a probe that had dropped the y-flip between screen space and
+ * `glReadPixels`' bottom-up rows would measure 0 here just the same. What rules that out is the label
+ * readback suite's own footprint set, which sits in a band near the top of the frame and is disjoint
+ * from its mirror -- and which measures 0 on all three rasterisers this project can reach. The town
+ * cell, off to one side, is what closes the same question on the x axis here.
+ */
+private fun labelIntegrationFootprints(): List<GlyphQuadFootprint> {
+    val width = FIXTURE_GLYPH_CELL_TEXELS_WIDE * FIXTURE_GLYPH_SCALE
+    val height = FIXTURE_GLYPH_CELL_TEXELS_TALL * FIXTURE_GLYPH_SCALE
+    val top = ANCHOR_Y - height / 2f
+    val bottom = ANCHOR_Y + height / 2f
+    return listOf(
+        GlyphQuadFootprint("place glyph 0", PLACE_ANCHOR_X - width, top, PLACE_ANCHOR_X.toFloat(), bottom),
+        GlyphQuadFootprint("place glyph 1", PLACE_ANCHOR_X.toFloat(), top, PLACE_ANCHOR_X + width, bottom),
+        GlyphQuadFootprint("town glyph 0", TOWN_ANCHOR_X - width / 2f, top, TOWN_ANCHOR_X + width / 2f, bottom),
+    )
+}
+
+/** [labelGlyphRange]'s own glyph width, plus Rentile's 3-pixel SDF buffer on each side. */
+private const val FIXTURE_GLYPH_CELL_TEXELS_WIDE: Float = 8f + 2f * 3f
+
+/** [labelGlyphRange]'s own glyph height, plus the same buffer. */
+private const val FIXTURE_GLYPH_CELL_TEXELS_TALL: Float = 10f + 2f * 3f
+
+/** The style's `text-size` of 16 over the 24-pixel em every SDF glyph entry is measured in. */
+private const val FIXTURE_GLYPH_SCALE: Float = 16f / 24f
 
 /**
  * The positive case, and the only one in the tree that runs the whole path.

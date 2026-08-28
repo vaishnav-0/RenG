@@ -37,6 +37,14 @@ import kotlin.test.assertTrue
  * **What this does not claim.** Not legibility -- no real glyph is drawn here, and legibility is
  * unverified until Cycle J. Not placement, not collision, not draw order. One atlas, one batch,
  * three quads, and the arithmetic between a distance field and a colour.
+ *
+ * **The driver is measured before it is trusted.** [measureGlyphQuadRasterisation] draws these three
+ * footprints at the label pass's own clip `w` and counts the pixels that disagree with the analytic
+ * rectangle. Where it distrusts the driver the covered row's classification skips out loud and every
+ * other check -- the uncovered row, the six distinct colours, the GL error queue -- still runs. The
+ * measured disagreement is 0 on `Apple M3 Max`, 0 on `Apple Software Renderer` and 0 on the iOS
+ * simulator, so the skip has never fired; it exists because `0.3.0` proved that a prediction about a
+ * driver nobody here owns is not evidence.
  */
 internal fun runLabelReadbackSuite(binding: GlBinding) {
     val profile = (adoptRenderContext(binding) as? RenderContextAdoption.Adopted)?.profile
@@ -63,6 +71,23 @@ internal fun runLabelReadbackSuite(binding: GlBinding) {
         "the readback target must be framebuffer-complete",
     )
     GlErrorQueue.drainOnEntry(binding)
+
+    // Task 18, and it runs before anything else touches the frame. Every pixel assertion below is
+    // "a glyph quad reached here", and `0.3.0` failed publication on a driver that silently declined
+    // to rasterise a whole class of quad. See `measureGlyphQuadRasterisation` for why the label
+    // pass's footprints are a different shape from the ground's, and why this probe compiles its own
+    // program rather than the one it guards.
+    val rasterisation = measureGlyphQuadRasterisation(
+        binding,
+        profile.dialect,
+        targetFramebuffer,
+        LABEL_READBACK_PIXELS,
+        labelReadbackFootprints(),
+    )
+    println(
+        "RenG label readback rasterisation probe: driver=${binding.getString(GL_RENDERER)} " +
+            rasterisation.describe(),
+    )
 
     val registry = GlObjectRegistry()
     val atlas = uploadGlyphAtlas(binding, registry, atlasKey(), fieldAtlas())
@@ -99,19 +124,32 @@ internal fun runLabelReadbackSuite(binding: GlBinding) {
     println("RenG label readback covered row: " + describe(row))
     println("RenG label readback uncovered row: " + describe(uncovered))
 
-    QUAD_PAINTS.forEachIndexed { quad, paint ->
-        val left = quad * ATLAS_TEXELS
-        // Texels 0 and 1 are far outside the glyph: below the halo edge as well as the fill edge, so
-        // nothing draws and the cleared framebuffer shows through. A halo band that had swallowed the
-        // whole cell -- the failure the edge clamp exists to prevent -- shows up here first.
-        assertPixel(row, left + 0, TRANSPARENT, "quad $quad texel 0 is outside both bands")
-        assertPixel(row, left + 1, TRANSPARENT, "quad $quad texel 1 is outside both bands")
-        // The load-bearing sample. Only the halo band admits this field value.
-        assertPixel(row, left + 2, paint.halo, "quad $quad texel 2 is inside the halo band and outside the fill band")
-        // Deep inside the glyph: the fill is opaque, so it covers its own halo exactly.
-        for (texel in 3 until ATLAS_TEXELS) {
-            assertPixel(row, left + texel, paint.fill, "quad $quad texel $texel is inside the fill band")
+    if (rasterisation.isTrustworthy) {
+        QUAD_PAINTS.forEachIndexed { quad, paint ->
+            val left = quad * ATLAS_TEXELS
+            // Texels 0 and 1 are far outside the glyph: below the halo edge as well as the fill edge, so
+            // nothing draws and the cleared framebuffer shows through. A halo band that had swallowed the
+            // whole cell -- the failure the edge clamp exists to prevent -- shows up here first.
+            assertPixel(row, left + 0, TRANSPARENT, "quad $quad texel 0 is outside both bands")
+            assertPixel(row, left + 1, TRANSPARENT, "quad $quad texel 1 is outside both bands")
+            // The load-bearing sample. Only the halo band admits this field value.
+            assertPixel(
+                row,
+                left + 2,
+                paint.halo,
+                "quad $quad texel 2 is inside the halo band and outside the fill band",
+            )
+            // Deep inside the glyph: the fill is opaque, so it covers its own halo exactly.
+            for (texel in 3 until ATLAS_TEXELS) {
+                assertPixel(row, left + texel, paint.fill, "quad $quad texel $texel is inside the fill band")
+            }
         }
+    } else {
+        println(
+            "RenG label readback SKIPPED [the covered row's own pixels] " + rasterisation.describe() +
+                ": this driver does not rasterise the label pass's own quads, so a missing glyph " +
+                "pixel here would measure the driver rather than RenG. Every other check still ran.",
+        )
     }
 
     // The vertical half, and the reason the quads do not span the frame. Screen space is y-down and
@@ -170,6 +208,25 @@ private fun threeColouredQuads(): List<ResolvedGlyphQuad> = QUAD_PAINTS.mapIndex
             haloBlurPixels = 0.0f,
             scale = GLYPH_SCALE,
         ),
+    )
+}
+
+/**
+ * The same three quads as [threeColouredQuads], as analytic rectangles for the task 18 probe --
+ * derived from the identical constants rather than retyped, so the shape the probe measures and the
+ * shape the suite draws cannot drift apart.
+ *
+ * Eight by eight pixels is the **smallest footprint any label fixture in the tree draws**, which
+ * makes this the hardest case for the probe's own budget: one pixel of boundary on four sides is 32
+ * pixels against the quad's own area of 64.
+ */
+private fun labelReadbackFootprints(): List<GlyphQuadFootprint> = QUAD_PAINTS.indices.map { quad ->
+    GlyphQuadFootprint(
+        name = "glyph cell $quad",
+        left = (quad * ATLAS_TEXELS).toFloat(),
+        top = QUAD_TOP_SCREEN_Y,
+        right = ((quad + 1) * ATLAS_TEXELS).toFloat(),
+        bottom = QUAD_BOTTOM_SCREEN_Y,
     )
 }
 
