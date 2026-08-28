@@ -199,6 +199,39 @@ Three mitigations, none needing a device:
 **The probe reports and skips; it does not gate.** A hard budget would be a number chosen without ever
 having measured a Mali device — the thing E5 and G3 both declined to do.
 
+### Refined 2026-08-28 by `docs/research/2026-08-28-g-latitude-precision-spike.md`
+
+The mitigation **holds, and is narrower than stated above.** Measured over 200,134 asymmetric float32
+samples:
+
+| formulation | latitude error per ULP of `atan`/`sin`/`cos` error |
+|---|---:|
+| naive `2·atan(exp ψ) − π/2`, then `sin`/`cos` | **1.661 m** worst case |
+| tangent half-angle `(t²−1)/(t²+1), 2t/(t²+1)` | **0 m** — bit-for-bit unmoved to 1024 ULP |
+
+At 1024 ULP the naive form is 1,700 m out. Inverting the measurement, MapLibre's field-observed 200–300 m
+on Mali implies roughly **120–180 ULP** of `atan` error.
+
+Three refinements the design above does not capture:
+
+1. **What it buys is immunity to the *unbounded* built-ins, and only that.** With correctly rounded
+   built-ins the two forms differ by 0.4 m across the whole domain. **The guarantee is only as good as
+   `exp`** — at `exp`'s own specified `3 + 2|x|` ULP bound the half-angle path is 8.7 m out and inverts
+   monotonicity slightly *more* often than the naive one. It converts an unbounded error into a specified
+   one; it does not make the path exact. That `exp` assumption is precisely what only the runtime probe can
+   check.
+2. **MapLibre's stated reason for its own fix is wrong, and Cycle G must not repeat it.** Its source blames
+   the `− π/2`; measurement shows the shared `PI - y*PI*2.0` prelude, one line *above* either identity, is
+   what destroys precision near the equator. The two forms agree there to 2 micrometres.
+3. **`precision highp float` is an independent non-negotiable.** `mediump` costs about **20 km** either
+   way — 9.8 km of it before any arithmetic happens at all — so no choice of identity rescues a `mediump`
+   latitude path.
+
+One collateral result worth carrying into the probe's design: a single ULP of *non-smooth* `atan` error
+already inverts **1,134 of 19,999** consecutive float32 y values under the naive form, and **zero** under
+the half-angle form. That reproduces the reported "distinct latitudes overlap" symptom without needing a
+badly broken driver, which means the probe should measure monotonicity rather than only magnitude.
+
 ---
 
 ## 8. What the cycle must not copy from mercator
