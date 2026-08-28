@@ -206,6 +206,52 @@ internal class OperationRegistry(
     suspend fun observedTileJsonDocuments(): Map<String, ByteArray> =
         tileJsonObservationMutex.withLock { LinkedHashMap(observedTileJsonByUrl) }
 
+    // Every Glyph Range lookup this invocation REFUSED, by the redacted-url digest the refusal named.
+    //
+    // **Why this observation exists, and why only for this one class.** The firewall's own refusal is
+    // precise -- `AMBIGUOUS_RESOURCE_ROUTE`, "an exchange RenG never planned" -- and Rentile throws it
+    // away. `GlyphResourceAcquirer.acquireRaw` reads its raw store first, and Rentile's `readStore`
+    // helper converts whatever the store threw into its own `ResourceStoreException` with **no cause**;
+    // `acquireLabelCandidates` then wraps that in a `BatchRenderException`. What arrives at
+    // [BasemapEngineHost]'s classifying seam therefore carries `RESOURCE_STORE_FAILED` and no resource
+    // class at all, which [classifyEngineFailure] can only report as the opaque `BASEMAP_RENDER_FAILED`:
+    // a consumer whose glyph routes RenG failed to derive gets a labelless map and a failure code that
+    // says only "the basemap did not render". This map is how RenG recovers what it already knew.
+    //
+    // Scoped to `GLYPH_RANGE` rather than kept for every class, because the label handover is the one
+    // caller that reads it, and an observation nothing reads is bookkeeping that can rot. The same
+    // lossy wrapping does apply to Rentile's raster, vector and TileJSON acquirers; widening this is a
+    // separate decision with its own caller, not a freebie.
+    //
+    // Written only on the refusal path, which is by construction the path that then throws, so this
+    // costs one enum comparison per engine lookup and nothing else. Its own guard, for the same reason
+    // `lastTransportDigestByRoute` has one: concurrent routes genuinely race here.
+    private val refusedGlyphLookupMutex = Mutex()
+    private val refusedGlyphLookupDigests = mutableSetOf<String>()
+
+    /**
+     * Records a refused engine lookup when it named a Glyph Range, and does nothing otherwise.
+     *
+     * [redactedDigest] is `sha256Hex(withRedactedAuthenticationQuery(url))` in both callers -- a store
+     * key carries it directly as its `stableId`, and a transport request is reduced to it here -- so the
+     * set this fills is directly comparable against the digests of the routes RenG preregistered. That
+     * comparison is what separates the two failures this observation exists to tell apart: a digest RenG
+     * never preregistered means RenG derived no route for that Glyph Range at all, while a digest RenG
+     * *did* preregister means the redacted forms agree and the exact strings do not -- a credential the
+     * engine composes and RenG's copy of the template does not carry.
+     */
+    private suspend fun recordRefusedEngineLookup(engineResourceClass: EngineResourceClass, redactedDigest: String) {
+        if (engineResourceClass != EngineResourceClass.GLYPH_RANGE) return
+        refusedGlyphLookupMutex.withLock { refusedGlyphLookupDigests += redactedDigest }
+    }
+
+    /**
+     * The redacted-url digest of every Glyph Range lookup this invocation refused. A copy, taken under
+     * the same lock the writer takes, so the reader gets a happens-before edge on all of them.
+     */
+    suspend fun refusedGlyphLookupDigests(): Set<String> =
+        refusedGlyphLookupMutex.withLock { LinkedHashSet(refusedGlyphLookupDigests) }
+
     private val transportJoin = SuspendJoin<TransportLatchKey, EngineTransportResponse>()
     private val storeReadJoin = SuspendJoin<ResourceRouteKey, EngineStoredRawResource?>()
     private val storeWriteJoin = SuspendJoin<ResourceRouteKey, Unit>()
@@ -326,7 +372,10 @@ internal class OperationRegistry(
 
     suspend fun executeTransport(request: EngineTransportRequest): EngineTransportResponse {
         val route = routeIndex.transportRoutes[TransportIndexKey(request.url, request.resourceClass)]
-            ?: throw ambiguousRouteFailure()
+            ?: run {
+                recordRefusedEngineLookup(request.resourceClass, redactedLocatorHex(request.url))
+                throw ambiguousRouteFailure()
+            }
         val latchKey = TransportLatchKey(
             route = route,
             ifNoneMatch = request.metadata.ifNoneMatch,
@@ -372,7 +421,11 @@ internal class OperationRegistry(
     // ---- Store ----------------------------------------------------------------------------------
 
     suspend fun readStore(key: EngineRawResourceKey): EngineStoredRawResource? {
-        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)] ?: throw ambiguousRouteFailure()
+        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)]
+            ?: run {
+                recordRefusedEngineLookup(key.resourceClass, key.stableId)
+                throw ambiguousRouteFailure()
+            }
         return storeReadJoin.run(route) {
             try {
                 val stored = store.read(RenGRawResourceKey(stableId = key.stableId, resourceClass = route.resourceClass))
@@ -412,7 +465,11 @@ internal class OperationRegistry(
     }
 
     suspend fun writeStore(key: EngineRawResourceKey, resource: EngineStoredRawResource) {
-        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)] ?: throw ambiguousRouteFailure()
+        val route = routeIndex.storeRoutes[StoreIndexKey(key.stableId, key.resourceClass)]
+            ?: run {
+                recordRefusedEngineLookup(key.resourceClass, key.stableId)
+                throw ambiguousRouteFailure()
+            }
         // Digest self-consistency and the byte ceiling are NOT checked here: `copyValidStoredResource`
         // below enforces both, and throws the identical failure. Checking them twice cost a second
         // pure-Kotlin SHA-256 over the same bytes on every engine store write.

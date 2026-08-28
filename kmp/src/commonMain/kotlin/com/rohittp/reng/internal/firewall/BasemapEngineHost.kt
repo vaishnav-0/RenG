@@ -5,6 +5,7 @@ import com.rohittp.reng.PipelineStage
 import com.rohittp.reng.RenGErrorCode
 import com.rohittp.reng.RenGException
 import com.rohittp.reng.ResourceKey
+import com.rohittp.reng.ResourceLimits
 import com.rohittp.reng.Store
 import com.rohittp.reng.StoredRawResource
 import com.rohittp.reng.Transport
@@ -12,6 +13,7 @@ import com.rohittp.reng.internal.DiagnosticField
 import com.rohittp.reng.internal.basemap.BasemapStyleManifest
 import com.rohittp.reng.internal.basemap.BasemapStyleManifestOutcome
 import com.rohittp.reng.internal.basemap.BasemapTileJsonOutcome
+import com.rohittp.reng.internal.basemap.glyphRangeRoutes
 import com.rohittp.reng.internal.basemap.parseBasemapTileJson
 import com.rohittp.reng.internal.basemap.deriveBasemapStyleManifest
 import com.rohittp.reng.internal.cache.Lease
@@ -19,6 +21,7 @@ import com.rohittp.reng.internal.cache.ResidentCache
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
+import com.rohittp.reng.internal.identity.CanonicalBytes
 import com.rohittp.reng.internal.identity.PureKotlinSha256
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.identity.Sha256Function
@@ -29,6 +32,9 @@ import com.rohittp.reng.internal.resource.ResourceRouteKey
 import com.rohittp.reng.ResourceAccessMode as RenGResourceAccessMode
 import com.rohittp.rentile.BasemapRasterizer
 import com.rohittp.rentile.CredentialProvider
+import com.rohittp.rentile.GlyphTemplateMismatchException
+import com.rohittp.rentile.LabelCandidateBatch
+import com.rohittp.rentile.LabelCandidatePlan
 import com.rohittp.rentile.MapSessionProvider
 import com.rohittp.rentile.MetricsSink
 import com.rohittp.rentile.PreparedBatch
@@ -479,6 +485,205 @@ internal class BasemapEngineHost(
         }
     }
 
+    /**
+     * The Label handover: one plan, one closure, one second round of preregistration, one acquisition.
+     *
+     * ```
+     * registerRoutes(labelTileRoutes)   the label layers' own vector tiles
+     * planLabelCandidates              fetches those tiles and freezes the Glyph Closure; no glyph byte
+     * plan.glyphUrls(glyphTemplate)    the exact urls the acquisition will ask for
+     * registerRoutes(glyphRangeRoutes) the second round ADR 0016's exact-string firewall needs
+     * acquireLabelCandidates(plan)     fetches every Glyph Range and packs the atlas
+     * ```
+     *
+     * **The one-shot `acquireLabelCandidates(style, tiles, mode)` overload is never called**, here or
+     * anywhere: it plans and acquires inside one uninterruptible call, closing the exact window this
+     * method exists to use. Rentile composes its glyph urls from a template RenG's firewall has never
+     * seen, so without the second round every one of them is refused and the map loses all of its text.
+     *
+     * **[glyphTemplate] is RenG's own resolved copy** ([BasemapStyleManifest.glyphTemplate]), not
+     * Rentile's. `glyphUrls` substitutes *the caller's* template into the closure, so the credential in
+     * that string is the one that reaches RenG's `Transport`, and Rentile never emits its own copy
+     * through this path. It is also why [glyphUrlsOf] cannot verify a credential -- see there.
+     *
+     * **Order matters twice.** `glyphUrls` is the one plan member `close()` kills, so the urls are read
+     * before the plan is closed; and the plan is closed in a `finally`, so a failed acquisition still
+     * releases the assembly and every `PendingLabel` it holds. The plan is otherwise reusable --
+     * acquiring from it repeatedly yields equal batches -- which nothing here relies on.
+     *
+     * Registering the label tile routes is this method's job rather than the caller's, so that the whole
+     * sequence has one owner: a caller that preregistered them at a different ceiling would fail the
+     * frame closed on a route-identity collision, at a call site with no way to know why.
+     */
+    suspend fun acquireLabelCandidates(
+        style: PreparedStyle,
+        tiles: List<CanonicalBasemapTile>,
+        glyphTemplate: String?,
+        labelTileRoutes: List<ResourceRouteKey>,
+        limits: ResourceLimits,
+    ): AcquiredLabelCandidates {
+        requireOpen()
+        val operation = activeOperation ?: throw unplannedEngineExchangeFailure()
+        registerRoutes(labelTileRoutes)
+        val distinct = tiles.distinct()
+        val plan = engineCall {
+            engine.planLabelCandidates(
+                style = style,
+                tiles = distinct.map(::engineTileIdOf),
+                resourceAccess = engineAccessModeOf(operation.accessMode),
+            )
+        }
+        return try {
+            val urls = glyphClosureUrls(plan, glyphTemplate)
+            val glyphRoutes = glyphRangeRoutes(urls, operation.accessMode, limits)
+            registerRoutes(glyphRoutes)
+            val batch = acquireOverGlyphRoutes(plan, glyphRoutes, operation.registry)
+            AcquiredLabelCandidates(batch = batch, tiles = distinct, glyphRoutes = glyphRoutes)
+        } finally {
+            plan.close()
+        }
+    }
+
+    /**
+     * The urls [plan]'s frozen closure will be acquired at, or a named failure when RenG cannot derive
+     * one for every range the closure names.
+     *
+     * **The empty closure is not a failure.** A style that declares no `glyphs` key, and a tile set with
+     * no label features in it, both plan an empty closure and acquire an empty batch. RenG asks for no
+     * route and reports nothing; the map simply has no text.
+     *
+     * **A non-empty closure with no template of RenG's own is.** The engine only freezes a non-empty
+     * closure when *it* resolved a glyphs template, so RenG holding none means the two disagree about
+     * the same document -- and every url the acquisition then composes is one this firewall refuses.
+     *
+     * That check is an **economy and a statement of intent rather than a behaviour change**, and it is
+     * worth saying so rather than letting someone rediscover it as a defect: removing it reaches the
+     * identical failure by the identical code, one full round of refused Glyph Range lookups later, via
+     * [acquireOverGlyphRoutes]'s [GlyphRouteRefusal.NOT_DERIVED] branch. No test can therefore tell the
+     * two apart through the consumer's adapters -- measured, not assumed. What it buys is that the
+     * disagreement is named at the point it is knowable, at zero engine work, and stays named if the
+     * refusal observation is ever narrowed.
+     *
+     * **The count check verifies Rentile's own closure claim rather than trusting it.**
+     * `LabelCandidatePlan`'s KDoc says `glyphClosure` and `glyphUrls` "both read one frozen list", which
+     * is the entire premise of preregistering from one and acquiring from the other. At the pinned
+     * version they demonstrably do -- both map the same `assembly.requiredRanges` -- so **no fixture can
+     * make this fire and no test covers it**. It is the same shape as `rengResourceClassOf`'s
+     * unreachable null branch: a guard against a Rentile that stopped, and against exactly the failure
+     * that would otherwise be silent, since a `glyphUrls` under-approximating its own closure
+     * preregisters fewer routes than the acquisition then asks for. Do not delete it on the strength of
+     * being uncovered.
+     */
+    private fun glyphClosureUrls(plan: LabelCandidatePlan, glyphTemplate: String?): List<String> {
+        val closureSize = plan.glyphClosure.size
+        if (closureSize == 0) return emptyList()
+        if (glyphTemplate == null) throw underivableGlyphRoutesFailure()
+        val urls = glyphUrlsOf(plan, glyphTemplate)
+        if (urls.size != closureSize) throw underivableGlyphRoutesFailure()
+        return urls
+    }
+
+    /**
+     * `plan.glyphUrls(template)`, with the two Rentile exceptions it can throw kept inside the firewall.
+     *
+     * **Why this is not just a call.** `glyphUrls` is a method on the plan object rather than a call
+     * through the rasterizer, so nothing about it passes through [engineCall] on its own, and the spike
+     * that measured this sequence watched both `GlyphTemplateMismatchException` and
+     * `LabelCandidatePlanClosedException` cross RenG's public boundary as themselves. An engine
+     * exception type reaching a consumer breaches the sanitized-failure contract whatever it says: its
+     * message is free-form and, for a template mismatch, is about a url.
+     *
+     * **A mismatch gets a name of its own.** [classifyEngineFailure] sweeps `GLYPH_TEMPLATE_MISMATCH`
+     * into the opaque `BASEMAP_RENDER_FAILED` -- correctly, since at that seam RenG has no label work to
+     * attribute it to -- but here the context is exact: the template RenG derived from the style
+     * document is not the one the engine compiled from the same document, so RenG cannot say which
+     * resource any glyph url names. That is [RenGErrorCode.AMBIGUOUS_RESOURCE_ROUTE], the same failure
+     * the firewall raises when it meets a url it never routed, one step earlier.
+     *
+     * **What a mismatch can and cannot catch.** Rentile compares only the *redacted* forms of the two
+     * templates, so this fires for a different host, path or query shape and stays silent for a stale or
+     * wrong credential -- a caller passing one gets back a plausible, non-empty list whose every url is
+     * wrong. That case cannot be caught here at all, and is caught after the fact instead: see
+     * [acquireOverGlyphRoutes].
+     *
+     * Everything else -- `LabelCandidatePlanClosedException` included, which would mean RenG read a plan
+     * it had already closed -- goes through [engineCall], so it is sanitized rather than named: RenG has
+     * nothing truthful to add to a defect of its own.
+     */
+    internal fun glyphUrlsOf(plan: LabelCandidatePlan, glyphTemplate: String): List<String> =
+        engineCall {
+            try {
+                plan.glyphUrls(glyphTemplate)
+            } catch (_: GlyphTemplateMismatchException) {
+                // Raised as a RenGException, which [engineCall] rethrows untouched rather than
+                // reclassifying -- the whole reason that branch exists.
+                throw underivableGlyphRoutesFailure()
+            }
+        }
+
+    /**
+     * Acquires [plan]'s Glyph Ranges over the routes just preregistered for them, and replaces the
+     * failure Rentile hands back with the one RenG already knows when the firewall refused a glyph url.
+     *
+     * **Why a refused glyph url arrives opaque.** Rentile's `GlyphResourceAcquirer` reads its raw store
+     * before it touches transport, so the first firewall lookup an unrouted glyph url meets is the
+     * **store** index rather than the transport one. The refusal is real and complete -- no byte reaches
+     * the consumer's adapters -- but Rentile's own store helper converts it into a
+     * `ResourceStoreException` with no cause and no resource class, which `acquireLabelCandidates` then
+     * wraps in a `BatchRenderException`. [classifyEngineFailure] can only answer `BASEMAP_RENDER_FAILED`
+     * to that: the basemap did not render, and nothing more. RenG's own refusal, with its own code and
+     * its own reason, is thrown away one layer down.
+     *
+     * [OperationRegistry.refusedGlyphLookupDigests] is how it is recovered. The registry records the
+     * redacted-url digest of every Glyph Range lookup it refused, at either index, so a failed
+     * acquisition can be re-read against what RenG actually preregistered:
+     *
+     *  - **[GlyphRouteRefusal.NOT_DERIVED]** -- a refused digest RenG never preregistered. RenG derived
+     *    no route for that Glyph Range at all.
+     *  - **[GlyphRouteRefusal.CREDENTIAL_MISMATCH]** -- every refused digest is one RenG *did*
+     *    preregister. The redacted forms agree and the exact strings do not, which for a glyph url means
+     *    exactly one thing: the engine composed a credential RenG's copy of the template does not carry.
+     *    This is the case `glyphUrls` structurally cannot catch, and under this firewall it presents as
+     *    every glyph route preregistered and none of them matched.
+     *
+     * **Which index fires is itself the discriminator, and it corrects the handover spike.** That spike
+     * measured the store index as the gate, and it was right for the fixture it had -- one with no
+     * credential in it. The store index is keyed on the *redacted* digest and the transport index on the
+     * *exact* url, so a stale credential sails through the first and is refused by the second: the
+     * consumer's `Store` is asked for all three Glyph Ranges and its `Transport` for none of them. Both
+     * shapes are real, and both are recorded, which is why this reads the digests rather than the index.
+     *
+     * Both are reported as [RenGErrorCode.AMBIGUOUS_RESOURCE_ROUTE] at [PipelineStage.RESOURCE_LOOKUP],
+     * because both are the same fault -- the engine asked for a glyph url RenG never routed -- and that
+     * code's rule forbids a diagnostic identity, so neither may name the range it lost. They are told
+     * apart internally rather than publicly, which is the honest split until the cycle's failure task
+     * gives the label plan a code and a stage of its own.
+     *
+     * **A failure with no refusal recorded is passed through untouched**, and that is load-bearing
+     * rather than tidy: the Android host JVM cannot load Rentile's Skia, so the atlas packer fails there
+     * on every run, after every fetch has already succeeded. Reporting that as a route failure would be
+     * a lie told on exactly the target whose routing this suite exists to gate.
+     */
+    private suspend fun acquireOverGlyphRoutes(
+        plan: LabelCandidatePlan,
+        glyphRoutes: List<ResourceRouteKey>,
+        registry: OperationRegistry,
+    ): LabelCandidateBatch =
+        try {
+            engineCall { engine.acquireLabelCandidates(plan) }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (engineFailure: RenGException) {
+            val refusal = classifyGlyphRouteRefusal(
+                refusedDigests = registry.refusedGlyphLookupDigests(),
+                preregisteredDigests = glyphRoutes.mapTo(mutableSetOf()) { redactedLocatorHex(it.locator.value) },
+            )
+            throw if (refusal == null) engineFailure else underivableGlyphRoutesFailure()
+        }
+
+    private fun redactedLocatorHex(url: String): String =
+        sha256.digest(CanonicalBytes(redactAuthenticationQuery(url).encodeToByteArray())).lowercaseHex
+
     /** RenG's own identity for the rendered tile [tile] of [style] at this host's tile output size. */
     fun renderedTileKey(style: PreparedStyle, tile: CanonicalBasemapTile): ResourceKey =
         basemapTileKey(style.digest, tile, tileOutputSize, sha256)
@@ -694,6 +899,62 @@ internal class PreparedBasemapTiles(
     }
 }
 
+/**
+ * One Label acquisition: the engine's batch, the tiles it covers, and the Glyph Range routes RenG
+ * preregistered for it.
+ *
+ * A plain holder, deliberately. Placing, colliding, uploading and drawing what is in [batch] belong to
+ * the tasks that own those steps; this one owns getting it across the firewall intact. [glyphRoutes] is
+ * kept because it is the only record of what RenG declared for this acquisition -- the plan that
+ * produced it is closed by the time this exists.
+ */
+internal class AcquiredLabelCandidates(
+    val batch: LabelCandidateBatch,
+    val tiles: List<CanonicalBasemapTile>,
+    val glyphRoutes: List<ResourceRouteKey>,
+)
+
+/**
+ * Why the firewall refused a Glyph Range lookup, as far as RenG can tell from what it preregistered.
+ *
+ * Both values report the same public failure. They exist because the two are genuinely different faults
+ * with different fixes -- one is a route RenG never derived, the other is a credential RenG's template
+ * does not carry -- and a diagnosis with no name is the mystery this cycle set out to remove.
+ */
+internal enum class GlyphRouteRefusal {
+    /** A refused digest RenG never preregistered: no route was derived for that Glyph Range at all. */
+    NOT_DERIVED,
+
+    /**
+     * Every refused digest is one RenG preregistered. The redacted urls agree and the exact urls do
+     * not, so the engine substituted a credential RenG's own copy of the glyphs template lacks.
+     */
+    CREDENTIAL_MISMATCH,
+}
+
+/**
+ * Reads a failed Label acquisition against what RenG preregistered for it, or `null` when the firewall
+ * refused nothing and the failure therefore belongs to something else entirely.
+ *
+ * Pure and total, so it can be exercised without an engine: everything it needs is two sets of
+ * `sha256Hex(withRedactedAuthenticationQuery(url))` digests. [refusedDigests] comes from the invocation's
+ * own [OperationRegistry]; [preregisteredDigests] is derived from the routes the handover declared.
+ *
+ * A single unrecognised digest is enough for [GlyphRouteRefusal.NOT_DERIVED], and it outranks the other
+ * verdict: a run that refused one url RenG never derived *and* one it did has a route-derivation defect,
+ * and a credential story would be the wrong thing to chase. The credential verdict is therefore reserved
+ * for the case where RenG's derivation covered every url the engine asked for and the engine still asked
+ * for none of them by the exact string RenG declared.
+ */
+internal fun classifyGlyphRouteRefusal(
+    refusedDigests: Set<String>,
+    preregisteredDigests: Set<String>,
+): GlyphRouteRefusal? = when {
+    refusedDigests.isEmpty() -> null
+    refusedDigests.any { it !in preregisteredDigests } -> GlyphRouteRefusal.NOT_DERIVED
+    else -> GlyphRouteRefusal.CREDENTIAL_MISMATCH
+}
+
 /** One rendered ground tile: RenG's own identity, the encoded pixels, and the engine's own provenance. */
 internal class RenderedBasemapTile(
     val key: ResourceKey,
@@ -745,6 +1006,27 @@ internal fun basemapTileKey(
  * the same fault seen one level earlier: an exchange RenG never planned.
  */
 private fun unplannedEngineExchangeFailure(): RenGException = FailureDescriptor(
+    code = RenGErrorCode.AMBIGUOUS_RESOURCE_ROUTE,
+    stage = PipelineStage.RESOURCE_LOOKUP,
+    diagnostic = failureContextDiagnostic(
+        stage = PipelineStage.RESOURCE_LOOKUP,
+        fieldName = DiagnosticField.RESOURCE,
+    ),
+).toException()
+
+/**
+ * The one failure the Label handover raises for itself: RenG cannot say which resource a glyph url
+ * names, so the Glyph Ranges this frame's text needs are unroutable.
+ *
+ * Reported as the same sanitized `AMBIGUOUS_RESOURCE_ROUTE` [OperationRegistry] gives an unrecognised
+ * url or store key, because every route to it is that same fault seen from a different distance: a
+ * glyphs template the engine and RenG disagree about, a closure RenG holds no template for, and a
+ * Glyph Range the firewall actually refused all end with the engine asking for a url RenG never planned.
+ * The code's rule admits the `resource` field and forbids an identity, so this names no Glyph Range --
+ * which is honest, since in the case that matters most RenG holds a route for every one of them and
+ * still cannot say which the engine meant.
+ */
+private fun underivableGlyphRoutesFailure(): RenGException = FailureDescriptor(
     code = RenGErrorCode.AMBIGUOUS_RESOURCE_ROUTE,
     stage = PipelineStage.RESOURCE_LOOKUP,
     diagnostic = failureContextDiagnostic(
