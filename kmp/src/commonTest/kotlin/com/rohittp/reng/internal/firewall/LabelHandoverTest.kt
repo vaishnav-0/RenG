@@ -275,7 +275,8 @@ class LabelHandoverTest {
      * document, so RenG cannot say which resource any glyph url names -- which is
      * `AMBIGUOUS_RESOURCE_ROUTE` exactly. A `LabelCandidatePlanClosedException` would mean RenG read a
      * plan it had already closed, a defect of its own with nothing truthful to add, so it is sanitized
-     * to the opaque basemap failure instead.
+     * to the opaque engine failure instead -- reported at `LABEL_PREPARATION` since E-labels task 14,
+     * which is the one thing RenG can honestly say about it: the ground drew and the label plan did not.
      *
      * Driven through fakes rather than through a real plan because the second case is unreachable by
      * construction: [BasemapEngineHost.acquireLabelCandidates] closes the plan in a `finally` and never
@@ -297,7 +298,7 @@ class LabelHandoverTest {
                 host.glyphUrlsOf(ThrowingLabelCandidatePlan(LabelCandidatePlanClosedException()), LABEL_GLYPH_TEMPLATE)
             }
             assertEquals(RenGErrorCode.BASEMAP_RENDER_FAILED, closed.code)
-            assertEquals(PipelineStage.BASEMAP_RENDER, closed.stage)
+            assertEquals(PipelineStage.LABEL_PREPARATION, closed.stage)
         } finally {
             host.close()
         }

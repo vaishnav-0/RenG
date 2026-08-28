@@ -3,9 +3,11 @@ package com.rohittp.reng
 import com.rohittp.reng.internal.DiagnosticField
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failureContextDiagnostic
+import com.rohittp.reng.internal.labelContentExcludedDiagnostic
 import com.rohittp.reng.internal.renGFailure
 import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
 import com.rohittp.reng.internal.resourceReloadedAfterFreeDiagnostic
+import com.rohittp.reng.internal.unroutableLabelSourceFailure
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -23,7 +25,7 @@ class DiagnosticsAndFailuresTest {
                 "STORE_READ", "STORE_VALIDATION", "TRANSPORT", "TRANSPORT_VALIDATION",
                 "STORE_WRITE", "RESOURCE_DECODING", "RESOURCE_PARSING", "SHADER_COMPILATION",
                 "GPU_RESOURCE", "RENDER_TARGET", "DRAW", "RESOURCE_FREE", "RENDERER_CLOSE",
-                "CONTEXT_ADOPTION", "BASEMAP_RENDER",
+                "CONTEXT_ADOPTION", "BASEMAP_RENDER", "LABEL_PREPARATION",
             ),
             PipelineStage.entries.map { it.name },
         )
@@ -40,7 +42,7 @@ class DiagnosticsAndFailuresTest {
                 "STORE_READ_FAILED", "STORE_WRITE_FAILED", "STORE_INTEGRITY_FAILED",
                 "RESOURCE_DECODE_FAILED", "RESOURCE_PARSE_FAILED", "UNSUPPORTED_RESOURCE_FEATURE",
                 "SHADER_COMPILE_FAILED", "SHADER_LINK_FAILED", "GPU_OPERATION_FAILED",
-                "IDENTITY_COLLISION", "BASEMAP_RENDER_FAILED",
+                "IDENTITY_COLLISION", "BASEMAP_RENDER_FAILED", "UNROUTABLE_LABEL_SOURCE",
             ),
             RenGErrorCode.entries.map { it.name },
         )
@@ -48,7 +50,7 @@ class DiagnosticsAndFailuresTest {
         assertEquals(
             listOf(
                 "RESOURCE_RELOADED_AFTER_FREE", "FAILURE_CONTEXT", "BASEMAP_NOT_CONFIGURED",
-                "RESIDENT_GPU_TEXTURES_OVER_BUDGET",
+                "RESIDENT_GPU_TEXTURES_OVER_BUDGET", "LABEL_CONTENT_EXCLUDED",
             ),
             DiagnosticCode.entries.map { it.name },
         )
@@ -98,9 +100,9 @@ class DiagnosticsAndFailuresTest {
 
     @Test
     fun failureFactoryAcceptsEveryAllowedFailureTableShape() {
-        assertEquals(98, allowedFailureCases.size)
-        assertEquals(28, allowedFailureCases.count { !it.hasDiagnostic })
-        assertEquals(70, allowedFailureCases.count { it.hasDiagnostic })
+        assertEquals(100, allowedFailureCases.size)
+        assertEquals(29, allowedFailureCases.count { !it.hasDiagnostic })
+        assertEquals(71, allowedFailureCases.count { it.hasDiagnostic })
         assertEquals(RenGErrorCode.entries.toSet(), allowedFailureCases.map { it.code }.toSet())
 
         allowedFailureCases.forEach(::assertFailureTableOutcome)
@@ -385,6 +387,115 @@ class DiagnosticsAndFailuresTest {
     }
 
     @Test
+    fun labelContentExclusionCarriesASeverityAndIsUnconstructibleWithAnythingElse() {
+        val info = labelContentExcludedDiagnostic(DiagnosticSeverity.INFO)
+
+        assertEquals(DiagnosticCode.LABEL_CONTENT_EXCLUDED, info.code)
+        assertEquals(DiagnosticSeverity.INFO, info.severity)
+        assertEquals(PipelineStage.LABEL_PREPARATION, info.stage)
+        assertEquals(
+            DiagnosticSeverity.WARNING,
+            labelContentExcludedDiagnostic(DiagnosticSeverity.WARNING).severity,
+        )
+
+        // An exclusion is never a failure -- the frame prepared, and it drew -- so RenG's ERROR, which
+        // is what a failure's own context diagnostic carries, is refused here rather than clamped by
+        // whichever call site happened to build one (ADR 0036).
+        assertFailsWith<IllegalArgumentException> {
+            labelContentExcludedDiagnostic(DiagnosticSeverity.ERROR)
+        }
+
+        PipelineStage.entries.filter { it != PipelineStage.LABEL_PREPARATION }.forEach { stage ->
+            assertFailsWith<IllegalArgumentException>("$stage accepted a label exclusion") {
+                Diagnostic(DiagnosticCode.LABEL_CONTENT_EXCLUDED, DiagnosticSeverity.INFO, stage)
+            }
+        }
+
+        // Every field an engine diagnostic could tempt a call site into carrying. `resource` is a
+        // legal field *at this stage* -- the unroutable-source failure uses it -- so this rejection
+        // comes from the code's own rule rather than from the stage allowlist.
+        val key = ResourceKey(ResourceKind.EXTERNAL, stableId('a'), ResourceClass.BASEMAP_VECTOR_TILE)
+        val rejected: List<() -> Diagnostic> = listOf(
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    fieldName = DiagnosticField.RESOURCE.wireName,
+                )
+            },
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    resourceClass = key.resourceClass,
+                    resourceKey = key,
+                )
+            },
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    statusCode = 200,
+                )
+            },
+            {
+                Diagnostic(
+                    DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    DiagnosticSeverity.INFO,
+                    PipelineStage.LABEL_PREPARATION,
+                    limit = 1L,
+                    actual = 2L,
+                )
+            },
+        )
+        rejected.forEach { build -> assertFailsWith<IllegalArgumentException> { build() } }
+    }
+
+    @Test
+    fun theUnroutableLabelSourceFailureIsTheOneShapeItsAllowlistPairAccepts() {
+        val failure = unroutableLabelSourceFailure()
+
+        assertEquals(RenGErrorCode.UNROUTABLE_LABEL_SOURCE, failure.code)
+        assertEquals(PipelineStage.LABEL_PREPARATION, failure.stage)
+        assertEquals("RenG failure: UNROUTABLE_LABEL_SOURCE at LABEL_PREPARATION", failure.message)
+        val diagnostic = failure.diagnostics.single()
+        assertEquals(DiagnosticCode.FAILURE_CONTEXT, diagnostic.code)
+        assertEquals(DiagnosticSeverity.ERROR, diagnostic.severity)
+        assertEquals(PipelineStage.LABEL_PREPARATION, diagnostic.stage)
+        assertEquals(DiagnosticField.RESOURCE.wireName, diagnostic.fieldName)
+        assertNull(diagnostic.resourceKey)
+
+        // The allowlist lives in a constructor, so each refusal below is a failure that never comes
+        // into existence rather than an assertion that fails: no diagnostic at all, the same
+        // diagnostic at the stage this code does not belong to, and a named identity the rule forbids.
+        assertFailsWith<IllegalArgumentException> {
+            renGFailure(RenGErrorCode.UNROUTABLE_LABEL_SOURCE, PipelineStage.LABEL_PREPARATION)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            renGFailure(
+                RenGErrorCode.UNROUTABLE_LABEL_SOURCE,
+                PipelineStage.RESOURCE_LOOKUP,
+                failureContextDiagnostic(PipelineStage.RESOURCE_LOOKUP, DiagnosticField.RESOURCE),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            renGFailure(
+                RenGErrorCode.UNROUTABLE_LABEL_SOURCE,
+                PipelineStage.LABEL_PREPARATION,
+                failureContextDiagnostic(
+                    PipelineStage.LABEL_PREPARATION,
+                    DiagnosticField.RESOURCE,
+                    ResourceClass.BASEMAP_VECTOR_TILE,
+                    ResourceKey(ResourceKind.EXTERNAL, stableId('a'), ResourceClass.BASEMAP_VECTOR_TILE),
+                ),
+            )
+        }
+    }
+
+    @Test
     fun diagnosticAndFailurePathsRedactEstablishedStableIds() {
         val secretStableId = stableId('f')
         val key = ResourceKey(ResourceKind.EXTERNAL, secretStableId, ResourceClass.STICKER_IMAGE)
@@ -548,6 +659,7 @@ class DiagnosticsAndFailuresTest {
             PipelineStage.SHADER_COMPILATION to setOf(DiagnosticField.SHADER_PAIR),
             PipelineStage.RENDER_TARGET to setOf(DiagnosticField.RENDER_TARGET),
             PipelineStage.DRAW to setOf(DiagnosticField.RESOURCE),
+            PipelineStage.LABEL_PREPARATION to setOf(DiagnosticField.RESOURCE),
         )
 
         private val allowedFailureCases: List<FailureCase> = buildList {
@@ -698,6 +810,10 @@ class DiagnosticsAndFailuresTest {
                 add(failureContext(RenGErrorCode.IDENTITY_COLLISION, PipelineStage.RESOURCE_LOOKUP, DiagnosticField.RESOURCE, identity))
             }
             add(noDiagnostic(RenGErrorCode.BASEMAP_RENDER_FAILED, PipelineStage.BASEMAP_RENDER))
+            // The same opaque failure at the other half of a frame: the label plan did not survive.
+            // `classifyEngineFailure` reports Rentile's three label-candidate codes here.
+            add(noDiagnostic(RenGErrorCode.BASEMAP_RENDER_FAILED, PipelineStage.LABEL_PREPARATION))
+            add(failureContext(RenGErrorCode.UNROUTABLE_LABEL_SOURCE, PipelineStage.LABEL_PREPARATION, DiagnosticField.RESOURCE))
         }
     }
 }

@@ -200,26 +200,27 @@ class EngineFailureClassificationTest {
             stage = PipelineStage.RESOURCE_DECODING,
             diagnosticPresent = true,
         ),
-        // Rentile 0.6.0's three label-candidate codes. RenG never calls `acquireLabelCandidates`, so
-        // none of these can arrive from a `prepare`, `prepareBatch`, or `render` RenG made; they are
-        // asserted anyway because the classifier must still answer for every code the enum admits, and
-        // the answer that does not fabricate a label stage RenG has not built is the fail-closed one.
+        // Rentile's three label-candidate codes, all raised only from `acquireLabelCandidates` and the
+        // `LabelCandidatePlan` it returns -- the entry point RenG now calls. Same fail-closed code as
+        // the ground's, because each of them is a RenG defect the engine cannot describe any further,
+        // and a stage that says which half of the frame stopped. The stage is the whole delta, and it
+        // is what the older comment here promised the label cycle would do.
         RentileErrorCode.FOREIGN_LABEL_CANDIDATE_PLAN to ExpectedClassification(
             failure = ForeignLabelCandidatePlanException(),
             code = RenGErrorCode.BASEMAP_RENDER_FAILED,
-            stage = PipelineStage.BASEMAP_RENDER,
+            stage = PipelineStage.LABEL_PREPARATION,
             diagnosticPresent = false,
         ),
         RentileErrorCode.LABEL_CANDIDATE_PLAN_CLOSED to ExpectedClassification(
             failure = LabelCandidatePlanClosedException(),
             code = RenGErrorCode.BASEMAP_RENDER_FAILED,
-            stage = PipelineStage.BASEMAP_RENDER,
+            stage = PipelineStage.LABEL_PREPARATION,
             diagnosticPresent = false,
         ),
         RentileErrorCode.GLYPH_TEMPLATE_MISMATCH to ExpectedClassification(
             failure = GlyphTemplateMismatchException(credentialBearingMessage),
             code = RenGErrorCode.BASEMAP_RENDER_FAILED,
-            stage = PipelineStage.BASEMAP_RENDER,
+            stage = PipelineStage.LABEL_PREPARATION,
             diagnosticPresent = false,
         ),
     )

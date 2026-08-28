@@ -256,13 +256,21 @@ private fun ProtoBuffer.labelMvtLayer(name: String, text: String) {
     varintField(5, 4096L)
 }
 
+/**
+ * A vector tile of one point feature per named source layer, each carrying the text given for it.
+ *
+ * Parameterised because the text is the only thing some fixtures need to vary -- a style whose layers
+ * are unchanged still loses every label when the *feature* text is a script the engine cannot shape,
+ * which is what `runLabelIntegrationReadbackSuite` uses it for -- and because a second hand-written
+ * protobuf encoder beside this one is exactly the duplication that lets a bug ship in one copy.
+ */
+internal fun labelMvtBytes(vararg layers: Pair<String, String>): ByteArray =
+    ProtoBuffer()
+        .apply { layers.forEach { (name, text) -> messageField(3) { labelMvtLayer(name, text) } } }
+        .bytes()
+
 /** The fixture's vector tile: two layers, two features, two font stacks, two codepoint blocks. */
-internal val LABEL_MVT_BYTES: ByteArray = ProtoBuffer()
-    .apply {
-        messageField(3) { labelMvtLayer("place", "AĀ") }
-        messageField(3) { labelMvtLayer("town_label", "B") }
-    }
-    .bytes()
+internal val LABEL_MVT_BYTES: ByteArray = labelMvtBytes("place" to "AĀ", "town_label" to "B")
 
 /**
  * One glyph, at a declared extent whose buffered bitmap is exactly `(width + 6) * (height + 6)` bytes
