@@ -45,5 +45,6 @@ internal object FrameStructuralDiffer {
         FramePlanSegment.STICKERS,
         FramePlanSegment.MODELS,
         FramePlanSegment.GEOMETRIES,
+        FramePlanSegment.DRAW_LABELS,
     )
 }

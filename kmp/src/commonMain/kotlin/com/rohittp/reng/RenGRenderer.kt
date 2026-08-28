@@ -220,6 +220,12 @@ internal class RenGPreparedFrame(
     override val frameIndex: Long,
     internal val camera: Camera,
     internal val drawBasemap: Boolean,
+    /**
+     * Carried beside [drawBasemap] because a Prepared Frame records the whole plan's draw switches,
+     * not the subset the current draw happens to consult. Nothing reads it yet — the label pass that
+     * will is not written — and it is orthogonal to [drawBasemap] rather than implied by it.
+     */
+    internal val drawLabels: Boolean,
     stickers: List<PreparedSticker>,
     geometries: List<PreparedGeometry>,
     /**
@@ -648,6 +654,7 @@ internal class RenGRenderer(
                 frameIndex = plan.frameIndex,
                 camera = plan.camera,
                 drawBasemap = plan.drawBasemap,
+                drawLabels = plan.drawLabels,
                 stickers = stickers,
                 geometries = geometries,
                 models = models,

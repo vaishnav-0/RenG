@@ -448,12 +448,14 @@ final class com.rohittp.reng/Diagnostic { // com.rohittp.reng/Diagnostic|null[0]
 }
 
 final class com.rohittp.reng/FramePlan { // com.rohittp.reng/FramePlan|null[0]
-    constructor <init>(kotlin/Long, com.rohittp.reng/Camera, com.rohittp.reng/ProjectionMode = ..., kotlin/Boolean = ..., kotlin.collections/List<com.rohittp.reng/Sticker> = ..., kotlin.collections/List<com.rohittp.reng/Model> = ..., kotlin.collections/List<com.rohittp.reng/Geometry> = ...) // com.rohittp.reng/FramePlan.<init>|<init>(kotlin.Long;com.rohittp.reng.Camera;com.rohittp.reng.ProjectionMode;kotlin.Boolean;kotlin.collections.List<com.rohittp.reng.Sticker>;kotlin.collections.List<com.rohittp.reng.Model>;kotlin.collections.List<com.rohittp.reng.Geometry>){}[0]
+    constructor <init>(kotlin/Long, com.rohittp.reng/Camera, com.rohittp.reng/ProjectionMode = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin.collections/List<com.rohittp.reng/Sticker> = ..., kotlin.collections/List<com.rohittp.reng/Model> = ..., kotlin.collections/List<com.rohittp.reng/Geometry> = ...) // com.rohittp.reng/FramePlan.<init>|<init>(kotlin.Long;com.rohittp.reng.Camera;com.rohittp.reng.ProjectionMode;kotlin.Boolean;kotlin.Boolean;kotlin.collections.List<com.rohittp.reng.Sticker>;kotlin.collections.List<com.rohittp.reng.Model>;kotlin.collections.List<com.rohittp.reng.Geometry>){}[0]
 
     final val camera // com.rohittp.reng/FramePlan.camera|{}camera[0]
         final fun <get-camera>(): com.rohittp.reng/Camera // com.rohittp.reng/FramePlan.camera.<get-camera>|<get-camera>(){}[0]
     final val drawBasemap // com.rohittp.reng/FramePlan.drawBasemap|{}drawBasemap[0]
         final fun <get-drawBasemap>(): kotlin/Boolean // com.rohittp.reng/FramePlan.drawBasemap.<get-drawBasemap>|<get-drawBasemap>(){}[0]
+    final val drawLabels // com.rohittp.reng/FramePlan.drawLabels|{}drawLabels[0]
+        final fun <get-drawLabels>(): kotlin/Boolean // com.rohittp.reng/FramePlan.drawLabels.<get-drawLabels>|<get-drawLabels>(){}[0]
     final val frameIndex // com.rohittp.reng/FramePlan.frameIndex|{}frameIndex[0]
         final fun <get-frameIndex>(): kotlin/Long // com.rohittp.reng/FramePlan.frameIndex.<get-frameIndex>|<get-frameIndex>(){}[0]
     final val geometries // com.rohittp.reng/FramePlan.geometries|{}geometries[0]

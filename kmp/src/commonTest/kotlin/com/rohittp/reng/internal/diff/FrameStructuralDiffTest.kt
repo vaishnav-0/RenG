@@ -13,7 +13,7 @@ import kotlin.test.assertNotEquals
 
 class FrameStructuralDiffTest {
     @Test
-    fun nullBaselineChangesAllSevenSegmentsInTagOrder() {
+    fun nullBaselineChangesAllEightSegmentsInTagOrder() {
         val current = FramePlanCanonicalEncoder().encode(minimalPlan(0))
 
         assertEquals(
@@ -45,6 +45,23 @@ class FrameStructuralDiffTest {
         )
     }
 
+    /**
+     * `drawLabels` is not merely present in the tag order — it is the only segment two plans differing
+     * only in that flag may report. A structural diff that missed it would return an empty change list
+     * for two visibly different frames, which is the diff answering "nothing to redo".
+     */
+    @Test
+    fun twoPlansDifferingOnlyByDrawLabelsChangeExactlyThatSegment() {
+        val encoder = FramePlanCanonicalEncoder()
+        val previous = encoder.encode(minimalPlan(0))
+        val current = encoder.encode(minimalPlan(0, drawLabels = false))
+
+        assertEquals(
+            listOf(FramePlanSegment.DRAW_LABELS),
+            FrameStructuralDiffer.diff(previous, current).changedSegments,
+        )
+    }
+
     @Test
     fun changedSegmentResultsSnapshotListsAndUseStructuralValueSemantics() {
         val input = mutableListOf(FramePlanSegment.CAMERA, FramePlanSegment.MODELS)
@@ -62,9 +79,10 @@ class FrameStructuralDiffTest {
         assertFalse(first.changedSegments === first.changedSegments)
     }
 
-    private fun minimalPlan(frameIndex: Long): FramePlan = FramePlan(
+    private fun minimalPlan(frameIndex: Long, drawLabels: Boolean = true): FramePlan = FramePlan(
         frameIndex = frameIndex,
         camera = Camera(0.0, 0.0, 0.0, 0.0, 0.0),
+        drawLabels = drawLabels,
     )
 
     private companion object {
@@ -76,6 +94,7 @@ class FrameStructuralDiffTest {
             FramePlanSegment.STICKERS,
             FramePlanSegment.MODELS,
             FramePlanSegment.GEOMETRIES,
+            FramePlanSegment.DRAW_LABELS,
         )
 
         val CONSTANT_SHA256: Sha256Function = Sha256Function {

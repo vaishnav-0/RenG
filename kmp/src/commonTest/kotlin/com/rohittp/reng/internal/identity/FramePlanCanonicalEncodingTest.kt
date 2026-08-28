@@ -28,17 +28,19 @@ class FramePlanCanonicalEncodingTest {
     fun minimalFrameHasExactCanonicalLengthAndIdentity() {
         val encoded = encoder.encode(canonicalV1MinimalFramePlan())
 
-        assertEquals(141, encoded.identity.canonicalBytes.size)
+        assertEquals(148, encoded.identity.canonicalBytes.size)
         assertEquals(
             "524e474301010001000000080000000000000000000200000046" +
                 "00010000000800000000000000000002000000080000000000000000" +
                 "00030000000800000000000000000004000000080000000000000000" +
                 "0005000000080000000000000000000300000002000100040000000101" +
-                "000500000004000000000006000000040000000000070000000400000000",
+                "000500000004000000000006000000040000000000070000000400000000" +
+                // Tag 8, one-byte payload, boolean true: drawLabels defaults on.
+                "00080000000101",
             encoded.identity.canonicalBytes.fixtureLowercaseHex(),
         )
         assertEquals(
-            "reng-frame-v1:a143c83e1d2d0d0c2852e0cc58451491985688105e8b8f73e8ff38a8aab30d85",
+            "reng-frame-v1:64af9745146dd73c1b25f4c4fea53fc7526188c3e3fec2871ca53d7dbf0f3f5b",
             encoded.frameIdentityText(),
         )
         assertEquals(allSegments.size, encoded.segmentPayloads.size)
@@ -49,11 +51,11 @@ class FramePlanCanonicalEncodingTest {
         val encoded = encoder.encode(canonicalV1RepresentativeFramePlan())
         val expectedBytes = CANONICAL_V1_REPRESENTATIVE_HEX.canonicalFixtureHexToByteArray()
 
-        assertEquals(1_471, expectedBytes.size)
-        assertEquals(1_471, encoded.identity.canonicalBytes.size)
+        assertEquals(1_478, expectedBytes.size)
+        assertEquals(1_478, encoded.identity.canonicalBytes.size)
         assertContentEquals(expectedBytes, encoded.identity.canonicalBytes.bytes)
         assertEquals(
-            "reng-frame-v1:def1b331bc7f074dc94a650083017f171ce9f0f1455d145652ca406b043d81c0",
+            "reng-frame-v1:3bda735baccbc58063f88eb1853f14ea565d7b480d308910896b6610f0979ee5",
             encoded.frameIdentityText(),
         )
     }
@@ -69,6 +71,7 @@ class FramePlanCanonicalEncodingTest {
             FramePlanSegment.STICKERS to representativeFieldsPlan(stickers = listOf(sticker("sticker-b"))),
             FramePlanSegment.MODELS to representativeFieldsPlan(models = listOf(model("model-b", null))),
             FramePlanSegment.GEOMETRIES to representativeFieldsPlan(geometries = listOf(geometry("vertex-b"))),
+            FramePlanSegment.DRAW_LABELS to representativeFieldsPlan(drawLabels = false),
         )
         val baseEncoded = encoder.encode(base)
 
@@ -80,6 +83,31 @@ class FramePlanCanonicalEncodingTest {
             assertEquals(listOf(expectedChanged), changed)
             assertNotEquals(baseEncoded.identity, encoded.identity)
         }
+    }
+
+    /**
+     * The shape that actually discriminates. A plan carrying `drawLabels = false` round-trips through
+     * this encoder whether or not the encoder reads the field at all, because the other seven segments
+     * encode either way — so this asserts the **difference** instead: all four `drawBasemap` ×
+     * `drawLabels` pairings must reach four distinct Frame Identities. An encoder that dropped
+     * `drawLabels` would collapse them to two, and one that folded the two flags into a single byte
+     * (`&&`, `||`, or either flag alone) would collide a pair no matter which fold it chose.
+     */
+    @Test
+    fun allFourDrawBasemapAndDrawLabelsPairingsGetDistinctFrameIdentities() {
+        val pairings = listOf(false to false, false to true, true to false, true to true)
+        val digests = pairings.map { pairing ->
+            frameIdentityOf(
+                FramePlan(
+                    frameIndex = 0,
+                    camera = Camera(0.0, 0.0, 0.0, 0.0, 0.0),
+                    drawBasemap = pairing.first,
+                    drawLabels = pairing.second,
+                ),
+            ).digest
+        }
+
+        assertEquals(4, digests.distinct().size)
     }
 
     @Test
@@ -166,7 +194,7 @@ class FramePlanCanonicalEncodingTest {
 
         val after = encoder.encode(plan)
         assertEquals(before, after)
-        assertEquals(7, before.segmentPayloads.size)
+        assertEquals(8, before.segmentPayloads.size)
         assertContentEquals(CANONICAL_V1_REPRESENTATIVE_HEX.canonicalFixtureHexToByteArray(), before.identity.canonicalBytes.bytes)
     }
 
@@ -248,6 +276,7 @@ class FramePlanCanonicalEncodingTest {
         camera: Camera = Camera(1.0, 2.0, 3.0, 4.0, 5.0),
         projectionMode: ProjectionMode = ProjectionMode.MERCATOR,
         drawBasemap: Boolean = true,
+        drawLabels: Boolean = true,
         stickers: List<Sticker> = listOf(sticker("sticker-a")),
         models: List<Model> = listOf(model("model-a", null)),
         geometries: List<Geometry> = listOf(geometry("vertex-a")),
@@ -256,6 +285,7 @@ class FramePlanCanonicalEncodingTest {
         camera = camera,
         projectionMode = projectionMode,
         drawBasemap = drawBasemap,
+        drawLabels = drawLabels,
         stickers = stickers,
         models = models,
         geometries = geometries,
@@ -320,6 +350,7 @@ class FramePlanCanonicalEncodingTest {
             FramePlanSegment.STICKERS,
             FramePlanSegment.MODELS,
             FramePlanSegment.GEOMETRIES,
+            FramePlanSegment.DRAW_LABELS,
         )
     }
 }
