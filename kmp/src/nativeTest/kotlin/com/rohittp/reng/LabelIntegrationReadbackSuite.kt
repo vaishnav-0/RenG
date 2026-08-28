@@ -7,6 +7,7 @@ import com.rohittp.reng.internal.firewall.LABEL_SERIF_STACK
 import com.rohittp.reng.internal.firewall.LABEL_TILE_TEMPLATE
 import com.rohittp.reng.internal.firewall.labelGlyphRange
 import com.rohittp.reng.internal.firewall.labelGlyphUrls
+import com.rohittp.reng.internal.firewall.labelMvtBytes
 import com.rohittp.reng.internal.gl.GL_COLOR_ATTACHMENT0
 import com.rohittp.reng.internal.gl.GL_COLOR_BUFFER_BIT
 import com.rohittp.reng.internal.gl.GL_DRAW_FRAMEBUFFER
@@ -80,6 +81,7 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
         assertAStyleWithNoSymbolLayersDrawsNothing(binding, probe, target)
         assertDrawLabelsFalseDrawsNothing(binding, probe, target)
         assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
+        assertOneAggregateDiagnosticWhateverTheEngineExcluded(binding, probe, target)
     } finally {
         binding.deleteFramebuffers(1, intArrayOf(target))
     }
@@ -398,6 +400,97 @@ private const val ANCHOR_Y: Int = LABEL_INTEGRATION_PIXELS / 2
 private const val MAXIMUM_ANCHOR_OFFSET: Int = 16
 
 /**
+ * ADR 0036 end to end, and the only case in the tree that runs the *emission* rather than the shape:
+ * a style whose labels the engine excludes prepares successfully, draws no text at all, and leaves
+ * exactly one aggregate diagnostic behind.
+ *
+ * **The fixture is the ADR's own motivating fact.** Rentile's `internal/glyph/ScriptSupport.kt` is
+ * byte-identical between `0.5.0` and `0.6.0`, so Arabic still produces no glyph quads whatever the
+ * style says. The two style layers are unchanged from every other case here -- only the *feature*
+ * text differs -- so a consumer's experience is a map with its background and no text whatsoever,
+ * which until this task nothing anywhere reported.
+ *
+ * **Two layers, and that is what makes the assertion mean "once per prepare".** The engine reports
+ * complex-script exclusion once per layer per acquisition, so this frame excludes twice; a fixture
+ * with one layer would emit one diagnostic under "once per prepare" and one under "once per
+ * exclusion" alike, and could not tell them apart. Measured against a per-exclusion emitter, this
+ * case sees two.
+ *
+ * The glyph closure is empty here rather than merely unused: the assembler counts the exclusion and
+ * skips the feature before collecting its ranges, so no glyph url is composed and the fixture needs
+ * no Arabic range to answer with.
+ *
+ * The control is the same camera, the same plan and the same two layers over the ordinary Latin
+ * tile -- a frame that *does* draw its labels and must emit nothing at all, which is what stops this
+ * case passing against an emitter that fires on every prepare.
+ */
+private fun assertOneAggregateDiagnosticWhateverTheEngineExcluded(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    target: Int,
+) {
+    val excluded = RecordingSink()
+    val excludedRenderer = labelRenderer(binding, probe, TWO_LAYER_STYLE_JSON, ARABIC_MVT_BYTES, excluded)
+    val frame = try {
+        val renderTarget = excludedRenderer.mintRenderTarget(FramebufferName(target.toUInt()))
+        clearAndDraw(binding, excludedRenderer, renderTarget, target, labelPlan(0L))
+    } finally {
+        excludedRenderer.close()
+    }
+
+    assertEquals(
+        0,
+        frame.drawnCount(),
+        "an unshapeable script must draw no text at all\n" + frame.asciiMap(),
+    )
+    assertEquals(
+        listOf(
+            Diagnostic(
+                code = DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                severity = DiagnosticSeverity.INFO,
+                stage = PipelineStage.LABEL_PREPARATION,
+            ),
+        ),
+        excluded.diagnostics,
+        "one aggregate per prepare, whole and with nothing of the engine's in it",
+    )
+
+    val drawn = RecordingSink()
+    val drawnRenderer = labelRenderer(binding, probe, TWO_LAYER_STYLE_JSON, LABEL_MVT_BYTES, drawn)
+    val latin = try {
+        val renderTarget = drawnRenderer.mintRenderTarget(FramebufferName(target.toUInt()))
+        clearAndDraw(binding, drawnRenderer, renderTarget, target, labelPlan(0L))
+    } finally {
+        drawnRenderer.close()
+    }
+
+    assertTrue(latin.drawnCount() > 0, "the control frame must draw the labels this one lost")
+    assertEquals(
+        emptyList(),
+        drawn.diagnostics,
+        "a frame that lost no label content reports none: " + drawn.diagnostics,
+    )
+}
+
+/**
+ * The same two source layers with Arabic feature text. The style is unchanged, so nothing about the
+ * *declaration* differs from the drawing cases -- only what the tile says.
+ */
+private val ARABIC_MVT_BYTES: ByteArray =
+    labelMvtBytes("place" to "\u0645\u0631\u062D\u0628\u0627", "town_label" to "\u0634\u0627\u0631\u0639")
+
+/** Every RenG diagnostic this renderer emitted, in order. */
+private class RecordingSink : DiagnosticSink {
+    private val recorded: MutableList<Diagnostic> = mutableListOf()
+
+    val diagnostics: List<Diagnostic> get() = ArrayList(recorded)
+
+    override fun emit(diagnostic: Diagnostic) {
+        recorded += diagnostic
+    }
+}
+
+/**
  * The camera sits exactly at the centre of tile `(z = 4, x = 3, y = 6)`, which is where the fixture's
  * point feature lands: the MVT feature is at `(2048, 2048)` of a 4096 extent, so it is attributed to
  * the middle of whichever tile the engine was asked for, and centring the camera on that tile puts
@@ -494,12 +587,15 @@ private val LABEL_TILE_URL_PREFIX: String = LABEL_TILE_TEMPLATE.substringBefore(
  * Every tile url gets the same bytes, so each selected tile carries its own copy of the feature at
  * its own centre. Only the camera's own tile's copy is on screen; see [labelCamera].
  */
-private class IntegrationTransport(private val styleJson: String) : Transport {
+private class IntegrationTransport(
+    private val styleJson: String,
+    private val tileBytes: ByteArray = LABEL_MVT_BYTES,
+) : Transport {
     override suspend fun execute(request: TransportRequest): TransportResponse {
         val url = request.locator.value
         val body = when {
             url == INTEGRATION_STYLE_URL -> styleJson.encodeToByteArray()
-            url.startsWith(LABEL_TILE_URL_PREFIX) -> LABEL_MVT_BYTES
+            url.startsWith(LABEL_TILE_URL_PREFIX) -> tileBytes
             url == labelGlyphUrls()[0] -> SANS_RANGE_0
             url == labelGlyphUrls()[1] -> SANS_RANGE_256
             url == labelGlyphUrls()[2] -> SERIF_RANGE_0
@@ -520,13 +616,20 @@ private class IntegrationStore : Store {
     override suspend fun write(key: RawResourceKey, resource: StoredRawResource) = Unit
 }
 
-private fun labelRenderer(binding: GlBinding, probe: RenderContextProbe, styleJson: String): Renderer =
+private fun labelRenderer(
+    binding: GlBinding,
+    probe: RenderContextProbe,
+    styleJson: String,
+    tileBytes: ByteArray = LABEL_MVT_BYTES,
+    diagnosticSink: DiagnosticSink = DiagnosticSink.None,
+): Renderer =
     createRenderer(
         RendererConfiguration(
             outputPixelSize = OutputPixelSize(LABEL_INTEGRATION_PIXELS, LABEL_INTEGRATION_PIXELS),
-            transport = IntegrationTransport(styleJson),
+            transport = IntegrationTransport(styleJson, tileBytes),
             store = IntegrationStore(),
             basemapStyle = ResourceLocator(INTEGRATION_STYLE_URL),
+            diagnosticSink = diagnosticSink,
         ),
         binding,
         probe,
