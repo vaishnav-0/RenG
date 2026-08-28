@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * The iOS half of RenG's platform GL gate: `IosGlBinding` executed against a real EAGL context.
  *
  * `iosSimulatorArm64Test` runs this every time, unattended. `iosArm64` has no Gradle test task at all —
- * Kotlin/Native links a device test binary and supplies no runner — so on a device these four cases run
+ * Kotlin/Native links a device test binary and supplies no runner — so on a device these five cases run
  * only under an explicit `--ktest_filter`, and unfiltered they are killed by the watchdog along with the
  * other ~1,100 tests in the binary. Which of the two actually ran belongs in a release note.
  *
@@ -181,6 +181,36 @@ class IosGlConformanceTest {
             binding.viewport(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
             binding.scissor(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
             runBasemapReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * E-labels task 8's gate on iOS, and the third rasteriser the label pass has been measured on.
+     *
+     * **This is the case that turns E-labels task 18's prediction into a measurement.** The label
+     * suites rest on the claim that a glyph quad is small enough to survive a driver that drops the
+     * ground's 512-pixel ones -- and this target is the sharpest available test of it, because the
+     * simulator's `Apple Software Renderer` is exactly the driver that fails the large-quad probe
+     * here by 3,040 pixels and skips the basemap suite's ground case. `runLabelReadbackSuite` opens
+     * with [measureGlyphQuadRasterisation] over its own three 8-by-8 footprints at the label pass's
+     * constant clip `w` of 1, and on this driver that measures **0** pixels of disagreement against
+     * a 32-pixel boundary budget -- so the covered-row classification runs rather than skipping, and
+     * every one of its pixels is asserted.
+     *
+     * Unlike the basemap suite above, therefore, a fully green run here is the expected outcome and
+     * not a sign the probe stopped being wired in. The two claims live side by side on one driver:
+     * the ground's quads are dropped and the label pass's are not.
+     */
+    @Test fun theLabelReadbackSuitePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            println("RenG label readback driver: ${binding.getString(GL_RENDERER)}")
+            binding.viewport(0, 0, LABEL_READBACK_PIXELS, LABEL_READBACK_PIXELS)
+            binding.scissor(0, 0, LABEL_READBACK_PIXELS, LABEL_READBACK_PIXELS)
+            runLabelReadbackSuite(binding)
         } finally {
             fixture.destroy()
         }

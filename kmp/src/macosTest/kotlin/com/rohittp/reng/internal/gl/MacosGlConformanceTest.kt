@@ -117,8 +117,10 @@ class MacosGlConformanceTest {
      *
      * Run on both rasterisers because the quads here are small -- eight pixels across -- and the
      * large-quad defect that cost `0.3.0` a publication was a rasteriser property rather than a RenG
-     * one. Task 18 measures the label pass's own footprints against that probe; this pair is the
-     * cheap early signal, and it skips rather than fails when a renderer is unavailable.
+     * one. Task 18's `measureGlyphQuadRasterisation` now opens the suite and measures exactly that:
+     * **0** disagreeing pixels on each of these two drivers, and 0 again on the iOS simulator's copy
+     * of the software rasteriser, where the ground's own footprints disagree over 3,040. It skips
+     * rather than fails when a renderer is unavailable.
      */
     @Test fun theLabelReadbackSuitePassesOnBothAppleRasterisers() {
         listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
@@ -148,9 +150,12 @@ class MacosGlConformanceTest {
      * the label path composes. See `runLabelIntegrationReadbackSuite` for what each case
      * discriminates, and for the two ways a "labels drew" assertion passes for the wrong reason.
      *
-     * The default renderer only, unlike the readbacks above. Every quad here is about ten pixels
-     * across, so the large-quad rasterisation defect that cost `0.3.0` a publication does not reach
-     * it, and task 18 is what measures the label pass against that probe rather than this.
+     * The default renderer only, unlike the readbacks above -- which is worth knowing precisely,
+     * because on a hosted runner the default *is* `Apple Software Renderer`. Every quad here is about
+     * ten pixels across, and task 18's `measureGlyphQuadRasterisation` opens the suite by measuring
+     * them: 0 disagreeing pixels on `Apple M3 Max`. Where it distrusts the driver, the four cases
+     * whose evidence is a drawn label pixel skip out loud and the two that assert an empty frame
+     * still run.
      */
     @Test fun theLabelIntegrationReadbackSuitePassesOnARealAppleCoreProfileContext() {
         val fixture = CglCoreProfileContext.createOrNull(MacosGlRenderer.DEFAULT)
