@@ -155,7 +155,13 @@ class FramePlanningCoreTest {
         val hysteresisWithoutBasemap = planSuccess(
             planningCore,
             request(
-                plan = framePlan(camera = Camera(0.0, 0.0, 3.8, 0.0, 0.0), drawBasemap = false),
+                // Neither switch, so the one-instance budget below is never asked to hold: since task
+                // 8b `drawLabels` alone selects tiles, and 1024x1024 at LOD 4 is far past one instance.
+                plan = framePlan(
+                    camera = Camera(0.0, 0.0, 3.8, 0.0, 0.0),
+                    drawBasemap = false,
+                    drawLabels = false,
+                ),
                 outputPixelSize = OutputPixelSize(1024, 1024),
                 basemapStyle = ResourceLocator("style-document"),
                 maximumBasemapTileInstances = 1,
@@ -228,13 +234,17 @@ class FramePlanningCoreTest {
     @Test
     fun suppressedBasemapPlansNoFootprintTileBudgetOrStyleRoute() {
         val configuredStyle = ResourceLocator("style-document")
+        // (drawBasemap, drawLabels, basemapStyle). Since E-labels task 8b the style route and the tile
+        // selection are suppressed only when *neither* switch is set or no style is configured, so the
+        // first case turns both switches off; the two unconfigured cases leave `drawLabels` true to
+        // show that an absent style suppresses them on its own, whatever the plan asks to draw.
         val cases = listOf(
-            false to configuredStyle,
-            true to null,
-            false to null,
+            Triple(false, false, configuredStyle),
+            Triple(true, true, null),
+            Triple(false, true, null),
         )
 
-        for ((drawBasemap, basemapStyle) in cases) {
+        for ((drawBasemap, drawLabels, basemapStyle) in cases) {
             val resolver = RecordingPrivateKeyResolver()
             val planned = planSuccess(
                 planningCore(resolver),
@@ -242,6 +252,7 @@ class FramePlanningCoreTest {
                     plan = framePlan(
                         camera = Camera(0.0, 0.0, 3.8, 0.0, 0.0),
                         drawBasemap = drawBasemap,
+                        drawLabels = drawLabels,
                         stickers = listOf(sticker("suppressed-sticker")),
                     ),
                     outputPixelSize = OutputPixelSize(1024, 1024),
@@ -263,6 +274,73 @@ class FramePlanningCoreTest {
                 resolver.calls,
             )
         }
+    }
+
+    /**
+     * E-labels task 8b, at the traversal. Labels come *from* the style, so the style route is led by
+     * either draw switch — a `drawBasemap = false, drawLabels = true` frame that traverses no style has
+     * nothing to plan labels out of, and E7 declares that pairing legal.
+     *
+     * **Both flags equal proves nothing here.** `true/true` traverses the style today and `false/false`
+     * traverses none today; only the two mixed pairings separate the split guard from the unsplit one,
+     * so both are asserted, and `true/false` is asserted to produce byte-for-byte the traversal
+     * [activeBasemapPlansItsExactTileBudgetAndLeadsTraversalWithTheStyle] already pins for `true/true`.
+     *
+     * The tile selection is asserted alongside the traversal in the same plan rather than in a separate
+     * case, because [PlannedFrameCore] requires a traversed style to come with one: splitting only one
+     * of the two guards does not produce a half-working frame, it produces an `IllegalArgumentException`
+     * out of the planner — which this test would then report as a failure rather than as a pass.
+     */
+    @Test
+    fun eitherDrawSwitchLeadsTheTraversalWithTheStyleAndOnlyNeitherOmitsIt() {
+        val style = ResourceLocator("style-document")
+        val expectedTraversal = listOf(
+            expectedExternal("style-document", ResourceClass.BASEMAP_STYLE),
+            expectedExternal("labels-sticker", ResourceClass.STICKER_IMAGE),
+        )
+
+        fun plannedFor(drawBasemap: Boolean, drawLabels: Boolean): PlannedFrameCore = planSuccess(
+            planningCore(RecordingPrivateKeyResolver()),
+            request(
+                plan = framePlan(
+                    camera = Camera(0.0, 0.0, 3.8, 0.0, 0.0),
+                    drawBasemap = drawBasemap,
+                    drawLabels = drawLabels,
+                    stickers = listOf(sticker("labels-sticker")),
+                ),
+                outputPixelSize = OutputPixelSize(1024, 1024),
+                basemapStyle = style,
+                maximumBasemapTileInstances = 512,
+            ),
+        )
+
+        val basemapOnly = plannedFor(drawBasemap = true, drawLabels = false)
+        val labelsOnly = plannedFor(drawBasemap = false, drawLabels = true)
+        val neither = plannedFor(drawBasemap = false, drawLabels = false)
+
+        assertEquals(
+            expectedTraversal,
+            basemapOnly.staticResourceTraversal,
+            "drawLabels = false must not take the style away from a frame that draws the basemap",
+        )
+        assertNotNull(basemapOnly.spatialPlan.tileSelection)
+
+        assertEquals(
+            expectedTraversal,
+            labelsOnly.staticResourceTraversal,
+            "labels alone must still acquire the style, because the labels are in it",
+        )
+        assertNotNull(
+            labelsOnly.spatialPlan.tileSelection,
+            "and still select the tiles the label handover is given",
+        )
+
+        assertEquals(
+            listOf(expectedExternal("labels-sticker", ResourceClass.STICKER_IMAGE)),
+            neither.staticResourceTraversal,
+            "a frame that asks for neither must acquire no style at all",
+        )
+        assertNull(neither.spatialPlan.tileSelection)
     }
 
     @Test
@@ -873,6 +951,7 @@ class FramePlanningCoreTest {
         camera: Camera = Camera(0.0, 0.0, 0.0, 0.0, 0.0),
         projectionMode: ProjectionMode = ProjectionMode.MERCATOR,
         drawBasemap: Boolean = true,
+        drawLabels: Boolean = true,
         stickers: List<Sticker> = emptyList(),
         models: List<Model> = emptyList(),
         geometries: List<Geometry> = emptyList(),
@@ -881,6 +960,7 @@ class FramePlanningCoreTest {
         camera = camera,
         projectionMode = projectionMode,
         drawBasemap = drawBasemap,
+        drawLabels = drawLabels,
         stickers = stickers,
         models = models,
         geometries = geometries,

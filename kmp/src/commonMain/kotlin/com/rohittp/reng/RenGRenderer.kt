@@ -491,8 +491,10 @@ internal class RenGRenderer(
 
     /**
      * The compiled basemap style of the **most recently prepared frame**, or `null` when that frame drew
-     * no basemap (or when no preparation has succeeded yet). Cleared rather than left standing on a
-     * `drawBasemap = false` frame, so that a reader never has to cross-check the plan to know whether
+     * neither the basemap nor its labels (or when no preparation has succeeded yet). Since E-labels task
+     * 8b a `drawBasemap = false, drawLabels = true` frame holds its style here too: labels come from the
+     * style, so that pairing acquires and compiles one. Cleared rather than left standing on a frame that
+     * asked for neither, so that a reader never has to cross-check the plan to know whether
      * this belongs to the frame in front of it — "the last style compiled" is a subtly different claim
      * and would be a trap for Cycle E-C3, which consumes this. Nothing draws with it yet.
      *
@@ -594,15 +596,26 @@ internal class RenGRenderer(
                 geometryTextureReferencesByGeometry.flatten().map { it.second }
             // Post-world-copy-dedup by construction: `canonicalResources` is what BasemapTileSelector
             // emits separately from `instances` precisely so N visible copies of one tile are one
-            // acquisition, one engine render and one identity. It is non-null exactly when the plan draws
-            // a basemap and a style is configured (planMercatorSpatial), which is also exactly when
-            // `styleReference` is non-null.
-            val canonicalTiles = planned.spatialPlan.tileSelection?.canonicalResources.orEmpty()
+            // acquisition, one engine render and one identity. Since E-labels task 8b the selection is
+            // non-null whenever the plan draws a basemap *or* its labels and a style is configured
+            // (planMercatorSpatial), which is also exactly when `styleReference` is non-null.
+            //
+            // **This is the ground draw's own gate, and the only one.** These are the tiles the engine
+            // rasterizes into the PNGs the ground is textured from, so a frame that draws no basemap
+            // hands over none: `renderBasemapTiles` is skipped, `basemapStyleDigest` stays null, and
+            // `groundInstances` therefore returns empty below. `drawLabels` deliberately does not widen
+            // it -- the label handover takes the canonical tiles from the spatial plan and fetches its
+            // own vector tiles through the engine, and nothing about a label needs the ground's raster.
+            val groundCanonicalTiles = if (plan.drawBasemap) {
+                planned.spatialPlan.tileSelection?.canonicalResources.orEmpty()
+            } else {
+                emptyList()
+            }
             val acquired = acquireFrameResources(
                 styleReference = styleReference,
                 imageReferences = imageReferences,
                 modelGlbReferences = modelGlbReferences,
-                canonicalTiles = canonicalTiles,
+                canonicalTiles = groundCanonicalTiles,
                 accessMode = accessMode,
             )
             val decodedByKey = acquired.decodedImagesByKey
@@ -909,8 +922,9 @@ internal class RenGRenderer(
                 // Read back rather than taken from the compile action: on a RESIDENT-provenance frame
                 // the pure core emits no CompileBasemapStyle at all, so there is no action to take it
                 // from. The host retains the compilation across invocations, so this is the one place
-                // the frame's style is obtainable on every frame alike. A frame that drew no basemap
-                // clears it, so this always describes the frame just prepared.
+                // the frame's style is obtainable on every frame alike. A frame that traversed no style
+                // -- since E-labels task 8b, one that drew neither the basemap nor its labels -- clears
+                // it, so this always describes the frame just prepared.
                 // Asked for by content, not by key alone: a compilation whose visibility install never
                 // ran -- the style's own Store write failing is enough -- would otherwise be handed back
                 // here for bytes that are not resident, and paired with routes renderBasemapTiles derives
