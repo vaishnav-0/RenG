@@ -44,12 +44,13 @@ import kotlin.math.sin
  * comment exists because a reader who knows the house rule will otherwise read the `continue` in
  * [placeLabels] as a bug.
  *
- * **Scope.** Point placement only. Line-placed candidates are passed over untouched for task 11 --
- * Rentile lays every placement mode's glyphs out as one horizontal row, so drawing a `LINE`
- * candidate here would put a road name in a horizontal block at its anchor, which is a wrong picture
- * rather than a missing one. Icons are task 12's and fade is task 13's; `zOrder` and `avoidEdges`
- * are carried by the engine and not yet honoured here, which is recorded in the cycle's ledger
- * rather than hidden.
+ * **Scope.** This file owns point placement, priority and collision; [layOutLineLabels] owns the
+ * other two placement modes and hands back the same [PlacedLabel]s, which then take exactly the same
+ * route through the index below. A line candidate yields *several* of them -- one per repeat along
+ * the line -- and two repeats of one road name are as capable of colliding with each other as two
+ * different labels are, which is why the loop iterates a list rather than an optional. Icons are
+ * task 12's and fade is task 13's; `zOrder` and `avoidEdges` are carried by the engine and not yet
+ * honoured here, which is recorded in the cycle's ledger rather than hidden.
  */
 internal fun placeLabels(
     camera: ResolvedMercatorCamera,
@@ -68,18 +69,25 @@ internal fun placeLabels(
 
     for (candidateIndex in batch.candidates.indices.sortedByPriority(batch)) {
         val candidate = batch.candidates[candidateIndex]
-        if (candidate.placement != LabelPlacement.POINT) continue
+        val labels = when (candidate.placement) {
+            LabelPlacement.POINT ->
+                listOfNotNull(layOutPointLabel(camera, batch.atlas, candidate, candidateIndex))
 
-        val label = layOutPointLabel(camera, batch.atlas, candidate, candidateIndex) ?: continue
-        if (!label.collisionBox.intersects(viewport)) continue
+            LabelPlacement.LINE, LabelPlacement.LINE_CENTER ->
+                layOutLineLabels(camera, batch.atlas, candidate, candidateIndex)
+        }
 
-        // The drop. `never` -- and `cooperative`, see [resolvesAsNever] -- yields to anything
-        // already placed; `always` never yields. Either way the label occupies the index afterwards
-        // unless `text-ignore-placement` says it is invisible to the pass, which is the style's way
-        // of asking for a label that neither yields nor blocks.
-        if (candidate.overlap.resolvesAsNever() && index.intersectsAnything(label.collisionBox)) continue
-        if (!candidate.ignorePlacement) index.insert(label.collisionBox)
-        placed += label
+        for (label in labels) {
+            if (!label.collisionBox.intersects(viewport)) continue
+
+            // The drop. `never` -- and `cooperative`, see [resolvesAsNever] -- yields to anything
+            // already placed; `always` never yields. Either way the label occupies the index
+            // afterwards unless `text-ignore-placement` says it is invisible to the pass, which is
+            // the style's way of asking for a label that neither yields nor blocks.
+            if (candidate.overlap.resolvesAsNever() && index.intersectsAnything(label.collisionBox)) continue
+            if (!candidate.ignorePlacement) index.insert(label.collisionBox)
+            placed += label
+        }
     }
 
     // Highest priority last, so that where two labels do share pixels -- which only `always` and
@@ -94,6 +102,12 @@ internal fun placeLabels(
  * [candidateIndex] indexes [LabelCandidateBatch.candidates] and is carried rather than derived so
  * that a caller can recover the engine's own record of a placed label -- task 13's fade needs
  * exactly that, and recomputing it by identity comparison over a data class would be O(n) per label.
+ *
+ * **It is not unique across a frame.** A `line`-placed candidate repeats its label every
+ * `symbol-spacing` pixels along its source line, and every repeat is one of these carrying that one
+ * candidate's index; [anchorPixelX] and [anchorPixelY] are what distinguish them. A consumer of this
+ * list that needs a per-label identity -- fade does -- must derive it from the anchor as well as the
+ * index, or two repeats of one road name will share one identity.
  */
 internal class PlacedLabel(
     val candidateIndex: Int,
@@ -249,48 +263,33 @@ private fun layOutPointLabel(
     val sine = if (alignedToMap) sineText * cosineMap + cosineText * sineMap else sineText
 
     val quads = ArrayList<ResolvedGlyphQuad>(candidate.glyphs.size)
-    val atlasWidth = atlas.width.toFloat()
-    val atlasHeight = atlas.height.toFloat()
     var paint: ResolvedLabelPaint? = null
     for (glyph in candidate.glyphs) {
-        // A batch with no glyphs at all carries a zero-extent atlas, which is legal; a candidate
-        // that references one is not, and dividing by it would make every atlas coordinate infinite.
-        if (atlas.width <= 0 || atlas.height <= 0) return null
-        val entry = atlas.entries.getOrNull(glyph.entryIndex) ?: return null
-        val scale = glyph.scale.toFloat()
-        if (!(scale > 0.0f) || !scale.isFinite()) return null
-        if (!glyph.x.isFinite() || !glyph.y.isFinite()) return null
-
-        val localRight = glyph.x + entry.width * glyph.scale
-        val localBottom = glyph.y + entry.height * glyph.scale
-        val cornersXy = floatArrayOf(
-            (anchorX + rotatedX(glyph.x, glyph.y, cosine, sine)).toFloat(),
-            (anchorY + rotatedY(glyph.x, glyph.y, cosine, sine)).toFloat(),
-            (anchorX + rotatedX(localRight, glyph.y, cosine, sine)).toFloat(),
-            (anchorY + rotatedY(localRight, glyph.y, cosine, sine)).toFloat(),
-            (anchorX + rotatedX(localRight, localBottom, cosine, sine)).toFloat(),
-            (anchorY + rotatedY(localRight, localBottom, cosine, sine)).toFloat(),
-            (anchorX + rotatedX(glyph.x, localBottom, cosine, sine)).toFloat(),
-            (anchorY + rotatedY(glyph.x, localBottom, cosine, sine)).toFloat(),
-        )
-        if (cornersXy.any { !it.isFinite() }) return null
-
-        val u0 = entry.x / atlasWidth
-        val v0 = entry.y / atlasHeight
-        val u1 = (entry.x + entry.width) / atlasWidth
-        val v1 = (entry.y + entry.height) / atlasHeight
+        val cell = atlas.glyphCellOrNull(glyph) ?: return null
 
         // One paint per label rather than per glyph: `text-size` is a layer property, so every quad
         // of one label carries the same scale, and the pipeline reads the paint per quad anyway.
         // Re-deriving it when a scale does differ costs one allocation and keeps the seam honest.
         val existing = paint
-        paint = if (existing != null && existing.scale == scale) existing else candidate.resolvePaint(scale)
+        paint = if (existing != null && existing.scale == cell.scale) {
+            existing
+        } else {
+            candidate.resolvePaint(cell.scale)
+        }
 
-        quads += ResolvedGlyphQuad(
-            cornersXy = cornersXy,
-            cornersUv = floatArrayOf(u0, v0, u1, v0, u1, v1, u0, v1),
+        // The whole label shares one frame: its origin is the anchor, its along-label axis is the
+        // label's own rotation, and label-local x is measured from the anchor rather than from the
+        // glyph, which is [GlyphFrame.pivotLocalX] = 0.
+        quads += cell.resolveQuad(
+            frame = GlyphFrame(
+                originX = anchorX,
+                originY = anchorY,
+                axisX = cosine,
+                axisY = sine,
+                pivotLocalX = 0.0,
+            ),
             paint = paint,
-        )
+        ) ?: return null
     }
 
     val box = candidate.boundingBox
@@ -373,7 +372,7 @@ private fun SymbolOverlap.resolvesAsNever(): Boolean = this != SymbolOverlap.ALW
  * `0xAARRGGBB`, with `text-opacity` carried separately because [ResolvedLabelPaint] folds it into
  * both alphas at vertex assembly and task 13's fade multiplies into the same field.
  */
-private fun LabelCandidate.resolvePaint(scale: Float): ResolvedLabelPaint = ResolvedLabelPaint(
+internal fun LabelCandidate.resolvePaint(scale: Float): ResolvedLabelPaint = ResolvedLabelPaint(
     textColour = straightRgba(color),
     haloColour = straightRgba(haloColor),
     opacity = opacity.toFloat(),
@@ -383,7 +382,7 @@ private fun LabelCandidate.resolvePaint(scale: Float): ResolvedLabelPaint = Reso
 )
 
 /** `0xAARRGGBB` as four straight components in `[0, 1]`, in RGBA order. */
-private fun straightRgba(packed: Int): FloatArray = floatArrayOf(
+internal fun straightRgba(packed: Int): FloatArray = floatArrayOf(
     ((packed ushr 16) and BYTE_MASK) / BYTE_MAXIMUM,
     ((packed ushr 8) and BYTE_MASK) / BYTE_MAXIMUM,
     (packed and BYTE_MASK) / BYTE_MAXIMUM,
@@ -398,7 +397,7 @@ private fun straightRgba(packed: Int): FloatArray = floatArrayOf(
  * here because they reach a `FloatArray` the GPU reads. Rentile validates all of these on its own
  * side -- this is the firewall's half of that, and it drops one label rather than a frame.
  */
-private fun LabelCandidate.hasFinitePlacementInputs(): Boolean =
+internal fun LabelCandidate.hasFinitePlacementInputs(): Boolean =
     sortKey.isFinite() &&
         translateX.isFinite() && translateY.isFinite() &&
         textRotationDegrees.isFinite() &&
@@ -408,15 +407,15 @@ private fun LabelCandidate.hasFinitePlacementInputs(): Boolean =
         boundingBox.left.isFinite() && boundingBox.top.isFinite() &&
         boundingBox.right.isFinite() && boundingBox.bottom.isFinite()
 
-private fun LabelScreenBox.isFinite(): Boolean =
+internal fun LabelScreenBox.isFinite(): Boolean =
     left.isFinite() && top.isFinite() && right.isFinite() && bottom.isFinite()
 
 /** `(x, y)` turned clockwise on a y-down screen: `x cos - y sin`. */
-private fun rotatedX(x: Double, y: Double, cosine: Double, sine: Double): Double =
+internal fun rotatedX(x: Double, y: Double, cosine: Double, sine: Double): Double =
     x * cosine - y * sine
 
 /** `(x, y)` turned clockwise on a y-down screen: `x sin + y cos`. */
-private fun rotatedY(x: Double, y: Double, cosine: Double, sine: Double): Double =
+internal fun rotatedY(x: Double, y: Double, cosine: Double, sine: Double): Double =
     x * sine + y * cosine
 
 /**

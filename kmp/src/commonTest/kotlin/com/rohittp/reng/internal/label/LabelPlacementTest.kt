@@ -589,12 +589,18 @@ class LabelPlacementTest {
     }
 
     /**
-     * Line-placed candidates are passed over untouched. Rentile lays every placement mode out as one
-     * horizontal row, so placing a `LINE` candidate here would draw a road name as a horizontal block
-     * at its anchor -- a wrong picture rather than a missing one. Task 11 owns them.
+     * A line-placed candidate with **no line geometry** places nothing, while the point candidate
+     * beside it still places.
+     *
+     * Task 9 pinned this shape when line placement did not exist and every line candidate was passed
+     * over; task 11 kept the shape and gave it its real reason. A `LINE` candidate is now laid out by
+     * [layOutLineLabels], which needs the source line the engine emits alongside the anchor -- and
+     * `placementCandidate`'s line is empty, because the point cases have no use for one. What must
+     * *not* happen either way is the old wrong picture: a road name drawn as a horizontal block at
+     * its anchor, which is what placing these here with Rentile's own row layout would produce.
      */
     @Test
-    fun lineCandidatesAreLeftForLinePlacement() {
+    fun lineCandidatesWithoutTheirLineAreNotPlaced() {
         val camera = resolvedPlacementCamera()
         val placed = placeLabels(
             camera,

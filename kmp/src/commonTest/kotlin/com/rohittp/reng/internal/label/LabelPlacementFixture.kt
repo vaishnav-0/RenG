@@ -15,6 +15,7 @@ import com.rohittp.rentile.LabelGlyphAtlas
 import com.rohittp.rentile.LabelGlyphEntry
 import com.rohittp.rentile.LabelGlyphQuad
 import com.rohittp.rentile.LabelLayerStyle
+import com.rohittp.rentile.LabelLinePoint
 import com.rohittp.rentile.LabelPlacement
 import com.rohittp.rentile.SymbolAlignment
 import com.rohittp.rentile.SymbolOverlap
@@ -183,3 +184,120 @@ internal fun placementBatch(vararg candidates: LabelCandidate): LabelCandidateBa
         diagnostics = emptyList(),
     )
 }
+
+/*
+ * Fixtures for line placement.
+ *
+ * **The symmetry points of line placement are all in the *line*, not in the camera**, and every one
+ * of them is closed here rather than in the cases:
+ *
+ *  - a straight horizontal line gives every glyph the same tangent, never triggers `keepUpright` and
+ *    never reaches the bend ceiling, so a completely broken tangent produces the right picture.
+ *    [BENT_LINE] turns, and turns by more on one side of its vertex than the other;
+ *  - a line running left-to-right never exercises `keepUpright`. [BACKWARD_LINE] runs the other way;
+ *  - a symmetric arc cannot tell a tangent from a sign-flipped one, so [BENT_LINE]'s two legs have
+ *    different lengths and its turn is not bisected by its midpoint;
+ *  - a line of equal segments puts a `line-center` anchor on a vertex, which is the one position
+ *    where interpolating along a segment and snapping to the nearer vertex agree. Every line here
+ *    has unequal segments, and the walking case asserts that of the one it matters
+ *    for;
+ *  - a glyph row symmetric about its anchor makes a reversed reading order land on the same set of
+ *    pixels. [LINE_GLYPH_LOCAL_X] is irregularly spaced and extends further right of the anchor
+ *    than left of it.
+ */
+
+/**
+ * Six glyph cells with irregular gaps, spanning `[-28, +40]` about the label anchor.
+ *
+ * Neither the spacing nor the extent is symmetric, so reversing the reading order moves every glyph
+ * and changes which anchors the label fits at.
+ */
+internal val LINE_GLYPH_LOCAL_X: DoubleArray =
+    doubleArrayOf(-28.0, -17.5, -5.0, 6.5, 20.0, 31.0)
+
+/** The glyph row [LINE_GLYPH_LOCAL_X] describes, at the shared entry, cell and scale. */
+internal fun lineGlyphRow(y: Double = -13.25, scale: Double = 0.75): List<LabelGlyphQuad> =
+    LINE_GLYPH_LOCAL_X.map { x -> LabelGlyphQuad(entryIndex = 0, x = x, y = y, scale = scale) }
+
+/**
+ * A three-glyph row spanning `[-14, +18]`, short enough to fit on a run of a line broken by the
+ * camera. Irregularly spaced and off-centre for the same reason [LINE_GLYPH_LOCAL_X] is.
+ */
+internal val SHORT_LINE_GLYPH_LOCAL_X: DoubleArray = doubleArrayOf(-14.0, -3.5, 9.0)
+
+/** The glyph row [SHORT_LINE_GLYPH_LOCAL_X] describes. */
+internal fun shortLineGlyphRow(y: Double = -13.25, scale: Double = 0.75): List<LabelGlyphQuad> =
+    SHORT_LINE_GLYPH_LOCAL_X.map { x -> LabelGlyphQuad(entryIndex = 0, x = x, y = y, scale = scale) }
+
+/** Each cell's width in label-local units: the entry's own width at the row's scale. */
+internal const val LINE_GLYPH_CELL_WIDTH: Double = 12.0 * 0.75
+
+/** A long, gently irregular line running roughly west to east, for the walking cases. */
+internal val LONG_LINE: List<LabelLinePoint> = listOf(
+    LabelLinePoint(longitude = 2.30190, latitude = 48.85520),
+    LabelLinePoint(longitude = 2.30585, latitude = 48.85604),
+    LabelLinePoint(longitude = 2.31130, latitude = 48.85661),
+    LabelLinePoint(longitude = 2.31940, latitude = 48.85712),
+)
+
+/** Two legs of different lengths meeting at an asymmetric turn. */
+internal val BENT_LINE: List<LabelLinePoint> = listOf(
+    LabelLinePoint(longitude = 2.30640, latitude = 48.85410),
+    LabelLinePoint(longitude = 2.30930, latitude = 48.85690),
+    LabelLinePoint(longitude = 2.31710, latitude = 48.85742),
+)
+
+/** The same shape traversed the other way, so the screen tangent points leftward. */
+internal val BACKWARD_LINE: List<LabelLinePoint> = LONG_LINE.reversed()
+
+/** Far shorter than [LINE_GLYPH_LOCAL_X]'s row, so nothing fits on it. */
+internal val STUB_LINE: List<LabelLinePoint> = listOf(
+    LabelLinePoint(longitude = 2.30980, latitude = 48.85655),
+    LabelLinePoint(longitude = 2.31005, latitude = 48.85661),
+)
+
+/**
+ * [LONG_LINE] with a point far behind the camera spliced into the middle, so it projects to two
+ * runs with a gap that no straight segment spans.
+ */
+internal val BROKEN_LINE: List<LabelLinePoint> = listOf(
+    LONG_LINE[0],
+    LONG_LINE[1],
+    LabelLinePoint(
+        longitude = PLACEMENT_ANCHOR_BEHIND.unwrappedLongitude,
+        latitude = PLACEMENT_ANCHOR_BEHIND.latitude,
+    ),
+    LONG_LINE[2],
+    LONG_LINE[3],
+)
+
+/** One line candidate: [placementCandidate] with the line-only fields exposed. */
+@Suppress("LongParameterList")
+internal fun lineCandidate(
+    line: List<LabelLinePoint> = LONG_LINE,
+    placement: LabelPlacement = LabelPlacement.LINE,
+    symbolSpacing: Double = 250.0,
+    maxAngleDegrees: Double = 45.0,
+    keepUpright: Boolean = true,
+    padding: Double = 0.0,
+    sortKey: Double = 0.0,
+    overlap: SymbolOverlap = SymbolOverlap.NEVER,
+    glyphs: List<LabelGlyphQuad> = lineGlyphRow(),
+    translateX: Double = 0.0,
+    translateY: Double = 0.0,
+    translateAlignment: SymbolAlignment = SymbolAlignment.VIEWPORT,
+): LabelCandidate = placementCandidate(
+    placement = placement,
+    glyphs = glyphs,
+    padding = padding,
+    sortKey = sortKey,
+    overlap = overlap,
+    translateX = translateX,
+    translateY = translateY,
+    translateAlignment = translateAlignment,
+).copy(
+    line = line,
+    symbolSpacing = symbolSpacing,
+    maxAngleDegrees = maxAngleDegrees,
+    keepUpright = keepUpright,
+)
