@@ -103,18 +103,46 @@ internal fun placeLabels(
  * that a caller can recover the engine's own record of a placed label -- task 13's fade needs
  * exactly that, and recomputing it by identity comparison over a data class would be O(n) per label.
  *
- * **It is not unique across a frame.** A `line`-placed candidate repeats its label every
- * `symbol-spacing` pixels along its source line, and every repeat is one of these carrying that one
- * candidate's index; [anchorPixelX] and [anchorPixelY] are what distinguish them. A consumer of this
- * list that needs a per-label identity -- fade does -- must derive it from the anchor as well as the
- * index, or two repeats of one road name will share one identity.
+ * **It is not unique across a frame, and [lineRepeat] rather than the anchor is what tells the
+ * repeats apart.** A `line`-placed candidate repeats its label every `symbol-spacing` pixels along
+ * its source line, and every repeat is one of these carrying that one candidate's index.
+ * [anchorPixelX] and [anchorPixelY] do separate them *within* this frame, and they are still the
+ * wrong thing for a consumer to reach for: they are where the label landed under **this** camera, so
+ * anything keyed on them is keyed on a number that changes the moment the map moves. A consumer that
+ * needs a per-label identity -- `deriveLabelIdentity` does -- takes [candidateIndex] together with
+ * [lineRepeat], which says which repeat this is in terms no camera move rewrites.
  */
 internal class PlacedLabel(
     val candidateIndex: Int,
+    val lineRepeat: LineRepeat?,
     val anchorPixelX: Double,
     val anchorPixelY: Double,
     val collisionBox: LabelScreenBox,
     val quads: List<ResolvedGlyphQuad>,
+)
+
+/**
+ * Which repeat of one `line`-placed candidate a [PlacedLabel] is, in the parameter the walk itself
+ * steps in rather than in the pixels the walk produced.
+ *
+ * `null` means the candidate placed exactly **one** instance, so there is nothing to tell apart:
+ * every point label, and every `line-center` one. `line-center` is the arm worth stating outright,
+ * because it does have an along-line distance and that distance must not be carried -- its single
+ * anchor sits at half the *projected* run's length, which is a different number every time the
+ * camera zooms or pitches, so recording it would record a camera fact under the name of a feature
+ * one.
+ *
+ * [anchorDistancePixels] is half a `symbol-spacing` plus one spacing per repeat before it, which is
+ * a function of the candidate's own spacing and of *which* repeat this is and of nothing else. The
+ * camera decides how many repeats a run has room for; it does not decide the distance at which
+ * repeat *k* sits. [runIndex] is the run that distance is measured along, because a line broken by
+ * the near plane restarts its arc length at every run -- so distance alone would put the first
+ * repeat of run 0 and the first repeat of run 1 at the same number and collapse two labels that are
+ * nowhere near each other on the road.
+ */
+internal class LineRepeat(
+    val runIndex: Int,
+    val anchorDistancePixels: Double,
 )
 
 /**
@@ -323,6 +351,8 @@ private fun layOutPointLabel(
 
     return PlacedLabel(
         candidateIndex = candidateIndex,
+        // A point candidate places one label, so it has no repeat to be distinguished from.
+        lineRepeat = null,
         anchorPixelX = anchorX,
         anchorPixelY = anchorY,
         collisionBox = collisionBox,

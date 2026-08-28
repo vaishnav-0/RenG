@@ -26,6 +26,26 @@ import com.rohittp.rentile.LabelCandidateBatch
  *    the other's opacity. That reads as a rendering bug rather than an identity bug, and it only
  *    shows up under a moving camera.
  *
+ * **The rule admits one thing about a line label that looks like geometry and is not: which repeat
+ * along the road this is.** A `line`-placed candidate is one feature that draws its name several
+ * times, once every `symbol-spacing`, and every one of those repeats carries the same candidate --
+ * the same layer, the same tile, the same anchor, the same letters. Under the fields above they are
+ * one label, which makes two instances of a road name share one opacity and fade as if they were
+ * one. They are not one label: "Rue de Rivoli, 250 pixels along" and "Rue de Rivoli, 750 pixels
+ * along" are two things a reader sees at once and can watch appear separately, so *where on the
+ * feature the instance sits* is part of what it is, and [LineRepeat] is the field set's name for it.
+ *
+ * **The screen anchor is the tempting way to say the same thing and is the "too fine" failure
+ * exactly.** `PlacedLabel.anchorPixelX` and `anchorPixelY` are what separate the repeats in the
+ * placed list today, and they are the pixel the label landed on under one camera: pan by one pixel
+ * and every one of them changes, so an identity built on them matches nothing in the next frame,
+ * every label restarts its fade every frame, and the whole feature goes silently inert. The arc
+ * distance is the same statement made in the units the walk itself steps in -- half a spacing in,
+ * one spacing per repeat -- and the camera decides how many repeats fit on a run without deciding
+ * the distance at which repeat *k* sits. That is the whole difference between the two, and it is
+ * the difference between *where the instance sits on the road* and *where the road is on the
+ * screen*.
+ *
  * **`PlacedLabel.candidateIndex` is the one candidate for an identity that has to be refused, and
  * the refusal is the whole point of this file.** It is carried precisely so fade can find the
  * engine's own record of a placed label without an O(n) search, and it does that job here -- but it
@@ -59,17 +79,26 @@ internal class LabelIdentity internal constructor(private val canonicalBytes: Ca
 }
 
 /**
- * The identity of [candidateIndex]'s label within [batch], or `null` when this batch cannot describe
- * one.
+ * The identity of one placed label: [candidateIndex]'s candidate within [batch], as [lineRepeat]
+ * places it, or `null` when this batch cannot describe one.
+ *
+ * **The two arguments after [batch] are `PlacedLabel`'s two identifying fields and deliberately not
+ * the label itself.** Handing the whole `PlacedLabel` in would put `anchorPixelX` and `anchorPixelY`
+ * within reach of a derivation whose entire job is to not use them; passing what a label *is*
+ * leaves the pixels it landed on outside the function.
  *
  * `null` is never a frame failure and never a dropped label: a label with no identity is drawn at
  * full opacity, which is exactly what every label did before fade existed. It is returned for the
  * three shapes Rentile's own assembler cannot produce but its types still admit -- a candidate index
  * outside the batch, a `layerStyleIndex` naming no layer, and a glyph naming no atlas entry -- plus
- * a non-finite anchor, which the canonical encoding refuses by design. [placeLabels] takes the same
- * position for the same reason.
+ * a non-finite anchor or arc distance, which the canonical encoding refuses by design. [placeLabels]
+ * takes the same position for the same reason.
  */
-internal fun deriveLabelIdentity(batch: LabelCandidateBatch, candidateIndex: Int): LabelIdentity? {
+internal fun deriveLabelIdentity(
+    batch: LabelCandidateBatch,
+    candidateIndex: Int,
+    lineRepeat: LineRepeat?,
+): LabelIdentity? {
     val candidate = batch.candidates.getOrNull(candidateIndex) ?: return null
     val layerId = batch.layerStyles.getOrNull(candidate.layerStyleIndex)?.layerId ?: return null
     // `exactUtf8` refuses an unpaired surrogate and `binary64` refuses a non-finite Double. Both are
@@ -77,6 +106,7 @@ internal fun deriveLabelIdentity(batch: LabelCandidateBatch, candidateIndex: Int
     // rather than caught: a derivation that throws is a frame that fails over a cosmetic ease.
     if (!containsOnlyUnicodeScalars(layerId)) return null
     if (!candidate.latitude.isFinite() || !candidate.longitude.isFinite()) return null
+    if (lineRepeat != null && !lineRepeat.anchorDistancePixels.isFinite()) return null
     val codepoints = candidate.codepoints(batch) ?: return null
 
     return LabelIdentity(
@@ -88,6 +118,13 @@ internal fun deriveLabelIdentity(batch: LabelCandidateBatch, candidateIndex: Int
             field(LATITUDE_TAG, CanonicalBinary.binary64(candidate.latitude))
             field(LONGITUDE_TAG, CanonicalBinary.binary64(candidate.longitude))
             field(CODEPOINTS_TAG, CanonicalBinary.list(codepoints))
+            // Omitted entirely rather than written as a sentinel when the candidate placed one
+            // instance, so a point label and a `line-center` one encode exactly the bytes they did
+            // before repeats had a field at all.
+            if (lineRepeat != null) {
+                field(LINE_RUN_INDEX_TAG, CanonicalBinary.u64(lineRepeat.runIndex.toLong()))
+                field(LINE_ANCHOR_DISTANCE_TAG, CanonicalBinary.binary64(lineRepeat.anchorDistancePixels))
+            }
         },
     )
 }
@@ -120,3 +157,13 @@ private const val SOURCE_TILE_Y_TAG: Int = 4
 private const val LATITUDE_TAG: Int = 5
 private const val LONGITUDE_TAG: Int = 6
 private const val CODEPOINTS_TAG: Int = 7
+
+/**
+ * `u64` rather than `i64`: unlike the tile coordinates and the codepoints above, the run index is a
+ * position in a list RenG built itself, so its non-negativity is RenG's own invariant and the
+ * encoding's `require` is a real check on it rather than a way to fail a frame over one of Rentile's
+ * unvalidated `Int`s.
+ */
+private const val LINE_RUN_INDEX_TAG: Int = 8
+
+private const val LINE_ANCHOR_DISTANCE_TAG: Int = 9

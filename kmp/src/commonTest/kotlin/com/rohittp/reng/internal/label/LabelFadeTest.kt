@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.label
 
+import com.rohittp.reng.Camera
 import com.rohittp.reng.internal.projection.GeographicPosition
 import com.rohittp.rentile.LabelCandidate
 import com.rohittp.rentile.LabelCandidateBatch
@@ -9,6 +10,7 @@ import com.rohittp.rentile.LabelGlyphQuad
 import com.rohittp.rentile.LabelLayerStyle
 import com.rohittp.rentile.SymbolOverlap
 import com.rohittp.rentile.TileId
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -69,7 +71,10 @@ class LabelFadeTest {
             contentKey = "frame-two",
         )
 
-        assertEquals(deriveLabelIdentity(firstFrame, 1), deriveLabelIdentity(secondFrame, 0))
+        assertEquals(
+            deriveLabelIdentity(firstFrame, 1, lineRepeat = null),
+            deriveLabelIdentity(secondFrame, 0, lineRepeat = null),
+        )
     }
 
     @Test
@@ -98,16 +103,18 @@ class LabelFadeTest {
             fadeBatch(placementCandidate(glyphs = listOf(glyphOf(0), glyphOf(0)))),
         )
 
-        val identities = variants.map { assertNotNull(deriveLabelIdentity(it, 0)) }
+        val identities = variants.map { assertNotNull(deriveLabelIdentity(it, 0, lineRepeat = null)) }
         assertEquals(variants.size, identities.toSet().size)
     }
 
     @Test
     fun identityIsAbsentRatherThanApproximateWhenTheBatchCannotDescribeOne() {
         val batch = fadeBatch(placementCandidate())
-        assertNull(deriveLabelIdentity(batch, 1))
-        assertNull(deriveLabelIdentity(fadeBatch(placementCandidate(layerStyleIndex = 4)), 0))
-        assertNull(deriveLabelIdentity(fadeBatch(placementCandidate(glyphs = listOf(glyphOf(7)))), 0))
+        assertNull(deriveLabelIdentity(batch, 1, lineRepeat = null))
+        val noLayer = fadeBatch(placementCandidate(layerStyleIndex = 4))
+        assertNull(deriveLabelIdentity(noLayer, 0, lineRepeat = null))
+        val noGlyph = fadeBatch(placementCandidate(glyphs = listOf(glyphOf(7))))
+        assertNull(deriveLabelIdentity(noGlyph, 0, lineRepeat = null))
         assertNull(
             deriveLabelIdentity(
                 fadeBatch(
@@ -120,8 +127,102 @@ class LabelFadeTest {
                     ),
                 ),
                 0,
+                lineRepeat = null,
             ),
         )
+        // The repeat's own distance is checked on the same terms as the anchor: `binary64` refuses a
+        // non-finite Double by design, and a derivation that throws is a frame failed over a fade.
+        assertNull(
+            deriveLabelIdentity(
+                batch,
+                0,
+                lineRepeat = LineRepeat(runIndex = 0, anchorDistancePixels = Double.NaN),
+            ),
+        )
+    }
+
+    @Test
+    fun everyRepeatOfOneLineCandidateGetsItsOwnIdentity() {
+        // The seam between line placement and fade. One `line` candidate places its name several
+        // times along its own road, and every repeat carries that one candidate's index -- so an
+        // identity derived from the candidate alone makes them one label sharing one opacity.
+        val camera = resolvedPlacementCamera()
+        val batch = fadeBatch(
+            lineCandidate(
+                line = BROKEN_LINE,
+                symbolSpacing = 30.0,
+                glyphs = shortLineGlyphRow(),
+                // Repeats 30 pixels apart overlap, and this case is about identity rather than
+                // about collision, so every one of them is allowed to keep its place.
+                overlap = SymbolOverlap.ALWAYS,
+            ),
+        )
+        val placed = placeLabels(camera, batch)
+
+        // **The fixture is the case.** A line yielding one repeat cannot tell a per-repeat identity
+        // from a fixed one, so this one yields three; and neither half of `LineRepeat` separates
+        // all three by itself, which is what makes the assertion below evidence for both. Two of
+        // the three sit on one run, and two of the three -- a different two -- sit at one arc
+        // distance, because `BROKEN_LINE` restarts its arc length at the near-plane gap.
+        assertEquals(3, placed.size)
+        assertTrue(placed.all { it.candidateIndex == 0 }, "all three are the one candidate")
+        val repeats = placed.map { assertNotNull(it.lineRepeat) }
+        assertEquals(2, repeats.map { it.runIndex }.toSet().size, "two of the three share a run")
+        assertEquals(
+            2,
+            repeats.map { it.anchorDistancePixels }.toSet().size,
+            "two of the three share an arc distance",
+        )
+
+        val identities = placed.map {
+            assertNotNull(deriveLabelIdentity(batch, it.candidateIndex, it.lineRepeat))
+        }
+        assertEquals(3, identities.toSet().size, "three repeats, three identities")
+        // And through the fade, where the collapse would be one entry advanced three times.
+        assertEquals(3, advanceLabelFade(LabelFadeState.EMPTY, batch, placed).nextState.entryCount)
+    }
+
+    @Test
+    fun aRepeatKeepsOneIdentityAndOneFadeWhileTheCameraMoves() {
+        // The other half of the pair, and the half that fails invisibly: an identity built on
+        // `anchorPixelX`/`anchorPixelY` separates the repeats exactly as the case above wants and
+        // then matches nothing in the next frame, so every label restarts its fade on every frame
+        // and fade goes inert with every opacity still in [0, 1]. Same batch, two cameras.
+        val batch = fadeBatch(
+            lineCandidate(
+                symbolSpacing = 60.0,
+                glyphs = shortLineGlyphRow(),
+                overlap = SymbolOverlap.ALWAYS,
+            ),
+        )
+        val before = placeLabels(resolvedPlacementCamera(), batch)
+        val after = placeLabels(resolvedPlacementCamera(pannedPlacementCamera()), batch)
+
+        // Without this the camera might as well not have moved and every reading below is trivial.
+        assertEquals(REPEATS_ON_LONG_LINE, before.size, "the fixture repeats")
+        assertEquals(before.size, after.size, "the pan keeps the same repeats")
+        for (index in before.indices) {
+            assertTrue(
+                abs(before[index].anchorPixelX - after[index].anchorPixelX) > MOVED_PIXELS &&
+                    abs(before[index].anchorPixelY - after[index].anchorPixelY) > MOVED_PIXELS,
+                "repeat $index stayed at ${before[index].anchorPixelX}, ${before[index].anchorPixelY}",
+            )
+        }
+
+        assertEquals(
+            before.map { deriveLabelIdentity(batch, it.candidateIndex, it.lineRepeat) },
+            after.map { deriveLabelIdentity(batch, it.candidateIndex, it.lineRepeat) },
+        )
+
+        // Read through the fade at a step where a carried opacity and a restarted one differ: three
+        // frames before the pan and one after it, so an identity that survived the camera move
+        // reads 0.4 and one that did not reads 0.1.
+        var state = LabelFadeState.EMPTY
+        repeat(3) { state = advanceLabelFade(state, batch, before).nextState }
+        val moved = advanceLabelFade(state, batch, after)
+
+        assertEquals(List(before.size) { 0.4f }, moved.labels.map { it.opacity })
+        assertEquals(before.size, moved.nextState.entryCount)
     }
 
     @Test
@@ -184,7 +285,7 @@ class LabelFadeTest {
         val camera = resolvedPlacementCamera()
         val batch = fadeBatch(placementCandidate())
         val placed = placeLabels(camera, batch)
-        val identity = assertNotNull(deriveLabelIdentity(batch, 0))
+        val identity = assertNotNull(deriveLabelIdentity(batch, 0, lineRepeat = null))
         var state = LabelFadeState.EMPTY
         repeat(3) { state = advanceLabelFade(state, batch, placed).nextState }
 
@@ -357,7 +458,7 @@ class LabelFadeTest {
         val camera = resolvedPlacementCamera()
         val batch = fadeBatch(placementCandidate())
         val placed = placeLabels(camera, batch)
-        val identity = assertNotNull(deriveLabelIdentity(batch, 0))
+        val identity = assertNotNull(deriveLabelIdentity(batch, 0, lineRepeat = null))
         var state = LabelFadeState.EMPTY
         repeat(6) { state = advanceLabelFade(state, batch, placed).nextState }
         assertEquals(6, state.stepOf(identity))
@@ -370,6 +471,30 @@ class LabelFadeTest {
 }
 
 private const val FRAMES_SWEPT: Int = 200
+
+/** `LONG_LINE`'s 175.754 screen pixels hold three repeats at a 60-pixel spacing: 30, 90 and 150. */
+private const val REPEATS_ON_LONG_LINE: Int = 3
+
+/** Well above the `Float` corner rounding the anchors are recovered through, and far below the pan. */
+private const val MOVED_PIXELS: Double = 1.0
+
+/** How far east [pannedPlacementCamera] moves: enough to move every anchor, too little to reshape a run. */
+private const val PAN_DEGREES: Double = 0.000_4
+
+/**
+ * [placementCamera] panned east, derived from it rather than restated so that a fixture edit reaches
+ * both frames of the case that uses it.
+ */
+private fun pannedPlacementCamera(): Camera {
+    val base = placementCamera()
+    return Camera(
+        latitude = base.latitude,
+        unwrappedLongitude = base.unwrappedLongitude + PAN_DEGREES,
+        zoom = base.zoom,
+        bearing = base.bearing,
+        pitch = base.pitch,
+    )
+}
 
 /** The second anchor, far enough from [PLACEMENT_ANCHOR] that no box of one meets a box of the other. */
 private val OTHER_ANCHOR: GeographicPosition =
