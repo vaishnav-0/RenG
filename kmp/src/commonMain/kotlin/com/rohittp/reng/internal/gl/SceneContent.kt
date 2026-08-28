@@ -253,12 +253,12 @@ internal class Scene(
  * `SceneContentTest.exactlyOnePhaseWritesDepthItIsTheModelPassAndTheMaskIsOffAgainOnTheWayOut`:
  * exactly one phase in a whole scene enables depth writes and it is the model pass. The label pass
  * enables none, and the test off is genuinely *needed* here rather than merely restated — phase 4
- * leaves `GL_DEPTH_TEST`
- * enabled behind it, unlike the depth mask, which the model pass already turned off on its way out.
+ * leaves `GL_DEPTH_TEST` enabled behind it, unlike the depth mask, which the model pass already
+ * turned off on its way out.
  *
  * **The phase order is a relative order, not a claim that any earlier phase produced pixels.** The
- * label pass is orthogonal to the basemap (`FramePlan.drawLabels` against `FramePlan.drawBasemap`), so
- * phase 5 runs on a frame with no ground at all — which is why [scene]'s label list joins the
+ * label pass is orthogonal to the basemap (`FramePlan.drawLabels` against `FramePlan.drawBasemap`),
+ * so phase 5 runs on a frame with no ground at all — which is why [Scene.labels] joins the
  * nothing-to-draw guard below rather than being reachable only past a ground tile.
  *
  * **Which regime each drawn thing is in, and its order within its own type, is
@@ -457,14 +457,14 @@ internal class SceneContent(
      * plan rather than of the label content. A fourth list drawn as its own phase has exactly one
      * batch by construction.
      *
-     * The depth state belongs to [beginLabelPass], not here, which is the one departure from how
-     * phases 1, 2 and 4 above are written: those set `enable(GL_DEPTH_TEST)` / `depthMask(false)` at
-     * this level because [drawGeometry] runs a consumer's shader pair and establishes no state of its
-     * own. The label pass owns a program RenG wrote, so it owns its own state — including the
-     * `disable(GL_DEPTH_TEST)` that phase 4 genuinely leaves it needing, and including writing no
-     * depth at all, so nothing about ADR 0027's billboard fix or ADR 0030's exit mask moves.
-     * [drawScreenStack] then disables the test again for itself, idempotently, exactly as it did
-     * before this phase existed.
+     * The depth state belongs to [beginLabelPass] rather than to this method, which follows phases 3
+     * and 4 — [drawModels] and [drawStickers] each own their own — rather than phases 1 and 2, whose
+     * depth state is set at this level because [drawGeometry] runs a consumer's shader pair and
+     * establishes none of its own. The label pass runs a program RenG wrote, so it owns its state:
+     * the `disable(GL_DEPTH_TEST)` that phase 4 genuinely leaves it needing (`drawStickers` enables
+     * the test for itself), and no depth write at all, so nothing about ADR 0027's billboard fix or
+     * ADR 0030's exit mask moves. [drawScreenStack] then disables the test again for itself,
+     * idempotently, exactly as it did before this phase existed.
      */
     private fun drawLabelPhase(binding: GlBinding) {
         if (scene.labels.isEmpty()) return

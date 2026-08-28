@@ -1384,10 +1384,10 @@ internal class RenGRenderer(
             geometries = sceneGeometries,
             groundTiles = sceneGroundTiles,
             models = sceneModels,
-            // ADR 0034's fourth scene list, empty until E-labels task 9's placement pass fills it.
-            // It is deliberately not derived here: collision resolves during `prepare()` and never
-            // during `draw()`, so this list arrives on the prepared frame rather than being computed
-            // at this call site.
+            // `labels` -- ADR 0034's fourth scene list -- is left at its empty default until
+            // E-labels task 9's placement pass fills it, and it will arrive on the prepared frame
+            // rather than be derived at this call site: collision resolves during `prepare()` and
+            // never during `draw()`.
             mapOrder = frame.mapOrder,
             screenOrder = frame.screenOrder,
         )
