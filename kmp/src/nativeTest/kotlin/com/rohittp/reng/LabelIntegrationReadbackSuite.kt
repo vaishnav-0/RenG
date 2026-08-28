@@ -90,10 +90,10 @@ import kotlinx.coroutines.runBlocking
  * genuinely asymmetric arc -- a straight horizontal line is the symmetry point of the whole feature
  * and passes with the tangent computation deleted -- and requires every glyph pixel to sit on it.
  *
- * **The driver is measured before eight of these ten cases are believed.** [measureGlyphQuadRasterisation]
+ * **The driver is measured before nine of these eleven cases are believed.** [measureGlyphQuadRasterisation]
  * draws the two labels' own glyph cells at the label pass's constant clip `w` of 1 and counts the
  * pixels that disagree with the analytic rectangle -- 0 on `Apple M3 Max`. Where it distrusts a
- * driver, the eight cases whose evidence is a drawn label pixel skip out loud and the two that
+ * driver, the nine cases whose evidence is a drawn label pixel skip out loud and the two that
  * require an empty frame still run. **The guard is why those two are not written behind it**: Cycle
  * H's most recent catch is that a guard which fires first masks every rule beneath it, so the cases
  * that need no rasterised glyph deliberately sit outside it. That matters here more than the printed
@@ -113,10 +113,11 @@ import kotlinx.coroutines.runBlocking
  * thing in this cycle that *looks* at a frame.
  *
  * Not covered either: the ground beneath the labels, which every frame here draws
- * `drawBasemap = false` for except the one case that needs it; icons, which nothing in RenG draws at
- * all; complex scripts, which produce no glyph quads to assert about; occlusion of labels by 3D
- * scene content, which does not exist; and any real mobile GPU, since ADR 0033 runs the mobile
- * targets in simulation only and this suite's only home is `macosArm64Test`.
+ * `drawBasemap = false` for except the one case that needs it; `icon-text-fit`, `icon-halo-*` and
+ * `icon-pitch-alignment`, none of which RenG honours; complex scripts, which produce no glyph quads
+ * to assert about; occlusion of labels by 3D scene content, which does not exist; and any real
+ * mobile GPU, since ADR 0033 runs the mobile targets in simulation only and this suite's only home
+ * is `macosArm64Test`.
  */
 internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderContextProbe) {
     val target = createLabelIntegrationTarget(binding)
@@ -471,9 +472,9 @@ private fun assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(
  * E-labels task 12's own end-to-end gate: **an icon takes screen space, and the text that wanted that
  * space loses it.**
  *
- * Nothing here draws the icon -- RenG has no pipeline that samples a sprite atlas, and that gap is
- * recorded rather than hidden -- so the icon's *effect* is the only evidence available, and it is
- * exactly the evidence that matters. Placement, geometry and the coupling all have unit cases of their
+ * This case asserts the icon's *effect* and never its ink -- the ink is
+ * [assertTheIconDrawsItsOwnInkBeneathItsOwnText]'s, and keeping the two apart is what lets this one
+ * still fail for the reason it was written for if the draw is removed again. Placement, geometry and the coupling all have unit cases of their
  * own; what those cannot show is that the manifest the firewall parsed while the style compiled
  * actually reaches the pass. Six things have to be alive in sequence for this case to pass: the style
  * declaring a sprite, the firewall proxying and jointly gating the pair, the registry retaining what it
