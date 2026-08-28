@@ -573,6 +573,13 @@ private fun assertAnIconClaimsTheScreenSpaceItsSymbolOccupies(
  * icon's coverage, so text drawn *after* the icon reads as the style's own [PLACE_COLOUR] and text
  * drawn *before* it cannot: it would come back blended toward the icon. One pure place-coloured pixel
  * inside the icon's own box is therefore the whole ordering assertion.
+ *
+ * **And the fade reaches the icon, which the ramp's own two ends are what show.** `advanceLabelFade`
+ * fades glyph quads and knows nothing about icons; the icon half is faded in `prepare()` from the
+ * same per-symbol number. So frame 1 carries a tenth of it and frame [LABEL_FADE_RAMP] carries all
+ * of it, and the first frame must *not* be able to produce [ICON_COLOUR] while the last one must --
+ * an icon that ignored the fade would pop to full strength while its own text was still arriving,
+ * and every assertion taken at the end of the ramp alone would be blind to it.
  */
 private fun assertTheIconDrawsItsOwnInkBeneathItsOwnText(
     binding: GlBinding,
@@ -598,7 +605,8 @@ private fun assertTheIconDrawsItsOwnInkBeneathItsOwnText(
     val withIcon = labelRenderer(binding, probe, SMALL_ICON_STYLE_JSON)
     try {
         val renderTarget = withIcon.mintRenderTarget(FramebufferName(target.toUInt()))
-        var frame = clearAndDraw(binding, withIcon, renderTarget, target, labelPlan(0L))
+        val firstFrame = clearAndDraw(binding, withIcon, renderTarget, target, labelPlan(0L))
+        var frame = firstFrame
         for (frameIndex in 1L until LABEL_FADE_RAMP.toLong()) {
             frame = clearAndDraw(binding, withIcon, renderTarget, target, labelPlan(frameIndex))
         }
@@ -627,6 +635,20 @@ private fun assertTheIconDrawsItsOwnInkBeneathItsOwnText(
         )
         // And the far label is untouched, so the icon claimed its own space rather than the frame.
         assertTrue(frame.nearest(TOWN_COLOUR) != null, "the town label is nowhere near this icon\n" + map)
+
+        // The ramp's two ends. A tenth of the fade puts the icon far enough from its own colour that
+        // no pixel can carry it, and the saturated frame above carries it -- so the pair says the
+        // fade reached the icon rather than only its text.
+        assertEquals(
+            null,
+            firstFrame.nearest(ICON_COLOUR)?.describe(),
+            "an icon a tenth of the way through its fade cannot yet be its own colour\n" +
+                firstFrame.asciiMap(ICON_COLOUR to 'I', ICON_HALF_COLOUR to 'i'),
+        )
+        assertTrue(
+            firstFrame.drawn().any { it.x in ICON_BOX_LEFT..ICON_BOX_RIGHT && it.y in ICON_BOX_TOP..ICON_BOX_BOTTOM },
+            "but it is drawing, faintly, rather than absent\n" + firstFrame.asciiMap(),
+        )
     } finally {
         withIcon.close()
     }
