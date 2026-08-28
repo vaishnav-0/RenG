@@ -872,7 +872,7 @@ class BasemapEngineHostTest {
             rengKeyed,
             "moving a class between these namespaces makes one consumer resource answer to two keys",
         )
-        assertEquals(7, engineKeyed.size, "Rentile 0.5.0 fetches and keys exactly seven basemap classes")
+        assertEquals(7, engineKeyed.size, "Rentile 0.6.0 fetches and keys exactly seven basemap classes")
     }
 
     // ---- preregistration matches what the engine actually requests -------------------------------

@@ -48,6 +48,17 @@ same-version-different-bytes hazard ADR 0013 exists to prevent, one layer down.
 a `0.4.0` release.** That is the intended number when the time comes; it is not intended yet. Cycle H adds
 nothing to the public ABI, so it does not move that number.
 
+**`VERSION_NAME` is frozen at `0.4.0` until E-labels, E-terrain, G and J are all complete** — one release
+at the end, not one per cycle. Every remaining cycle's ABI growth accumulates under that single number,
+which is safe precisely because `0.4.0` has never been published. The hazard this creates is worth stating
+plainly: a frozen version and an auto-publishing trigger point in opposite directions, and `publish.yml`
+cuts a release on any non-documentation push to `main`, so an accidental push would publish a mid-cycle
+state as `0.4.0` **permanently** — ADR 0013 makes a coordinate immutable, and recovery is only ever an
+explicit upward version change, never an overwrite. Nothing reaches `origin/main` without the owner saying
+so. The local loop is unaffected: `consumer-smoke` resolves `../build/local-maven`, and republishing
+`0.4.0` there as cycles land is fine because nothing is published publicly at that coordinate yet — the
+same-version-different-bytes hazard ADR 0013 exists to prevent has no public record to contradict.
+
 **The visual harness runs against a local publish, with no repository edit and nothing to revert.**
 `consumer-smoke/settings.gradle.kts` already defaults `rengRepositoryUrl` to `../build/local-maven` under an
 `exclusiveContent` filter, so:
@@ -217,16 +228,26 @@ with no `error(...)` branch. The DEM check survives as `validatesDemTerrainEncod
 obligation. RenG's own `ResourceClass` has eleven constants; ADR 0016 carries its own appended erratum for
 Rentile's ninth engine class, `GLYPH_RANGE`, which RenG deliberately does not route.
 
-**Rentile is pinned in `gradle/libs.versions.toml`, at `0.5.0` since `0f385c7`.** Do not quote a Rentile
-version from prose, including from this file; read the catalog. RenG adopts the pin and none of `0.5.0`'s
-label feature: it still never calls `acquireLabelCandidates`, never enumerates `GLYPH_RANGE`, and still
-passes `TileSubstitutionPolicy.Disabled`, so Rentile's new `CACHE_SUBSTITUTE_THEN_NETWORK` is unreachable.
-`kmp/api/kmp.klib.api` did not move. A version lives in **five coupled places** that must move in one
-commit or `check_repository_policy.py` fails closed: the catalog; *both*
-`_EXPECTED_PRODUCTION_BUILD_FINGERPRINTS` entries for the catalog; `base_versions["rentile"]`; and two
-fixtures in `tools/tests/test_check_repository_policy.py`. Those fingerprints are **not** whole-file
-SHA-256 digests, whatever older prose and the checker's own comment say — `HANDOFF.md` gives the real
-derivation and a recompute command, because recomputing the wrong thing is the trap here.
+**Rentile is pinned in `gradle/libs.versions.toml`, at `0.6.0` since the E-labels preflight bump.** Do not
+quote a Rentile version from prose, including from this file; read the catalog. RenG adopts the pin and
+none of `0.6.0`'s label feature: it still never calls `acquireLabelCandidates` or `planLabelCandidates`,
+never enumerates `GLYPH_RANGE`, and still passes `TileSubstitutionPolicy.Disabled`, so Rentile's
+`CACHE_SUBSTITUTE_THEN_NETWORK` is unreachable. `kmp/api/kmp.klib.api` did not move — `0.6.0`'s 29 removed
+ABI lines are all in `LabelCandidate`, `LabelIconRef` and `LabelLayerStyle`, which RenG has never imported,
+and its transitive set is byte-for-byte the one `0.5.0` declared. A version lives in **five coupled places**
+that must move in one commit or `check_repository_policy.py` fails closed: the catalog; *both*
+`_EXPECTED_PRODUCTION_BUILD_FINGERPRINTS` entries for the catalog (**three** accepted forms in the
+catalog's entry, all of which move); `base_versions["rentile"]`; and two fixtures in
+`tools/tests/test_check_repository_policy.py`. Those fingerprints are **not** whole-file SHA-256 digests,
+whatever older prose and the checker's own comment say — `HANDOFF.md` gives the real derivation and a
+recompute command, because recomputing the wrong thing is the trap here. **A sixth place is not gated at
+all**: roughly twenty lines of KDoc and comment across ten Kotlin files name the pinned Rentile version and
+its release commit, and the fingerprint mechanism is deliberately comment-insensitive, so a bump passes
+green with every one of them left false. Grep `kmp/src` for the old version before calling a bump done.
+`0.6.0`'s bump was measured rather than argued —
+`docs/research/2026-08-28-e-labels-060-bump-spike.md` records the gates, and closes the provenance question
+for `0.5.0` and `0.6.0` both by diffing Rentile's **published sources jars** against its release commits,
+which is the cheapest instrument for that and should be reused.
 
 **What Cycle F-2 contains.** Its authority is `docs/superpowers/specs/2026-08-23-cycle-f2-models-design.md`,
 its plan is `docs/superpowers/plans/2026-08-23-cycle-f2-models.md`, and the per-task ledger — every ruling,

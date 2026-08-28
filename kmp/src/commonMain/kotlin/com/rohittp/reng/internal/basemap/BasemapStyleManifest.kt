@@ -19,7 +19,7 @@ import com.rohittp.reng.internal.resource.StyleFailureKind
  * will later request while compiling that style and while preparing a set of tiles from it.
  *
  * **Why this exists at all.** Rentile's `PreparedStyle` exposes only `digest`, `policy` and
- * `diagnostics` (`Api.kt:588-592` at the pinned `0.5.0` release commit `d899cb2`); tile URL templates,
+ * `diagnostics` (`Api.kt:685-689` at the pinned `0.6.0` release commit `87ccba2`); tile URL templates,
  * zoom ranges, scheme and bounds are deliberately private. RenG therefore cannot ask the engine what it
  * is about to fetch, and ADR 0016's firewall matches an engine request by **exact string equality**
  * against preregistered routes (`OperationRegistry.executeTransport`). Everything below is consequently
@@ -79,7 +79,7 @@ import com.rohittp.reng.internal.resource.StyleFailureKind
  * collapses STORE-provenance content into `STORE_INTEGRITY_FAILED` at `STORE_VALIDATION` -- so one
  * unused `url` source would present as cache corruption and blame the consumer's store. The rule the
  * firewall already follows applies here too: be strict only where strictness cannot break a working
- * flow (`writeStore` is strict about a missing latch precisely because Rentile 0.5.0 cannot produce
+ * flow (`writeStore` is strict about a missing latch precisely because Rentile 0.6.0 cannot produce
  * one; `removeStore` is permissive about an unregistered key).
  *
  * Document-level faults stay fatal, because a document that will not parse yields no routes at all and

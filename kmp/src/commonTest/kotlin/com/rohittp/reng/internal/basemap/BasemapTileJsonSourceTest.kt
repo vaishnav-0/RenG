@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
  * the firewall matches by exact string equality, so a plausible-but-different url is a total outage
  * rather than a visible mismatch. The facts reproduced are `TileJsonResourceAcquirer.parseOrThrow` and
  * the `resolvedTileJson` half of `StyleCompiler.compileVectorSource` / `compileRasterSource`, both at
- * Rentile's pinned `0.5.0` release commit `d899cb2`.
+ * Rentile's pinned `0.6.0` release commit `87ccba2`.
  */
 class BasemapTileJsonSourceTest {
 

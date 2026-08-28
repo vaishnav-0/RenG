@@ -268,7 +268,7 @@ VERSION_CATALOG = """[versions]
 agp = "9.3.1"
 kotlin = "2.3.21"
 mavenPublish = "0.36.0"
-rentile = "0.5.0"
+rentile = "0.6.0"
 
 [libraries]
 rentile-kmp = { module = "com.rohittp.rentile:kmp", version.ref = "rentile" }
@@ -1444,7 +1444,7 @@ class InjectedPlugin : Plugin<Project> {
     def test_cycle_b_dependency_catalog_is_exact_and_custom_catalogs_are_rejected(self) -> None:
         catalog_mutations = (
             lambda text: text.replace("com.rohittp.rentile:kmp", "com.example:replacement"),
-            lambda text: text.replace('rentile = "0.5.0"', 'rentile = "9.9.9"'),
+            lambda text: text.replace('rentile = "0.6.0"', 'rentile = "9.9.9"'),
             lambda text: text.replace(
                 "[plugins]",
                 'extra = { module = "com.example:runtime", version = "1" }\n[plugins]',
