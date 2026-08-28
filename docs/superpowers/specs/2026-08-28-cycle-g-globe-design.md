@@ -3,12 +3,14 @@
 **Design specification.** Written 2026-08-28, ahead of its turn: G's research and grilling ran in parallel
 with E-labels by owner decision, on the grounds that G is independent until its implementation.
 
-**This spec is complete for everything except terrain, and deliberately so.** G re-projects whatever the
-scene contains, and **E-terrain sits between E-labels and G and is undesigned**. Displacing a sphere's
-surface is a different problem from displacing a plane, not the same problem with different math. §10 lists
-what stays open; nothing else in this document should be read as covering it.
+**Reordered ahead of E-terrain by owner decision, 2026-08-29.** The spec was written expecting E-terrain to
+precede it. It does not. **The obligation moves rather than disappearing:** every decision here describes a
+scene whose ground is a smooth sphere, so **E-terrain now inherits designing displacement against both
+projections at once**, rather than G re-projecting a ground that already displaces. That is arguably the
+better order — terrain gets designed once, against a globe that exists, instead of G being designed around
+a terrain that does not.
 
-**No implementation plan accompanies this spec yet.** One should be written after E-terrain's design exists.
+Nothing else in this document should be read as covering terrain.
 
 ## Provenance
 
@@ -285,9 +287,10 @@ note already sized for 512 instances.
 
 ## 10. What stays open
 
-1. **Terrain, entirely.** E-terrain is undesigned and precedes G. Every statement in this spec is about a
-   scene whose ground is a smooth sphere. Displacement, ground radiance and the DEM path are not covered,
-   and this spec must be revisited once E-terrain has a design.
+1. **Terrain, entirely — and it is now E-terrain's problem rather than G's.** Every statement here is about
+   a scene whose ground is a smooth sphere. Displacement, ground radiance and the DEM path are uncovered.
+   Since G now runs first, E-terrain must design displacement against **both** projections; this spec does
+   not need revisiting for it.
 2. **`Geometry`'s 360° longitude span — settled 2026-08-29, and the question was posed wrongly.** It was
    put as a degeneracy: a span whose east and west edges coincide. It is not one. **A `Geometry` is a
    lat/lon-bounded *region*, and a globe projects that region onto the sphere** — a geometry covering India
@@ -317,13 +320,21 @@ note already sized for 512 instances.
    that two globe frames differing only in winding render identically and still carry different frame
    identities. That is not new and not wrong: a Frame Plan's identity is a digest of the plan, never of the
    picture, and LOD hysteresis already made two identically-identified frames render differently.
-4. **The gate.** `docs/decomposition.md` gives G "golden baselines at both projection modes", and Cycle J
-   delivers baselines *after* G. E8 settled the analogous question for E-labels by keeping J last, so G
-   inherits the same treatment and its gate row needs rewriting. A measured number bears on the replacement:
-   because the sagitta is 0.44 logical pixels at zoom 10, **a globe that is secretly a tangent plane passes
-   any cross-mode comparison above about zoom 12** — so a cross-mode agreement case must be bounded in
-   *both* directions and taken at zoom ≤ 8. Alongside it: a limb case, an antipodal-invisibility case, an
-   antimeridian-continuity case, and the `drawBasemap = false` negative that stops all four passing
-   vacuously.
+4. **The gate — settled 2026-08-29 by inheriting E8's answer.** `docs/decomposition.md` promises G "golden
+   baselines at both projection modes" while Cycle J still runs after it. E-labels hit the identical problem
+   and resolved it by keeping J last and gating on **analytical readback plus a recorded harness pass**,
+   with legibility — there, and curvature fidelity here — explicitly not claimed. G takes the same shape,
+   and its decomposition row needs the same correction E-labels' received.
+
+   **One measured number makes G's version sharper, and it is a vacuity waiting to be written.** The sagitta
+   of a frame-sized quad is 27.9 logical pixels at zoom 4, 1.75 at zoom 8 and **0.44 at zoom 10** — so a
+   globe that is secretly a tangent plane **passes any cross-mode comparison above about zoom 12**. A
+   cross-mode agreement case must therefore be bounded in **both** directions and taken at **zoom ≤ 8**, or
+   it proves nothing while looking thorough.
+
+   The suite owes, alongside it: a limb case, an antipodal-invisibility case, an antimeridian-continuity
+   case, and the `drawBasemap = false` negative that stops all four passing vacuously. And per E-labels'
+   hardest-won lesson, the whole set must be measured against a deliberately broken build — if making the
+   globe projection a no-op does not fail most of them, they are upper-bound assertions and worthless.
 5. **No GPU vendor beyond Adreno and Apple has been measured**, on any target, and §7's mitigations are
    chosen precisely so that stays acceptable.

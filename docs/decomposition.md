@@ -30,9 +30,15 @@ below for exactly which.
 ```
 A skeleton ──► B core ──┬──► C resources ──┐
                         └──► D gl foundation┘──► F-1 (MVP) ──► release ──► E-basemap ──► release
-                                                            ──► F-2 models ──► release ──► E-labels ──► E-terrain
-                                                            ──► H platforms ──► G globe ──► J corpus
+                                                            ──► F-2 models ──► release ──► E-labels
+                                                            ──► H platforms ──► G globe ──► E-terrain ──► J corpus
 ```
+
+**G moved ahead of E-terrain on 2026-08-29**, by owner decision, once E-labels closed. G's spec was already
+written and its research done, while E-terrain had no preflight at all. The obligation moves rather than
+disappearing: G is designed against a scene whose ground is a smooth sphere, so **E-terrain now inherits
+displacing both projections** instead of G re-projecting a ground that already displaces. Terrain is
+designed once, against a globe that exists.
 
 C and D are genuinely independent — one is I/O and CPU, the other is GPU — and are the natural place to
 work in parallel. Everything from F-1 onward is a chain; the MVP release sits between F-1 and E-basemap.
@@ -50,7 +56,7 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | E-labels | Map text drawn as screen-space primitives from Rentile label candidates | Analytical readback over a real GL context, plus a recorded harness pass. **Not legibility** — see below |
 | E-terrain | Terrain displacing the mercator ground, plus deferred Cycle C task 20 | Golden baselines with terrain |
 | H | Android and iOS bring-up | `iosSimulatorArm64Test` in CI; two one-command device runs, neither automated |
-| G | Globe projection | Golden baselines at both projection modes |
+| G | Globe projection | Analytical readback at both projection modes, plus a recorded harness pass. **Not curvature fidelity** |
 | J | Golden-image corpus gate | Corpus job wired into `ci.yml` and `publish.yml` |
 
 **Where the sequence stands.** A, B, C, D, F-1 and E-basemap are released: A as `0.1.0`, B/C/D/F-1 together
