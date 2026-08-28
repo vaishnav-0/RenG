@@ -294,12 +294,6 @@ internal fun createLabelPipeline(
             attribute.offsetBytes,
         )
     }
-    // Bound while the vertex array is, so the vertex array captures it: an element-array binding is
-    // vertex-array state, which is what lets `beginLabelPass` restore both buffers with one call.
-    // `growLabelBuffers` binds it again below; this one stands on its own so the capture does not
-    // depend on that call reaching its allocating branch.
-    binding.bindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer)
-
     val pipeline = LabelPipeline(
         key = key,
         program = program,
@@ -309,6 +303,10 @@ internal fun createLabelPipeline(
         atlasUniformLocation = binding.getUniformLocation(program, LABEL_ATLAS_UNIFORM_NAME),
         viewportSizeUniformLocation = binding.getUniformLocation(program, LABEL_VIEWPORT_SIZE_UNIFORM_NAME),
     )
+    // Called with the vertex array still bound, so the vertex array captures the element-array
+    // binding this makes: an element-array binding is vertex-array state, which is what lets
+    // `beginLabelPass` restore both buffers with one `bindVertexArray`. The initial capacity is
+    // positive, so this call always reaches its allocating branch and always makes that binding.
     growLabelBuffers(binding, pipeline, LABEL_INITIAL_CAPACITY_QUADS)
     return LabelPipelineResult.Created(pipeline)
 }
