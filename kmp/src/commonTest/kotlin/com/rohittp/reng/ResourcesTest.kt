@@ -220,7 +220,15 @@ class ResourcesTest {
     @Test
     fun decodedAndJsonChunkCeilingsHaveDocumentedDefaultsAndRanges() {
         val limits = ResourceLimits()
-        assertEquals(64L * 1024L * 1024L, limits.maximumDecodedImageBytes)
+        assertEquals(256L * 1024L * 1024L, limits.maximumDecodedImageBytes)
+        // Expressed as the engine's worst case rather than as the literal above, so it keeps holding
+        // if either number moves: Rentile records 159 glyph ranges packed at 8192x4357, and decodePng
+        // admits `maximumDecodedImageBytes / 4` pixels. A literal-only assertion would pass while the
+        // atlas that motivated the raise stopped fitting.
+        assertTrue(
+            limits.maximumDecodedImageBytes / 4L >= 8192L * 4357L,
+            "the decoded-image ceiling must admit the engine's largest recorded glyph atlas",
+        )
         assertEquals(16L * 1024L * 1024L, limits.maximumModelJsonChunkBytes)
 
         assertFailsWith<IllegalArgumentException> { ResourceLimits(maximumDecodedImageBytes = 0L) }
