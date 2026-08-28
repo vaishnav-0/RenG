@@ -584,7 +584,7 @@ internal class BasemapEngineHost(
      * it uses RenG's own canonical identity — so nothing in RenG's key derivation ever computes the
      * digest a style failure would carry. It is translatable all the same, and is translated here:
      * Rentile's `acquireRemoteStyle` reports exactly `sha256Hex(withRedactedAuthenticationQuery(url))`,
-     * the same scheme as the seven engine-keyed classes, and [OperationRegistry] indexes style routes by
+     * the same scheme as the eight engine-keyed classes, and [OperationRegistry] indexes style routes by
      * that digest even though the engine's raw store never sees a style. In RenG's own usage the case is
      * additionally unreachable: styles are handed to the engine as [StyleInput.Prefetched], so
      * `acquireRemoteStyle` never runs.

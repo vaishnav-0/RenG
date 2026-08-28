@@ -49,6 +49,28 @@ internal fun <T> freshListCopy(values: List<T>): List<T> = ArrayList(values)
 
 internal fun ByteArray.freshCopy(): ByteArray = copyOf()
 
+/**
+ * The route ceiling for a single [ResourceClass.BASEMAP_GLYPH_RANGE] response, deliberately **not** a
+ * twelfth [ResourceLimits] field.
+ *
+ * A route cannot be constructed without a `maximumResponseBytes`
+ * ([com.rohittp.reng.internal.resource.ResourceRouteKey]'s `init` requires it positive) and the number is
+ * part of route identity, so two disagreeing preregistrations of one glyph url fail the frame closed. It
+ * still does not want a public knob: the ceiling a consumer would actually turn is the engine's own
+ * `maxGlyphRangeBytes`, which defaults to 1 MiB and is what refuses an oversized range. RenG's number is
+ * the outer bound that keeps RenG from *being* the binding constraint on a range Rentile would have
+ * accepted -- four times the engine's default, so the engine's refusal is the operative one at its
+ * default and at any modest raise of it.
+ *
+ * Reusing `maximumBasemapMetadataBytes` (also 4 MiB) was rejected on the sameness test the one
+ * deliberate class reuse in this codebase states for itself (`FramePlanningCore`'s geometry-texture
+ * comment, which reuses `MODEL_TEXTURE` because a geometry texture is *the same kind of resource*): a
+ * glyph range shares no kind with a JSON metadata document -- different media type, different producer,
+ * different failure mode -- and F-2's `decodedCpuBytes` is the standing debt that reusing a limit under
+ * sizing pressure creates.
+ */
+internal const val GLYPH_RANGE_ROUTE_CEILING_BYTES: Long = 4L * 1024L * 1024L
+
 internal fun ResourceLimits.maximumBytesFor(resourceClass: ResourceClass): Long =
     when (resourceClass) {
         ResourceClass.BASEMAP_STYLE -> maximumBasemapStyleBytes
@@ -64,6 +86,7 @@ internal fun ResourceLimits.maximumBytesFor(resourceClass: ResourceClass): Long 
         ResourceClass.STICKER_IMAGE -> maximumStickerImageBytes
         ResourceClass.MODEL_GLB -> maximumModelGlbBytes
         ResourceClass.MODEL_TEXTURE -> maximumModelTextureBytes
+        ResourceClass.BASEMAP_GLYPH_RANGE -> GLYPH_RANGE_ROUTE_CEILING_BYTES
     }
 
 internal val ResourceClass.acceptValue: String
@@ -81,6 +104,7 @@ internal val ResourceClass.acceptValue: String
         ResourceClass.MODEL_TEXTURE,
         -> "image/png"
         ResourceClass.MODEL_GLB -> "model/gltf-binary"
+        ResourceClass.BASEMAP_GLYPH_RANGE -> "application/x-protobuf"
     }
 
 internal val ResourceClass.reportOrder: Int
@@ -96,6 +120,7 @@ internal val ResourceClass.reportOrder: Int
         ResourceClass.STICKER_IMAGE -> 8
         ResourceClass.MODEL_GLB -> 9
         ResourceClass.MODEL_TEXTURE -> 10
+        ResourceClass.BASEMAP_GLYPH_RANGE -> 11
     }
 
 internal val ResourceKind.reportOrder: Int

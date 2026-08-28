@@ -136,6 +136,7 @@ final enum class com.rohittp.reng/ResourceAccessMode : kotlin/Enum<com.rohittp.r
 final enum class com.rohittp.reng/ResourceClass : kotlin/Enum<com.rohittp.reng/ResourceClass> { // com.rohittp.reng/ResourceClass|null[0]
     enum entry BASEMAP_DEM_TILE // com.rohittp.reng/ResourceClass.BASEMAP_DEM_TILE|null[0]
     enum entry BASEMAP_GEO_JSON // com.rohittp.reng/ResourceClass.BASEMAP_GEO_JSON|null[0]
+    enum entry BASEMAP_GLYPH_RANGE // com.rohittp.reng/ResourceClass.BASEMAP_GLYPH_RANGE|null[0]
     enum entry BASEMAP_RASTER_TILE // com.rohittp.reng/ResourceClass.BASEMAP_RASTER_TILE|null[0]
     enum entry BASEMAP_SPRITE_IMAGE // com.rohittp.reng/ResourceClass.BASEMAP_SPRITE_IMAGE|null[0]
     enum entry BASEMAP_SPRITE_JSON // com.rohittp.reng/ResourceClass.BASEMAP_SPRITE_JSON|null[0]

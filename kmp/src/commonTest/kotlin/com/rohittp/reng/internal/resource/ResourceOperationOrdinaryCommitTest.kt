@@ -30,7 +30,7 @@ class ResourceOperationOrdinaryCommitTest {
     // This file's ORDINARY_CLASS_GATES is a hand-written mirror of production's own table, and every
     // table-driven test below trusts it. Binding the two here is what stops the mirror from drifting --
     // and, since the production table is what decides which classes RenG gates at all, it is also the
-    // assertion that pins the ownership ruling: the seven engine-keyed classes answer `null`, so the
+    // assertion that pins the ownership ruling: the eight engine-keyed classes answer `null`, so the
     // driver can never emit a class gate over one of them.
     @Test
     fun ordinaryClassGatesMatchProductionForEveryClassAndNameNoEngineKeyedOne() {
@@ -981,7 +981,7 @@ private const val SAMPLE_EPOCH_MILLIS: Long = 100L
 private val WRONG_GATE: ResourceClassGate = ResourceClassGate.PARSE_GLB
 
 /**
- * Every class whose routes run no class gate at all, for either of the two structural reasons: the seven
+ * Every class whose routes run no class gate at all, for either of the two structural reasons: the eight
  * the Rentile engine acquires and validates itself through RenG's firewall (RenG's driver only
  * preregisters their routes), and `BASEMAP_STYLE`, whose commit path is the style commit rather than
  * [AdvancePendingClassGates].
@@ -995,6 +995,7 @@ private val UNGATED_CLASSES: Set<ResourceClass> = setOf(
     ResourceClass.BASEMAP_STYLE,
     ResourceClass.BASEMAP_SPRITE_JSON,
     ResourceClass.BASEMAP_SPRITE_IMAGE,
+    ResourceClass.BASEMAP_GLYPH_RANGE,
 )
 
 private val ORDINARY_CLASS_GATES: Map<ResourceClass, List<ResourceClassGate>> = mapOf(

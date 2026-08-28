@@ -272,6 +272,7 @@ private val ResourceClass.isStaticDirect: Boolean
         ResourceClass.BASEMAP_SPRITE_JSON,
         ResourceClass.BASEMAP_SPRITE_IMAGE,
         ResourceClass.BASEMAP_GEO_JSON,
+        ResourceClass.BASEMAP_GLYPH_RANGE,
         -> false
     }
 

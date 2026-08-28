@@ -57,6 +57,7 @@ class ResourcesTest {
                 ResourceClass.STICKER_IMAGE,
                 ResourceClass.MODEL_GLB,
                 ResourceClass.MODEL_TEXTURE,
+                ResourceClass.BASEMAP_GLYPH_RANGE,
             ),
             ResourceClass.entries,
         )
@@ -157,6 +158,10 @@ class ResourcesTest {
             ResourceClass.STICKER_IMAGE to Pair(32L * mib, "image/png"),
             ResourceClass.MODEL_GLB to Pair(256L * mib, "model/gltf-binary"),
             ResourceClass.MODEL_TEXTURE to Pair(32L * mib, "image/png"),
+            // The one class whose ceiling is an internal constant rather than a ResourceLimits field:
+            // GLYPH_RANGE_ROUTE_CEILING_BYTES, sized above the engine's own 1 MiB maxGlyphRangeBytes so
+            // that Rentile's refusal is the operative one. A twelfth public limit was declined.
+            ResourceClass.BASEMAP_GLYPH_RANGE to Pair(4L * mib, "application/x-protobuf"),
         )
 
         assertEquals(

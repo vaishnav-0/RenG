@@ -48,6 +48,15 @@ public enum class ResourceClass {
     STICKER_IMAGE,
     MODEL_GLB,
     MODEL_TEXTURE,
+
+    /**
+     * One 256-codepoint block of one font stack, as fontnik/Mapbox protobuf, fetched by the Rentile
+     * engine's glyph acquirer while it resolves label candidates. Appended after the model classes
+     * rather than grouped with the other `BASEMAP_` constants so that no existing constant's ordinal,
+     * wire value or report order moves: both of the latter are explicit tables that a reordering would
+     * silently renumber.
+     */
+    BASEMAP_GLYPH_RANGE,
 }
 
 public enum class ResourceKind {
