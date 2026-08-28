@@ -281,6 +281,16 @@ internal class BasemapStyleManifest(
      * cannot be resolved -- all three are cases in which Rentile fetches no sprite at all.
      */
     val spriteBase: String?,
+    /**
+     * The style's resolved `glyphs` template -- `{fontstack}`/`{range}` still unsubstituted -- or `null`
+     * when the style declares none or declares a relative reference that cannot be resolved.
+     *
+     * RenG keeps its own copy rather than reading Rentile's, because `LabelCandidatePlan.glyphUrls`
+     * substitutes the template *the caller passes it*: the credential that reaches RenG's transport is
+     * the one in this string. Resolved through [resolveHttpReference], which returns an absolute
+     * `http(s)` reference unchanged -- byte-for-byte the branch Rentile's `StyleCompiler` takes.
+     */
+    val glyphTemplate: String?,
     sources: List<BasemapStyleSource>,
     tileJsonSources: List<BasemapTileJsonSource>,
     underivableSources: List<UnderivableBasemapSource>,
@@ -307,11 +317,12 @@ internal class BasemapStyleManifest(
      */
     val underivableSources: List<UnderivableBasemapSource> get() = freshListCopy(underivableSnapshot)
 
-    /** Redacted: [baseUri] and [spriteBase] are urls and may carry a credential. */
+    /** Redacted: [baseUri], [spriteBase] and [glyphTemplate] are urls and may carry a credential. */
     override fun toString(): String =
         "BasemapStyleManifest(sources=${sourceSnapshot.size}, " +
             "tileJson=${tileJsonSourceSnapshot.size}, " +
             "underivable=${underivableSnapshot.size}, sprite=${spriteBase != null}, " +
+            "glyphs=${glyphTemplate != null}, " +
             "terrain=${terrainSourceId != null})"
 }
 
@@ -518,6 +529,7 @@ internal fun completeBasemapStyleManifest(
     return BasemapStyleManifest(
         baseUri = manifest.baseUri,
         spriteBase = manifest.spriteBase,
+        glyphTemplate = manifest.glyphTemplate,
         sources = resolved,
         tileJsonSources = emptyList(),
         underivableSources = underivable,
@@ -719,6 +731,7 @@ private fun readStyleManifest(styleBytes: ByteArray, baseUri: String): BasemapSt
         // Only the string form resolves: Rentile ignores the array form (StyleCompiler.kt:1646, :1687),
         // and an unresolvable relative reference leaves its atlas unresolved rather than composing a url.
         spriteBase = (root.members["sprite"] as? JsonValue.Text)?.value?.let { resolveHttpReference(baseUri, it) },
+        glyphTemplate = (root.members["glyphs"] as? JsonValue.Text)?.value?.let { resolveHttpReference(baseUri, it) },
         sources = declaredSources.routable,
         tileJsonSources = declaredSources.tileJsonBacked,
         underivableSources = declaredSources.underivable,

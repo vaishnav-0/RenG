@@ -849,13 +849,13 @@ class BasemapEngineHostTest {
         // firewall passes RENTILE's `sha256Hex(redacted url)` straight through (`OperationRegistry`'s
         // `RenGRawResourceKey(stableId = key.stableId, ...)`). Two keys for one logical resource would be
         // two reads and two writes where RenG's contract permits one exchange, so the partition below is a
-        // contract, not an implementation detail: the engine keys exactly the seven classes it fetches
+        // contract, not an implementation detail: the engine keys exactly the eight classes it fetches
         // itself, and RenG keys exactly the four it fetches itself.
         //
         // What this pins is the table. What makes the spaces genuinely disjoint *today* is that no
         // production path hands an engine-keyed class to the driver at all: `FramePlanningCore`'s static
         // traversal builds `StaticResourceReference.External` only for the four below, and the discovered
-        // children that would carry the other seven are produced by the basemap-style commit actions, which
+        // children that would carry the other eight are produced by the basemap-style commit actions, which
         // `ResourceActionExecutor` still leaves to its `else`.
         val rengKeyed = ResourceClass.entries.filter { engineKeyedResourceClassOf(it) == null }.toSet()
         val engineKeyed = ResourceClass.entries.filter { engineKeyedResourceClassOf(it) != null }.toSet()
@@ -872,7 +872,7 @@ class BasemapEngineHostTest {
             rengKeyed,
             "moving a class between these namespaces makes one consumer resource answer to two keys",
         )
-        assertEquals(7, engineKeyed.size, "Rentile 0.6.0 fetches and keys exactly seven basemap classes")
+        assertEquals(8, engineKeyed.size, "Rentile 0.6.0 fetches and keys exactly eight basemap classes")
     }
 
     // ---- preregistration matches what the engine actually requests -------------------------------
