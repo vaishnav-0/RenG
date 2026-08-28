@@ -138,7 +138,11 @@ internal fun physicalPixelGroundRay(
 }
 
 private val FOCAL_LENGTH_SCALE: Double = 1.0 + sqrt(2.0)
-private const val NEAR_DISTANCE_LOGICAL_PIXELS: Double = 1.0
+/** The one-logical-pixel near plane (`CONTEXT.md`), shared by both directions: the inverse
+ * [physicalPixelGroundRay] near-clips a ground ray at it and the forward
+ * [projectCameraRelativeLogicalPosition] rejects a position behind it. Two copies of this
+ * number would be exactly the kind of silent disagreement the round trip exists to catch. */
+internal const val NEAR_DISTANCE_LOGICAL_PIXELS: Double = 1.0
 private val UP: DoubleVector3 = DoubleVector3(0.0, 0.0, 1.0)
 
 private fun Double.degreesToRadians(): Double = this * PI / 180.0
