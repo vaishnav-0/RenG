@@ -327,12 +327,40 @@ class LabelPlacementTest {
     // ---- collision --------------------------------------------------------------------------
 
     /**
-     * A rectangle intersection needs both axes, and this is the case a one-axis check passes.
+     * The rectangle predicate itself, over all four axis combinations plus the two touching cases.
      *
-     * Four pairs against one fixed box: overlapping in x alone, in y alone, in both, and in neither.
-     * A check that reads only x drops the y-only pair as well as the both pair; a check that reads
-     * only y drops the x-only pair. Only a check reading both leaves exactly one pair with a single
-     * survivor.
+     * A pair overlapping in **one axis only** is not a test of a rectangle intersection: a check that
+     * forgot an axis reports a collision for every pair sharing a row of the screen, and both the
+     * both-axes pair and the neither pair agree with it. Only the two single-axis pairs disagree, and
+     * they disagree in opposite directions, so between them they pin each `&&`.
+     *
+     * The predicate is exercised directly rather than only through [placeLabels] because the
+     * collision grid separates distant boxes before the predicate is ever asked about them -- which
+     * is the grid working correctly, and which would let a one-axis predicate survive any fixture
+     * whose labels were comfortably apart.
+     */
+    @Test
+    fun boxesMustOverlapInBothAxesToIntersect() {
+        val fixed = LabelScreenBox(left = -30.0, top = -11.0, right = 70.0, bottom = 9.0)
+
+        for ((description, other, expected) in listOf(
+            Triple("x only", LabelScreenBox(0.0, 12.0, 40.0, 30.0), false),
+            Triple("y only", LabelScreenBox(74.0, -5.0, 130.0, 5.0), false),
+            Triple("both", LabelScreenBox(60.0, 5.0, 140.0, 30.0), true),
+            Triple("neither", LabelScreenBox(74.0, 12.0, 130.0, 30.0), false),
+            Triple("touching in x", LabelScreenBox(70.0, -5.0, 130.0, 5.0), false),
+            Triple("touching in y", LabelScreenBox(0.0, 9.0, 40.0, 30.0), false),
+        )) {
+            assertEquals(expected, fixed.intersects(other), "overlapping in $description")
+            assertEquals(expected, other.intersects(fixed), "overlapping in $description, reversed")
+        }
+    }
+
+    /**
+     * The same four combinations through the whole pass, as near misses rather than as comfortable
+     * separations, so that each pair lands in the collision grid's own cells together and the
+     * predicate is genuinely consulted: the x-only pair clears the fixed box by three pixels
+     * vertically and the y-only pair by four pixels horizontally.
      */
     @Test
     fun boxesMustOverlapInBothAxesToCollide() {
@@ -340,10 +368,10 @@ class LabelPlacementTest {
         val anchored = placementCandidate(sortKey = 9.0)
 
         for ((description, other, expected) in listOf(
-            Triple("x only", placementCandidate(left = 0.0, top = 20.0, right = 40.0, bottom = 35.0), 2),
-            Triple("y only", placementCandidate(left = 100.0, top = -5.0, right = 140.0, bottom = 5.0), 2),
+            Triple("x only", placementCandidate(left = 0.0, top = 12.0, right = 40.0, bottom = 30.0), 2),
+            Triple("y only", placementCandidate(left = 74.0, top = -5.0, right = 130.0, bottom = 5.0), 2),
             Triple("both", placementCandidate(left = 60.0, top = 5.0, right = 140.0, bottom = 30.0), 1),
-            Triple("neither", placementCandidate(left = 100.0, top = 20.0, right = 140.0, bottom = 35.0), 2),
+            Triple("neither", placementCandidate(left = 74.0, top = 12.0, right = 130.0, bottom = 30.0), 2),
         )) {
             val placed = placeLabels(camera, placementBatch(anchored, other))
             assertEquals(expected, placed.size, "overlapping in $description")
