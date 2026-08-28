@@ -4,6 +4,7 @@ import com.rohittp.reng.internal.firewall.LABEL_GLYPH_TEMPLATE
 import com.rohittp.reng.internal.firewall.LABEL_SANS_STACK
 import com.rohittp.reng.internal.firewall.LABEL_SERIF_STACK
 import com.rohittp.reng.internal.firewall.LABEL_TILE_TEMPLATE
+import com.rohittp.reng.internal.firewall.VALID_TILE_PNG
 import com.rohittp.reng.internal.firewall.labelGlyphRange
 import com.rohittp.reng.internal.firewall.labelGlyphUrls
 import com.rohittp.reng.internal.firewall.labelMvtBytes
@@ -77,7 +78,7 @@ class RendererLabelResidencyTest {
             "nine label tiles reach the consumer once across two frames, not eighteen times",
         )
         assertEquals(
-            labelGlyphUrls().sorted(),
+            GLYPH_URLS_A.sorted(),
             transport.glyphUrls(),
             "and the closure's three Glyph Ranges once, not six times",
         )
@@ -101,17 +102,19 @@ class RendererLabelResidencyTest {
      * re-acquire, and this case is what a deleted invalidation fails: the case above passes with the
      * key comparison replaced by `true`, and this one cannot.
      *
-     * Two assertions, because a cache can be wrong in two directions. Fetching the new tiles is not
-     * enough on its own -- a renderer that re-fetched and then handed back the *retained* batch anyway
-     * would satisfy it -- so the frame's own content must differ too.
+     * Three assertions of content, at three depths, because a wrong cache can be wrong at any of them:
+     * the quads' atlas coordinates ([cameraA]'s centre tile spells `V` and [cameraB]'s spells `Q`), the
+     * atlas identity, and the decoded atlas pixels themselves. Fetching the new tiles is not enough on
+     * its own -- a renderer that re-fetched and then handed back the *retained* batch anyway would
+     * satisfy that alone -- and the last of the three is what gates the decode memo, which is keyed by
+     * atlas content rather than by the handover key and would otherwise hand the moved frame the first
+     * frame's pixels under the moved frame's own key.
      *
-     * **That content is the glyph quads' atlas coordinates, and it is deliberately not the atlas
-     * identity.** The obvious assertion, that the two frames name two different atlases, is *false* and
-     * measuring it is how that was found: Rentile packs every glyph of every Glyph Range it fetched
-     * rather than only the ones its candidates use, both tile sets need the same three ranges, so both
-     * atlases are byte-identical and share a `contentKey`. What does differ is *which cell of that atlas
-     * each placed label samples* -- [cameraA]'s centre tile spells `V` and [cameraB]'s spells `Q` -- so
-     * the `cornersUv` of the frame's quads is the thing that can only come from the right tile set.
+     * **That the two atlases differ at all is something the fixture had to be built for**, and the
+     * naive assertion fails: Rentile packs every glyph of every Glyph Range it fetched rather than only
+     * the ones its candidates used, so two tile sets needing the same ranges pack a byte-identical
+     * atlas however different their letters are. That was measured here by asserting it and watching it
+     * fail -- see [residencyTileBytes], which gives [cameraB]'s tiles a fourth range of their own.
      */
     @Test
     fun aCameraMoveOntoADifferentTileSetReAcquiresRatherThanServingTheRetainedBatch() = runTest {
@@ -128,9 +131,9 @@ class RendererLabelResidencyTest {
             "the moved frame fetches its own nine tiles, and the unmoved one fetched none",
         )
         assertEquals(
-            (labelGlyphUrls() + labelGlyphUrls()).sorted(),
+            (GLYPH_URLS_A + GLYPH_URLS_B).sorted(),
             transport.glyphUrls(),
-            "two acquisitions across three frames, and therefore two rounds of Glyph Ranges",
+            "two acquisitions across three frames, and the moved one needs a fourth range of its own",
         )
 
         val firstLabels = assertNotNull(first.labels)
@@ -140,11 +143,16 @@ class RendererLabelResidencyTest {
             movedLabels.labels.map { sampledCells(it) },
             "the moved frame samples its own tile set's glyph cells rather than the retained batch's",
         )
-        assertEquals(
+        assertNotEquals(
             firstLabels.atlasKey,
             movedLabels.atlasKey,
-            "while the atlas itself is the same one, because both tile sets need the same three ranges " +
-                "and Rentile packs a whole range rather than the glyphs its candidates used",
+            "and names its own atlas, which the fourth Glyph Range makes a different one",
+        )
+        assertNotEquals(
+            firstLabels.atlas.rgbaSnapshot().toList(),
+            movedLabels.atlas.rgbaSnapshot().toList(),
+            "and carries that atlas's pixels rather than the ones already decoded for the first frame " +
+                "-- the decode memo is keyed by atlas content, and this is what proves it reads the key",
         )
     }
 
@@ -192,6 +200,83 @@ class RendererLabelResidencyTest {
     }
 
     /**
+     * The frame served from the retention keeps its **icons**, which is the one way this cache could
+     * have changed how the map looks rather than only how fast it is produced.
+     *
+     * `SpriteAtlasManifest` is readable only from inside the invocation that proxied the sprite pair,
+     * and on a frame whose style was compiled earlier the Label acquisition is the last thing in that
+     * invocation that makes the engine ask for it. So a retention that reused the batch and then read
+     * the manifest fresh would find `null` on every cached frame, `resolveIcon` would drop every icon,
+     * and the map would quietly lose its markers on frame two -- with no failure, no diagnostic, and
+     * every request-count assertion in this file still green. Retaining the manifest beside the batch is
+     * what prevents that, and this is the case that measures it.
+     *
+     * Asserted as the icons the *placed labels carry*, not as sprite traffic, because the defect is
+     * about the frame rather than about the fetch.
+     */
+    @Test
+    fun aFrameServedFromTheRetentionStillResolvesItsIcons() = runTest {
+        val transport = ResidencyTransport(styleJson = ICON_STYLE_JSON)
+        val renderer = residencyRenderer(transport)
+
+        val first = renderer.prepare(residencyPlan(frameIndex = 0L, camera = cameraA())) as RenGPreparedFrame
+        val second = renderer.prepare(residencyPlan(frameIndex = 1L, camera = cameraA())) as RenGPreparedFrame
+
+        val firstIcons = assertNotNull(first.labels).labels.count { it.label.icon != null }
+        assertTrue(firstIcons > 0, "the fixture's sprite resolves at least one icon on the first frame")
+        assertEquals(
+            firstIcons,
+            assertNotNull(second.labels).labels.count { it.label.icon != null },
+            "and the frame served from the retention resolves exactly the same icons",
+        )
+        assertEquals(
+            TILE_URLS_A,
+            transport.tileUrls(),
+            "while still asking the consumer for nothing a second time",
+        )
+    }
+
+    /**
+     * The aggregate exclusion diagnostic is emitted **once per prepare**, on the frame served from the
+     * retention exactly as on the frame that acquired.
+     *
+     * ADR 0036 says "once per prepare", and before this task that was free -- the handover ran once per
+     * prepare, so an aggregate beside it did too. A retention makes it a choice, and reporting only on
+     * the acquiring frame would be the wrong one: the aggregate describes the label content **this
+     * frame is drawing**, not the exchange that fetched it, so a consumer whose warning appeared on
+     * frame 0 and vanished on frame 1 would be reading RenG's cache state rather than its own style.
+     *
+     * Arabic feature text is what makes the engine exclude anything at all -- the style is unchanged
+     * and only the tile differs, which is `LabelIntegrationReadbackSuite`'s own arrangement.
+     */
+    @Test
+    fun theExclusionAggregateIsReportedOnACachedFrameToo() = runTest {
+        val sink = RecordingResidencySink()
+        val transport = ResidencyTransport(tileBytes = { ARABIC_MVT_BYTES })
+        val renderer = residencyRenderer(transport, diagnosticSink = sink)
+
+        renderer.prepare(residencyPlan(frameIndex = 0L, camera = cameraA()))
+        renderer.prepare(residencyPlan(frameIndex = 1L, camera = cameraA()))
+
+        assertEquals(
+            List(2) {
+                Diagnostic(
+                    code = DiagnosticCode.LABEL_CONTENT_EXCLUDED,
+                    severity = DiagnosticSeverity.INFO,
+                    stage = PipelineStage.LABEL_PREPARATION,
+                )
+            },
+            sink.diagnostics,
+            "two prepares, two aggregates -- the cached frame reports what it is drawing",
+        )
+        assertEquals(
+            TILE_URLS_A,
+            transport.tileUrls(),
+            "and the second of them was served from the retention rather than re-fetched",
+        )
+    }
+
+    /**
      * `clearFrameHistory()` clears history and is not a cache invalidation, which is a decision rather
      * than an accident and is therefore pinned.
      *
@@ -215,7 +300,7 @@ class RendererLabelResidencyTest {
             transport.tileUrls(),
             "a history clear does not send the frame back to the consumer for tiles RenG still holds",
         )
-        assertEquals(labelGlyphUrls().sorted(), transport.glyphUrls())
+        assertEquals(GLYPH_URLS_A.sorted(), transport.glyphUrls())
         assertTrue(
             assertNotNull(after.labels).labels.isNotEmpty(),
             "and the frame after it still draws its labels",
@@ -242,9 +327,8 @@ private fun placedShape(faded: FadedLabel): List<Double> = listOf(
 /**
  * Which cells of the glyph atlas one placed label samples, as the quads' own texture coordinates.
  *
- * This is the frame's *content* in the only sense that discriminates two tile sets here: the two
- * atlases are byte-identical, so what a frame drawing tile set B's candidates has that one replaying
- * tile set A's does not is a different set of cells inside it.
+ * The frame's content as the *draw* sees it, and the half a stale batch served under a fresh key would
+ * get wrong even while the atlas beside it was right.
  */
 private fun sampledCells(faded: FadedLabel): List<List<Float>> =
     faded.quads.map { it.cornersUv.toList() }
@@ -325,6 +409,38 @@ private val RESIDENCY_STYLE_JSON: String =
         """"paint":{"text-color":"#ffaa00","text-translate":[64,0]}}""" +
         """]}"""
 
+/** The sprite base Rentile appends `.json` and `.png` to, exactly as `appendSpriteExtension` does. */
+private const val RESIDENCY_SPRITE_BASE: String = "https://sprites.example/residency"
+
+/** One entry filling the whole 2-by-2 atlas image, so `icon-size` alone decides its screen extent. */
+private val RESIDENCY_SPRITE_JSON: ByteArray =
+    """{"marker":{"x":0,"y":0,"width":2,"height":2}}""".encodeToByteArray()
+
+/**
+ * The same style with a sprite and an `icon-image` on its `place` layer, so that a placed label carries
+ * an icon whose only possible source is a `SpriteAtlasManifest`.
+ *
+ * `symbol-sort-key` is load-bearing rather than decoration, and measuring it is how that was learnt:
+ * without it the `town` layer's symbol reaches the collision index first, the icon-bearing `place`
+ * symbol loses its place entirely, and the frame carries one label and **zero** icons -- which would
+ * have made [aFrameServedFromTheRetentionStillResolvesItsIcons] pass its equality check on `0 == 0` and
+ * gate nothing at all. The `assertTrue(firstIcons > 0)` guard beside that equality is what caught it.
+ */
+private val ICON_STYLE_JSON: String =
+    """{"version":8,"name":"reng-label-residency-icons",""" +
+        """"glyphs":"$LABEL_GLYPH_TEMPLATE",""" +
+        """"sprite":"$RESIDENCY_SPRITE_BASE",""" +
+        """"sources":{"v":{"type":"vector","tiles":["$LABEL_TILE_TEMPLATE"],"minzoom":0,"maxzoom":14}},""" +
+        """"layers":[""" +
+        """{"id":"place","type":"symbol","source":"v","source-layer":"place",""" +
+        """"layout":{"text-field":"{name}","text-font":["$LABEL_SANS_STACK"],"text-size":16,""" +
+        """"symbol-sort-key":10,"icon-image":"marker","icon-size":60},""" +
+        """"paint":{"text-color":"#ff00ff"}},""" +
+        """{"id":"town","type":"symbol","source":"v","source-layer":"town_label",""" +
+        """"layout":{"text-field":"{name}","text-font":["$LABEL_SERIF_STACK"],"text-size":16},""" +
+        """"paint":{"text-color":"#ffaa00","text-translate":[64,0]}}""" +
+        """]}"""
+
 /** The nine tiles [cameraA] selects, as the exact urls the engine composes for them. */
 private val TILE_URLS_A: List<String> =
     (2..4).flatMap { x -> (5..7).map { y -> "${TILE_PREFIX}4/$x/$y.pbf" } }.sorted()
@@ -344,20 +460,27 @@ private val TILE_URLS_B: List<String> =
 private fun tileLetter(x: Int, y: Int): Char = 'A' + ((x + 3 * y) % 26)
 
 /**
- * One vector tile per url: a `place` feature carrying that tile's own letter plus `U+0100`, and a
- * `town_label` feature carrying a constant `B`.
+ * One vector tile per url: a `place` feature carrying that tile's own letter plus `U+0100`, plus
+ * `U+0200` in the eastern half of the world, and a `town_label` feature carrying a constant `B`.
  *
- * Those three codepoints are chosen so the Glyph Closure is exactly the shared fixture's three urls --
- * sans `0-255`, sans `256-511`, serif `0-255` -- which lets [labelGlyphUrls] stay the literal expected
- * list rather than a fourth string written out here. The varying half is deliberately in the sans
- * `0-255` range, the one range whose *packed contents* therefore differ between the two tile sets.
+ * **`U+0200` is the whole reason the two tile sets need different Glyph Closures**, and without it this
+ * fixture could not distinguish two atlases at all. Rentile packs every glyph of every Glyph Range it
+ * fetched rather than only the ones its candidates used -- measured here, by asserting the opposite and
+ * watching it fail -- so two tile sets needing the same three ranges pack a **byte-identical** atlas
+ * under one `contentKey` however different their letters are. [TILE_URLS_B]'s nine tiles all sit at
+ * `x >= 8`, so they alone need the sans `512-767` range, and that is what makes the moved frame's atlas
+ * a genuinely different one rather than the same one sampled differently.
  */
 private fun residencyTileBytes(url: String): ByteArray {
     val path = url.removePrefix(TILE_PREFIX).removeSuffix(".pbf").split("/")
     val x = path[1].toInt()
     val y = path[2].toInt()
-    return labelMvtBytes("place" to "${tileLetter(x, y)}Ā", "town_label" to "B")
+    val eastern = if (x >= EASTERN_TILE_X) "Ȁ" else ""
+    return labelMvtBytes("place" to "${tileLetter(x, y)}Ā$eastern", "town_label" to "B")
 }
+
+/** The tile column at and beyond which a tile's `place` feature also carries `U+0200`. */
+private const val EASTERN_TILE_X: Int = 8
 
 /**
  * A saturated distance field, for the reason `LabelIntegrationReadbackSuite` gives: the shared fixture's
@@ -374,8 +497,24 @@ private val SANS_RANGE_0: ByteArray =
 private val SANS_RANGE_256: ByteArray =
     labelGlyphRange(LABEL_SANS_STACK, "256-511", listOf(256), SATURATED)
 
+/** The fourth range, which only [TILE_URLS_B]'s tiles ask for. */
+private val SANS_RANGE_512: ByteArray =
+    labelGlyphRange(LABEL_SANS_STACK, "512-767", listOf(512), SATURATED)
+
 private val SERIF_RANGE_0: ByteArray =
     labelGlyphRange(LABEL_SERIF_STACK, "0-255", listOf(66), SATURATED)
+
+/**
+ * The fourth Glyph Range's url, a literal for the same reason [labelGlyphUrls] is one: composing it
+ * here would restate the composition the firewall exists to reproduce.
+ */
+private const val SANS_512_URL: String =
+    "https://glyphs.example/Label%20Sans%20Regular/512-767.pbf?key=reng-live-key"
+
+/** The three ranges [cameraA]'s tiles need, and the four [cameraB]'s do. */
+private val GLYPH_URLS_A: List<String> = labelGlyphUrls()
+
+private val GLYPH_URLS_B: List<String> = labelGlyphUrls() + SANS_512_URL
 
 /**
  * Answers the style, every label tile the frames select, and the three Glyph Ranges, recording every url
@@ -385,7 +524,10 @@ private val SERIF_RANGE_0: ByteArray =
  * `Dispatchers.Default` children, and a lost update here would silently turn "fetched twice" into
  * "fetched once" -- which is the exact regression these tests exist to catch.
  */
-private class ResidencyTransport : Transport {
+private class ResidencyTransport(
+    private val styleJson: String = RESIDENCY_STYLE_JSON,
+    private val tileBytes: (String) -> ByteArray = ::residencyTileBytes,
+) : Transport {
     private val recorded = ConcurrentRecorder<String>()
 
     /** Every label tile url asked for, in sorted order, **with duplicates kept**. */
@@ -398,11 +540,14 @@ private class ResidencyTransport : Transport {
         val url = request.locator.value
         recorded.record(url)
         val body = when {
-            url == RESIDENCY_STYLE_URL -> RESIDENCY_STYLE_JSON.encodeToByteArray()
-            url.startsWith(TILE_PREFIX) -> residencyTileBytes(url)
+            url == RESIDENCY_STYLE_URL -> styleJson.encodeToByteArray()
+            url == "$RESIDENCY_SPRITE_BASE.json" -> RESIDENCY_SPRITE_JSON
+            url == "$RESIDENCY_SPRITE_BASE.png" -> VALID_TILE_PNG
+            url.startsWith(TILE_PREFIX) -> tileBytes(url)
             url == labelGlyphUrls()[0] -> SANS_RANGE_0
             url == labelGlyphUrls()[1] -> SANS_RANGE_256
             url == labelGlyphUrls()[2] -> SERIF_RANGE_0
+            url == SANS_512_URL -> SANS_RANGE_512
             else -> null
         } ?: return TransportResponse(statusCode = 404, body = ByteArray(0))
         return TransportResponse(
@@ -410,6 +555,24 @@ private class ResidencyTransport : Transport {
             body = body,
             metadata = TransportResponseMetadata(contentType = "application/octet-stream"),
         )
+    }
+}
+
+/**
+ * The same two source layers with Arabic feature text, which the engine cannot shape and therefore
+ * excludes. The style is unchanged: only what the tile says differs.
+ */
+private val ARABIC_MVT_BYTES: ByteArray =
+    labelMvtBytes("place" to "\u0645\u0631\u062D\u0628\u0627", "town_label" to "\u0634\u0627\u0631\u0639")
+
+/** Every RenG diagnostic this renderer emitted, in order. */
+private class RecordingResidencySink : DiagnosticSink {
+    private val recorded: MutableList<Diagnostic> = mutableListOf()
+
+    val diagnostics: List<Diagnostic> get() = ArrayList(recorded)
+
+    override fun emit(diagnostic: Diagnostic) {
+        recorded += diagnostic
     }
 }
 
@@ -425,12 +588,14 @@ private fun residencyGlBinding(): RecordingGlBinding = styleGlBinding()
 private fun residencyRenderer(
     transport: Transport,
     binding: RecordingGlBinding = residencyGlBinding(),
+    diagnosticSink: DiagnosticSink = DiagnosticSink.None,
 ): Renderer = createRenderer(
     RendererConfiguration(
         outputPixelSize = OutputPixelSize(RESIDENCY_PIXELS, RESIDENCY_PIXELS),
         transport = transport,
         store = ResidencyStore(),
         basemapStyle = ResourceLocator(RESIDENCY_STYLE_URL),
+        diagnosticSink = diagnosticSink,
     ),
     binding,
     RenderContextProbe { RenderContextIdentity(1L) },
