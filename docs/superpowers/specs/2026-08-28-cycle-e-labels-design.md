@@ -338,5 +338,23 @@ what RenG calls.
 - Labels are not verified legible. Only Cycle J can do that.
 - Complex scripts produce no text and RenG cannot fix it downstream — it only stops being silent.
 - `icon-text-fit` layers draw unfitted icons; the plate will be the wrong size, not absent.
+- **Icons are placed, collided and painted-in-data, but not drawn.** Task 12 resolves
+  `LabelIconRef.imageName` against the retained sprite manifest, composes the ordering contract, and gives
+  every icon its own box in the collision index — so text no longer lands where a symbol already sits.
+  What is missing is the draw itself, and it needs two things this cycle does not build: a pipeline that
+  samples a sprite atlas, since the label program thresholds its texture's alpha as a signed distance
+  field and a sprite's alpha is coverage; and the atlas's **pixels**, which the firewall parses the
+  geometry out of and then discards. §3's "resolving `LabelIconRef.imageName` to sprite pixels, **and the
+  draw**" is therefore half-delivered, and no task in the plan owns the other half. Until it does, the
+  only icon on screen is the one Rentile rasterised into the tile underneath.
+- `icon-color`, `icon-halo-color`, `icon-halo-width` and `icon-halo-blur` reach no shader, and would apply
+  only to an `sdf` sprite in any case — Rentile tints under `SRC_IN` when the manifest entry says so and
+  passes no colour filter otherwise. The flag is now carried on `SpriteAtlasEntry` so that whoever writes
+  the draw cannot tint artwork the style never asked to recolour.
+- `icon-pitch-alignment` is resolved and then not honoured: a `map`-pitched icon should reach the screen as
+  a projected parallelogram and instead is drawn screen-facing at its map-anchored position. That is the
+  same gap the text path already has for `text-pitch-alignment`, which nothing in placement reads.
+- `symbol-avoid-edges` is honoured for a symbol's **icon** and not for its text. Closing the text half
+  changes which labels a text-only layer places, which is task 9's territory rather than task 12's.
 - No label content is occluded by 3D scene content.
 - Nothing is measured on a real mobile GPU. The mobile targets run in simulation only, per ADR 0033.

@@ -100,6 +100,11 @@ internal fun placeLabels(
             // afterwards unless `text-ignore-placement` or `icon-ignore-placement` says it is
             // invisible to the pass, which is the style's way of asking for a symbol that neither
             // yields nor blocks.
+            // **A label with no glyph quads claims nothing, which is a change and an improvement.**
+            // A candidate whose script `ScriptSupport` cannot shape -- E9's 23 ranges, Hebrew, Arabic
+            // and the abugidas -- arrives with a bounding box and an empty glyph list, and reserving
+            // its box would hold a hole open on screen that no ink ever fills. The empty half is also
+            // what makes the symbol's other half vacuously able to stand alone, below.
             val textPlaceable = label.quads.isNotEmpty() &&
                 label.collisionBox.intersects(viewport) &&
                 !(candidate.overlap.resolvesAsNever() && index.intersectsAnything(label.collisionBox))
