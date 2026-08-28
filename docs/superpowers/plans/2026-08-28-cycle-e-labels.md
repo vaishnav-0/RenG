@@ -160,6 +160,28 @@ implementation call; F-2's `ModelShaderVariant` is the precedent if they are.
 
 ## Wave 3 — placement
 
+### Task 8b — split tile selection and style acquisition from `drawBasemap`
+
+**Found by Task 4, and it blocks E7's orthogonality answer from meaning anything.** Two guards currently
+make `drawBasemap = false, drawLabels = true` render nothing at all:
+
+- `internal/planning/MercatorSpatialPlanner.kt:146` — `if (plan.drawBasemap && basemapStyleConfigured)`
+  gates **both** `clippedPhysicalPixelFootprint` and `selectBasemapTiles`, so that pairing selects no tiles
+  and `planLabelCandidates` has no tile list to take.
+- `internal/planning/FramePlanningCore.kt:226` — `if (plan.drawBasemap && basemapStyle != null)` gates
+  acquisition of `ResourceClass.BASEMAP_STYLE`, so that pairing acquires no style — and labels come *from*
+  the style.
+
+Both are independent `if`s over the plan rather than one shared branch, so splitting them is contained.
+
+The rule after the split: **tile selection and style acquisition are needed when either flag is set**;
+only the *ground draw* is gated on `drawBasemap` alone.
+
+**Vacuity warning:** a test asserting the split with both flags true passes without the change, and so does
+one with both false. The discriminating cases are exactly the two mixed pairings, and the `false/true` one
+is the one that is broken today.
+
+
 ### Task 9 — point placement, collision and priority
 
 Depends on tasks 3 and 8.
