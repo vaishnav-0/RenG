@@ -43,6 +43,31 @@ class LabelPipelineTest {
         assertTrue(scanShaderProfile(LABEL_FRAGMENT_SOURCE) != null)
     }
 
+    /**
+     * The fill edge is written twice — once as a GLSL literal the fragment shader thresholds at, and
+     * once as the Kotlin constant [labelHaloEdgeDistance] measures the halo's offset from — and the
+     * two must be the same number. They cannot be one declaration: the shader is a string, and
+     * interpolating a `Float` into it would emit whatever `toString` chose, which for a small value
+     * is scientific notation and not GLSL at all.
+     *
+     * Moving either alone puts the halo edge and the fill edge in different coordinate systems, so
+     * every halo would be offset by the difference — a wrong picture that still renders. This is the
+     * cheapest thing that fails when they drift.
+     */
+    @Test fun theFillEdgeIsTheSameNumberInTheShaderAndInTheHaloDerivation() {
+        assertEquals(0.75f, LABEL_FILL_EDGE_DISTANCE)
+        assertTrue(
+            LABEL_FRAGMENT_SOURCE.contains("const float rengLabelFillEdge = 0.75;"),
+            "the fragment shader must threshold at the same edge the halo is measured from",
+        )
+        // The two meet here: a zero-width halo lands exactly on the fill edge, which is the identity
+        // the shader relies on to need no halo-off variant.
+        assertEquals(
+            LABEL_FILL_EDGE_DISTANCE,
+            labelHaloEdgeDistance(scale = 1.0f, haloWidthPixels = 0.0f),
+        )
+    }
+
     @Test fun creationBuildsAProgramTwoBuffersAndFiveInterleavedAttributes() {
         val binding = newBinding()
         val created = createLabelPipeline(binding, ShaderDialect.GLES, GlProgramCache())
