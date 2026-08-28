@@ -4,17 +4,20 @@ import com.rohittp.reng.internal.containsOnlyUnicodeScalars
 import com.rohittp.reng.internal.identity.CanonicalBinary
 import com.rohittp.reng.internal.identity.CanonicalBytes
 import com.rohittp.reng.internal.identity.CanonicalRootKind
+import com.rohittp.reng.internal.projection.GeographicPosition
+import com.rohittp.reng.internal.projection.projectMercator
 import com.rohittp.rentile.LabelCandidate
 import com.rohittp.rentile.LabelCandidateBatch
+import kotlin.math.floor
 
 /**
  * What makes two labels in two consecutive frames **the same label**, so that ADR 0035's fade has
  * something to carry across them.
  *
  * **The rule the field set below is derived from, stated once: an identity is what a label *is*,
- * never how it is drawn this frame.** Which layer declared it, which tile it came out of, where it
- * sits on the earth and what it says are properties of the feature; its colour, its halo, its text
- * size, its opacity, its sort key, its position in the batch and its glyphs' atlas cells are
+ * never how it is drawn this frame.** Which layer declared it, where it sits on the earth and what
+ * it says are properties of the feature; its colour, its halo, its text size, its opacity, its sort
+ * key, its position in the batch, its glyphs' atlas cells **and the tile it was delivered in** are
  * properties of one frame's rendering of it, and every one of them can change between two frames
  * that a human would say drew the same label. That is the line, and both ways of crossing it fail
  * silently:
@@ -26,10 +29,53 @@ import com.rohittp.rentile.LabelCandidateBatch
  *    the other's opacity. That reads as a rendering bug rather than an identity bug, and it only
  *    shows up under a moving camera.
  *
+ * **The source tile was in this field set until the visual harness measured what it cost, and taking
+ * it out is a considered decision being overturned rather than an oversight being fixed.** Task 13's
+ * argument was that at an LOD change the candidate set is replaced wholesale and vector geometry is
+ * quantised per tile, so anchors differ across LODs anyway and nothing is lost by pinning the tile.
+ * Every clause of that is true and the conclusion is still wrong: `observeMercatorLod` changes the
+ * selected LOD whenever a camera merely zooms, so `sourceTile.z` renamed **every label in view** at
+ * every crossing. The harness pass measured strong label ink collapsing to exactly zero at the
+ * storyboard's three crossings, in both styles, with the layer then taking ten frames to return --
+ * the file's own "too fine" failure, reached by argument instead of by measurement.
+ *
+ * **What the tile was doing, and why the anchor already does it.** The reading that keeps the tile is
+ * that it separates same-named features in adjacent tiles, because a tile buffer repeats a feature
+ * into its neighbours. Rentile does not hand that repetition over: `LabelCandidateAssembler` keeps a
+ * feature only for the tile whose own `[0, extent)` window contains its anchor, in as many words --
+ * "the window excludes it from every tile but the one that contains it" -- so a point or line anchor
+ * reaches RenG once per requested zoom, attributed to the one tile that holds it. The two candidates
+ * a batch really can carry for one feature are the two world copies of a wrapped viewport, and those
+ * share a canonicalised `sourceTile` and so were never separated by this field either. The tile
+ * separated nothing the anchor does not; it only pinned an LOD.
+ *
+ * **The anchor's own drift is a tolerance question and not an identity question, which is the part
+ * Task 13 asserted without measuring.** Each zoom of a tile pyramid rounds the same true position to
+ * its own grid, and the grids are nested, so one place's anchor at two adjacent LODs differs by at
+ * most one tile-extent unit at the finer of the two. Measured on real vector tiles over San
+ * Francisco: 70% to 85% of anchors move at all across a crossing, and the largest movement seen at
+ * any of z12 -> z13, z13 -> z14 and z14 -> z15 was exactly half a coarse unit -- 1.19 m, 0.60 m and
+ * 0.30 m. A metre is not a different place, so the anchor enters the identity as a cell rather than
+ * as a coordinate: the Mercator world position floored onto a fixed 2^20-by-2^20 grid, which is one
+ * tile-extent unit at zoom 8 and about 38 m at the equator. That grid re-derived all 43 of the
+ * real cross-LOD pairs measured as the same cell, and merged 38 of the 4,320 anchors in the
+ * densest z14 tile of downtown San Francisco -- 0.9%, every one of them a same-layer namesake
+ * within 38 m, which is a shared opacity rather than a lost label.
+ *
+ * **Two residuals, recorded rather than papered over.** A grid has boundaries, so a place whose true
+ * position sits within a re-rounding of one loses its identity at a crossing anyway; the rate is the
+ * drift over the cell, which is about 2% at LOD 14 and rises as the LOD falls, reaching a coin toss
+ * around LOD 9 where one tile-extent unit is itself 38 m. And no single cell size can serve both
+ * ends of the zoom range -- the drift shrinks with 2^-zoom while the spacing of distinct labels
+ * shrinks with it, so a cell that keeps continent labels stable would merge neighbouring POIs. This
+ * one is sized for the zooms a map spends its time at and errs towards the finer failure, because
+ * that is the one whose worst case is a label that fades in twice rather than two labels sharing an
+ * opacity.
+ *
  * **The rule admits one thing about a line label that looks like geometry and is not: which repeat
  * along the road this is.** A `line`-placed candidate is one feature that draws its name several
  * times, once every `symbol-spacing`, and every one of those repeats carries the same candidate --
- * the same layer, the same tile, the same anchor, the same letters. Under the fields above they are
+ * the same layer, the same anchor, the same letters. Under the fields above they are
  * one label, which makes two instances of a road name share one opacity and fade as if they were
  * one. They are not one label: "Rue de Rivoli, 250 pixels along" and "Rue de Rivoli, 750 pixels
  * along" are two things a reader sees at once and can watch appear separately, so *where on the
@@ -91,7 +137,8 @@ internal class LabelIdentity internal constructor(private val canonicalBytes: Ca
  * full opacity, which is exactly what every label did before fade existed. It is returned for the
  * three shapes Rentile's own assembler cannot produce but its types still admit -- a candidate index
  * outside the batch, a `layerStyleIndex` naming no layer, and a glyph naming no atlas entry -- plus
- * a non-finite anchor or arc distance, which the canonical encoding refuses by design. [placeLabels]
+ * a non-finite arc distance, which the canonical encoding refuses by design, and an anchor that is
+ * non-finite or projects off the grid, which is refused here for the same reason. [placeLabels]
  * takes the same position for the same reason.
  */
 internal fun deriveLabelIdentity(
@@ -103,20 +150,34 @@ internal fun deriveLabelIdentity(
     val layerId = batch.layerStyles.getOrNull(candidate.layerStyleIndex)?.layerId ?: return null
     // `exactUtf8` refuses an unpaired surrogate and `binary64` refuses a non-finite Double. Both are
     // reachable from a style document and from the engine respectively, so they are checked here
-    // rather than caught: a derivation that throws is a frame that fails over a cosmetic ease.
+    // rather than caught: a derivation that throws is a frame that fails over a cosmetic ease. The
+    // anchor is checked on the same terms even though it no longer reaches `binary64`, because
+    // `Double.toLong()` maps every non-finite value onto one cell index instead of refusing it.
     if (!containsOnlyUnicodeScalars(layerId)) return null
     if (!candidate.latitude.isFinite() || !candidate.longitude.isFinite()) return null
     if (lineRepeat != null && !lineRepeat.anchorDistancePixels.isFinite()) return null
+    val anchor = projectMercator(
+        GeographicPosition(
+            latitude = candidate.latitude,
+            unwrappedLongitude = candidate.longitude,
+            altitudeMetres = 0.0,
+        ),
+    )
+    val cellX = anchor.x * ANCHOR_GRID_CELLS
+    val cellY = anchor.y * ANCHOR_GRID_CELLS
+    // A finite latitude and longitude can still project outside the range a `Long` cell index means
+    // anything in -- a longitude a consumer unwrapped far enough, a latitude at the projection's own
+    // pole. An identity is refused there rather than saturated onto a shared cell, which is the same
+    // rule the two checks above follow: no identity is a full-opacity label, a wrong one is a label
+    // wearing somebody else's fade.
+    if (!cellX.isFinite() || !cellY.isFinite()) return null
     val codepoints = candidate.codepoints(batch) ?: return null
 
     return LabelIdentity(
         CanonicalBinary.root(CanonicalRootKind.LABEL) {
             field(LAYER_ID_TAG, CanonicalBinary.exactUtf8(layerId))
-            field(SOURCE_TILE_Z_TAG, CanonicalBinary.i64(candidate.sourceTile.z.toLong()))
-            field(SOURCE_TILE_X_TAG, CanonicalBinary.i64(candidate.sourceTile.x.toLong()))
-            field(SOURCE_TILE_Y_TAG, CanonicalBinary.i64(candidate.sourceTile.y.toLong()))
-            field(LATITUDE_TAG, CanonicalBinary.binary64(candidate.latitude))
-            field(LONGITUDE_TAG, CanonicalBinary.binary64(candidate.longitude))
+            field(ANCHOR_CELL_X_TAG, CanonicalBinary.i64(floor(cellX).toLong()))
+            field(ANCHOR_CELL_Y_TAG, CanonicalBinary.i64(floor(cellY).toLong()))
             field(CODEPOINTS_TAG, CanonicalBinary.list(codepoints))
             // Omitted entirely rather than written as a sentinel when the candidate placed one
             // instance, so a point label and a `line-center` one encode exactly the bytes they did
@@ -150,13 +211,20 @@ private fun LabelCandidate.codepoints(batch: LabelCandidateBatch): List<Canonica
     }
 }
 
+/**
+ * The identity's spatial resolution, as the base-two log of how many cells span the Mercator world
+ * on each axis. 2^20 cells is one tile-extent unit at zoom 8 -- so every tile grid from zoom 8 up is
+ * a refinement of it and a cell boundary is always a tile-unit boundary too -- and about 38 m at the
+ * equator. The KDoc above records what it was measured against and the two ways it is imperfect.
+ */
+private const val ANCHOR_GRID_EXPONENT: Int = 20
+
+private val ANCHOR_GRID_CELLS: Double = (1L shl ANCHOR_GRID_EXPONENT).toDouble()
+
 private const val LAYER_ID_TAG: Int = 1
-private const val SOURCE_TILE_Z_TAG: Int = 2
-private const val SOURCE_TILE_X_TAG: Int = 3
-private const val SOURCE_TILE_Y_TAG: Int = 4
-private const val LATITUDE_TAG: Int = 5
-private const val LONGITUDE_TAG: Int = 6
-private const val CODEPOINTS_TAG: Int = 7
+private const val ANCHOR_CELL_X_TAG: Int = 2
+private const val ANCHOR_CELL_Y_TAG: Int = 3
+private const val CODEPOINTS_TAG: Int = 4
 
 /**
  * `u64` rather than `i64`: unlike the tile coordinates and the codepoints above, the run index is a
@@ -164,6 +232,6 @@ private const val CODEPOINTS_TAG: Int = 7
  * encoding's `require` is a real check on it rather than a way to fail a frame over one of Rentile's
  * unvalidated `Int`s.
  */
-private const val LINE_RUN_INDEX_TAG: Int = 8
+private const val LINE_RUN_INDEX_TAG: Int = 5
 
-private const val LINE_ANCHOR_DISTANCE_TAG: Int = 9
+private const val LINE_ANCHOR_DISTANCE_TAG: Int = 6

@@ -63,9 +63,10 @@ internal val PLACEMENT_ANCHOR_BEHIND: GeographicPosition =
     GeographicPosition(latitude = 48.832363, unwrappedLongitude = 2.244501, altitudeMetres = 0.0)
 
 /**
- * The tile every candidate comes out of unless a case says otherwise. Task 13's label identity is
- * scoped by it, so a case about two labels that differ only in provenance varies this and nothing
- * else.
+ * The tile every candidate comes out of unless a case says otherwise. Task 13's label identity was
+ * scoped by it and task 24's is not -- the source tile is where a label was delivered rather than
+ * what it is -- so varying this alone now changes no identity at all, and a case about two labels in
+ * two tiles varies their anchors as well because that is what really tells them apart.
  */
 internal val PLACEMENT_TILE: TileId = TileId(z = 13, x = 4237, y = 2887)
 

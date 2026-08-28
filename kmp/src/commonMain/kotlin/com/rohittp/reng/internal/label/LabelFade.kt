@@ -114,9 +114,12 @@ internal class LabelFadeAdvance(
  * has not measured one yet.
  *
  * **Two placed labels that derive one identity advance it once.** The raised step is computed from
- * [previous] rather than from the map being built, so a feature that a source duplicates -- or one
- * that a tile buffer repeats -- gets one entry, one advance, and the same opacity on both copies,
- * instead of a fade that runs twice as fast on the labels that happen to be duplicated. The repeats
+ * [previous] rather than from the map being built, so a feature a source duplicates -- or one whose
+ * namesake stands inside the same cell of [deriveLabelIdentity]'s anchor grid -- gets one entry, one
+ * advance, and the same opacity on both copies, instead of a fade that runs twice as fast on the
+ * labels that happen to be duplicated. A tile buffer's own repeats are **not** among these: Rentile
+ * attributes a feature to the one tile whose window contains its anchor, so the repetition never
+ * reaches this function. The repeats
  * of one `line` candidate are **not** that case and must not be collapsed into it: they are one
  * feature drawn at several places along its own road, they carry `PlacedLabel.lineRepeat` to say
  * which is which, and [deriveLabelIdentity] reads it so each of them fades on its own.
