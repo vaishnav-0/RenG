@@ -112,8 +112,9 @@ internal fun layOutLineLabels(
     }
 
     val spacing = candidate.symbolSpacing
-    // Below one pixel every repeat lands on the same pixel, and the walk below stops terminating in
-    // any useful time -- a hundred-pixel run at a spacing of `1e-9` asks for `1e11` instances.
+    // Below one pixel every repeat of the label lands on the pixel its neighbour did, so the floor
+    // costs nothing that could be seen. It is also what keeps [MAXIMUM_ANCHORS_PER_RUN] a bound on
+    // a pathological *run* rather than one a spacing of `1e-9` would reach on any line at all.
     if (!(spacing >= MINIMUM_LINE_SPACING_PIXELS) || !spacing.isFinite()) return emptyList()
 
     val placed = ArrayList<PlacedLabel>()
@@ -433,7 +434,7 @@ private const val MINIMUM_LINE_POINTS: Int = 2
 /** See [projectLineRuns]. Far below anything a reader could see, and above zero. */
 private const val MINIMUM_SEGMENT_PIXELS: Double = 1.0e-6
 
-/** See the walk in [layOutLineLabels]. */
+/** The `symbolSpacing` floor. See the walk in [layOutLineLabels]. */
 private const val MINIMUM_LINE_SPACING_PIXELS: Double = 1.0
 
 /**
