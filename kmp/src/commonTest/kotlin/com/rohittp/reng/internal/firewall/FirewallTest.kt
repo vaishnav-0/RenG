@@ -631,6 +631,96 @@ class FirewallTest {
     }
 
     @Test
+    fun holdsNoSpriteManifestUntilBothMembersOfAPairAreKnown() = runTest {
+        val fw = firewall(transport = spritePairTransport(VALID_SPRITE_JSON), store = RoutedStore())
+        assertNull(fw.registry.spriteAtlasManifest(), "an invocation that has seen nothing holds nothing")
+
+        fw.transport.execute(engineRequestFor(spriteJsonRoute))
+        assertNull(fw.registry.spriteAtlasManifest(), "and one that has fetched a member still holds nothing")
+    }
+
+    @Test
+    fun retainsTheManifestOfAPairItProxiedOntoTheStore() = runTest {
+        val fw = firewall(transport = spritePairTransport(VALID_SPRITE_JSON), store = RoutedStore())
+        fw.transport.execute(engineRequestFor(spriteJsonRoute))
+        fw.transport.execute(engineRequestFor(spriteImageRoute))
+        val jsonWrite = launch {
+            fw.store.write(engineKeyFor(spriteJsonRoute), engineStoredResourceOf(VALID_SPRITE_JSON))
+        }
+        val imageWrite = launch {
+            fw.store.write(engineKeyFor(spriteImageRoute), engineStoredResourceOf(SPRITE_ATLAS_PNG))
+        }
+        jsonWrite.join()
+        imageWrite.join()
+
+        val manifest = assertNotNull(fw.registry.spriteAtlasManifest(), "a written pair leaves its manifest")
+        assertEquals(SpriteAtlasEntry(x = 0, y = 0, width = 2, height = 2, pixelRatio = 1.0), manifest.entries["icon"])
+    }
+
+    @Test
+    fun retainsTheManifestOfAPairServedEntirelyFromTheConsumersStore() = runTest {
+        // **The case the icon path actually lives or dies on.** The joint gate runs on the *write* path,
+        // and a consumer whose Store already holds both members never reaches one -- so an icon would
+        // resolve on the first frame after a cold start and on no frame afterwards, which reads as a
+        // placement bug rather than as a caching one. Nothing else observable distinguishes this from
+        // the write case, which is why it asserts the manifest rather than a write count.
+        val store = RoutedStore(
+            reads = mapOf(
+                ResourceClass.BASEMAP_SPRITE_JSON to storedRecordOf(VALID_SPRITE_JSON),
+                ResourceClass.BASEMAP_SPRITE_IMAGE to storedRecordOf(SPRITE_ATLAS_PNG),
+            ),
+        )
+        val fw = firewall(transport = spritePairTransport(VALID_SPRITE_JSON), store = store)
+        assertNotNull(fw.store.read(engineKeyFor(spriteJsonRoute)))
+        assertNull(
+            fw.registry.spriteAtlasManifest(),
+            "one hit is not a pair, so nothing is latched from the first read alone",
+        )
+        assertNotNull(fw.store.read(engineKeyFor(spriteImageRoute)))
+
+        val manifest = assertNotNull(
+            fw.registry.spriteAtlasManifest(),
+            "the second store hit completes the pair and latches its manifest",
+        )
+        assertEquals(SpriteAtlasEntry(x = 0, y = 0, width = 2, height = 2, pixelRatio = 1.0), manifest.entries["icon"])
+        assertEquals(0, store.writeCalls, "and nothing was written, because nothing was fetched")
+    }
+
+    @Test
+    fun retainsNoManifestForAStoreServedPairThatCannotCompile() = runTest {
+        // The same two store hits, with one entry a pixel outside the atlas. A latched manifest here
+        // would hand an icon geometry the engine itself refuses.
+        val store = RoutedStore(
+            reads = mapOf(
+                ResourceClass.BASEMAP_SPRITE_JSON to storedRecordOf(OUT_OF_BOUNDS_SPRITE_JSON),
+                ResourceClass.BASEMAP_SPRITE_IMAGE to storedRecordOf(SPRITE_ATLAS_PNG),
+            ),
+        )
+        val fw = firewall(transport = spritePairTransport(VALID_SPRITE_JSON), store = store)
+        assertNotNull(fw.store.read(engineKeyFor(spriteJsonRoute)))
+        assertNotNull(fw.store.read(engineKeyFor(spriteImageRoute)))
+        assertNull(fw.registry.spriteAtlasManifest())
+    }
+
+    @Test
+    fun recordsWhetherAnEntryIsASignedDistanceFieldImage() {
+        // `sdf` decides whether `icon-color` and `icon-halo-*` mean anything at all: Rentile tints a
+        // sprite under SRC_IN when it is set and passes no colour filter otherwise, so an icon pass that
+        // never read it would repaint artwork the style did not ask to recolour. Both spellings are here
+        // because one alone cannot tell a flag that is read from one that is hardcoded, and the third
+        // entry is the absent case, which Rentile's own `booleanOrNull` falls back to false for.
+        val json = (
+            """{"harbour":{"x":3,"y":1,"width":9,"height":5,"sdf":true},""" +
+                """"quay":{"x":11,"y":6,"width":5,"height":2,"sdf":false},""" +
+                """"jetty":{"x":1,"y":1,"width":2,"height":3}}"""
+            ).encodeToByteArray()
+        val manifest = assertNotNull(spritePairJointManifest(json, ASYMMETRIC_SPRITE_ATLAS_PNG))
+        assertEquals(true, manifest.entries["harbour"]?.sdf, "a declared distance-field entry")
+        assertEquals(false, manifest.entries["quay"]?.sdf, "one that declares itself artwork")
+        assertEquals(false, manifest.entries["jetty"]?.sdf, "and one that declares nothing")
+    }
+
+    @Test
     fun yieldsNoManifestWhenOneEntryOfSeveralLeavesTheAtlas() {
         // All or nothing, exactly as the verdict this replaced was: a pair Rentile cannot compile must not
         // come back as a manifest missing the entry that broke it, because the caller would then cache a

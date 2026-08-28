@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.label
 
+import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
 import com.rohittp.reng.internal.gl.ResolvedGlyphQuad
 import com.rohittp.reng.internal.gl.ResolvedLabelPaint
 import com.rohittp.reng.internal.projection.GeographicPosition
@@ -50,13 +51,22 @@ import kotlin.math.sin
  * other two placement modes and hands back the same [PlacedLabel]s, which then take exactly the same
  * route through the index below. A line candidate yields *several* of them -- one per repeat along
  * the line -- and two repeats of one road name are as capable of colliding with each other as two
- * different labels are, which is why the loop iterates a list rather than an optional. Icons are
- * task 12's and fade is task 13's; `zOrder` and `avoidEdges` are carried by the engine and not yet
- * honoured here, which is recorded in the cycle's ledger rather than hidden.
+ * different labels are, which is why the loop iterates a list rather than an optional.
+ *
+ * **A symbol has two halves and both collide.** [LabelIconPlacement] lays out the icon each layout
+ * function pairs with its text, and the loop below queries both boxes before it inserts either, then
+ * lets [coupleIconAndText] decide which survive -- 611 of the corpus's 681 icon layers are the same
+ * layer as their text, so treating the two as unrelated tenants of one index would place a name where
+ * its own shield already sits.
+ *
+ * Fade is task 13's; `zOrder` is carried by the engine and not honoured here, and `avoidEdges` is
+ * honoured for the icon half alone ([resolveIcon]) -- both recorded in the cycle's ledger rather
+ * than hidden.
  */
 internal fun placeLabels(
     camera: ResolvedMercatorCamera,
     batch: LabelCandidateBatch,
+    sprites: SpriteAtlasManifest? = null,
 ): List<PlacedLabel> {
     if (batch.candidates.isEmpty()) return emptyList()
 
@@ -73,22 +83,70 @@ internal fun placeLabels(
         val candidate = batch.candidates[candidateIndex]
         val labels = when (candidate.placement) {
             LabelPlacement.POINT ->
-                listOfNotNull(layOutPointLabel(camera, batch.atlas, candidate, candidateIndex))
+                listOfNotNull(layOutPointLabel(camera, batch.atlas, candidate, candidateIndex, sprites, viewport))
 
             LabelPlacement.LINE, LabelPlacement.LINE_CENTER ->
-                layOutLineLabels(camera, batch.atlas, candidate, candidateIndex)
+                layOutLineLabels(camera, batch.atlas, candidate, candidateIndex, sprites, viewport)
         }
 
         for (label in labels) {
-            if (!label.collisionBox.intersects(viewport)) continue
+            val icon = label.icon
 
+            // **Both halves are queried before either is inserted, and the order is not a
+            // preference.** A symbol's icon sits on top of its own text by construction -- that is
+            // what `icon-anchor` and `icon-offset` place it relative to -- so inserting the text
+            // first would make every symbol's icon lose a collision with its own name.
+            //
             // The drop. `never` -- and `cooperative`, see [resolvesAsNever] -- yields to anything
-            // already placed; `always` never yields. Either way the label occupies the index
-            // afterwards unless `text-ignore-placement` says it is invisible to the pass, which is
-            // the style's way of asking for a label that neither yields nor blocks.
-            if (candidate.overlap.resolvesAsNever() && index.intersectsAnything(label.collisionBox)) continue
-            if (!candidate.ignorePlacement) index.insert(label.collisionBox)
-            placed += label
+            // already placed; `always` never yields. Either way the half occupies the index
+            // afterwards unless `text-ignore-placement` or `icon-ignore-placement` says it is
+            // invisible to the pass, which is the style's way of asking for a symbol that neither
+            // yields nor blocks.
+            // **A label with no glyph quads claims nothing, which is a change and an improvement.**
+            // A candidate whose script `ScriptSupport` cannot shape -- E9's 23 ranges, Hebrew, Arabic
+            // and the abugidas -- arrives with a bounding box and an empty glyph list, and reserving
+            // its box would hold a hole open on screen that no ink ever fills. The empty half is also
+            // what makes the symbol's other half vacuously able to stand alone, below.
+            val textPlaceable = label.quads.isNotEmpty() &&
+                label.collisionBox.intersects(viewport) &&
+                !(candidate.overlap.resolvesAsNever() && index.intersectsAnything(label.collisionBox))
+            val iconPlaceable = icon != null &&
+                icon.collisionBox.intersects(viewport) &&
+                !(
+                    candidate.icon?.overlap?.resolvesAsNever() == true &&
+                        index.intersectsAnything(icon.collisionBox)
+                    )
+
+            val outcome = coupleIconAndText(
+                hasText = label.quads.isNotEmpty(),
+                hasIcon = icon != null,
+                textPlaceable = textPlaceable,
+                iconPlaceable = iconPlaceable,
+                iconOptional = candidate.icon?.optional ?: false,
+                textOptional = candidate.textOptional,
+            )
+            if (!outcome.text && !outcome.icon) continue
+
+            if (outcome.text && !candidate.ignorePlacement) index.insert(label.collisionBox)
+            if (outcome.icon && candidate.icon?.ignorePlacement == false) {
+                index.insert(requireNotNull(icon) { "an icon that was placed exists" }.collisionBox)
+            }
+            placed += if (outcome.text && outcome.icon) {
+                label
+            } else {
+                // One half lost the coupling, so the survivor is carried without it rather than
+                // with a half nothing will draw. The anchor and the collision box stay the whole
+                // symbol's, because both are the *label's* -- task 13's identity is derived from
+                // the anchor and would otherwise move when a symbol lost its icon.
+                PlacedLabel(
+                    candidateIndex = label.candidateIndex,
+                    anchorPixelX = label.anchorPixelX,
+                    anchorPixelY = label.anchorPixelY,
+                    collisionBox = label.collisionBox,
+                    quads = if (outcome.text) label.quads else emptyList(),
+                    icon = if (outcome.icon) icon else null,
+                )
+            }
         }
     }
 
@@ -121,6 +179,24 @@ internal class PlacedLabel(
     val anchorPixelY: Double,
     val collisionBox: LabelScreenBox,
     val quads: List<ResolvedGlyphQuad>,
+    /**
+     * This symbol's icon, or `null` when the layer declares none, when no sprite manifest was
+     * retained, or when [coupleIconAndText] dropped it while keeping the text -- see [resolveIcon]
+     * for the full list, all of which are one absent icon rather than an absent label.
+     *
+     * **[quads] and this are two halves of one symbol and either may be empty on a survivor.** A
+     * symbol whose text lost its place while its icon kept one is a `PlacedLabel` with no quads and
+     * an icon; the reverse is quads and no icon. Only a symbol that lost both is absent from
+     * [placeLabels]' result entirely.
+     *
+     * **Nothing draws it yet, and the reason is the sprite atlas rather than this pass.** The label
+     * program thresholds its texture's alpha as a signed distance field, which is the wrong
+     * arithmetic for a sprite; the sprite atlas's pixels are retained nowhere a draw could reach;
+     * and a fade multiplies [FadedLabel.opacity] into the glyph paints alone. All three are one
+     * seam, recorded in this cycle's report rather than hidden -- what this pass does deliver is the
+     * icon's *claim* on the screen, which is why text no longer places where a symbol already sits.
+     */
+    val icon: PlacedIcon? = null,
 )
 
 /**
@@ -171,6 +247,14 @@ internal data class LabelScreenBox(
      */
     fun intersects(other: LabelScreenBox): Boolean =
         left < other.right && other.left < right && top < other.bottom && other.top < bottom
+
+    /**
+     * Whether [other] lies wholly within this box, edges included, which is what
+     * `symbol-avoid-edges` asks about: an icon exactly touching the viewport edge is not clipped by
+     * it, so the comparison is non-strict where [intersects] is strict.
+     */
+    fun contains(other: LabelScreenBox): Boolean =
+        other.left >= left && other.right <= right && other.top >= top && other.bottom <= bottom
 }
 
 /**
@@ -245,6 +329,8 @@ private fun layOutPointLabel(
     atlas: LabelGlyphAtlas,
     candidate: LabelCandidate,
     candidateIndex: Int,
+    sprites: SpriteAtlasManifest?,
+    viewport: LabelScreenBox,
 ): PlacedLabel? {
     if (!candidate.hasFinitePlacementInputs()) return null
 
@@ -359,6 +445,20 @@ private fun layOutPointLabel(
         anchorPixelY = anchorY,
         collisionBox = collisionBox,
         quads = quads,
+        // **The *symbol* anchor, not the text-translated one.** `text-translate` and
+        // `icon-translate` are two independent properties of one symbol, so an icon handed
+        // `anchorX`/`anchorY` would be displaced by the sum of both. The frame the icon rotates in
+        // is the map's own basis, which is the same pair `text-rotation-alignment: map` composes
+        // with above -- for a point symbol only `icon-rotation-alignment: map` consults it.
+        icon = resolveIcon(
+            sprites = sprites,
+            candidate = candidate,
+            anchorPixelX = anchor.pixelX,
+            anchorPixelY = anchor.pixelY,
+            frameCosine = cosineMap,
+            frameSine = sineMap,
+            viewport = viewport,
+        ),
     )
 }
 

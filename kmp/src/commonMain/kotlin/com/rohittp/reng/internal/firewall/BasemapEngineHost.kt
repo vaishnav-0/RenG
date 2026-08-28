@@ -192,6 +192,26 @@ internal class BasemapEngineHost(
      * level later — an exchange RenG never planned — so it fails the same way, rather than silently
      * accruing routes into a registry that does not exist.
      */
+    /**
+     * The sprite atlas manifest the open invocation proxied, or `null` when it held no jointly valid
+     * pair -- because the style declares no sprite, because only one member was ever seen, or because
+     * the pair could not be parsed.
+     *
+     * **This is the only way `LabelIconRef.imageName` becomes atlas pixels.** Rentile's own KDoc says
+     * the name is "an opaque lookup key into sprite resources owned and resolved by the consumer" and
+     * that "Rentile does not expose a public sprite atlas", so the geometry has to come from the bytes
+     * RenG already proxied on the engine's behalf. [OperationRegistry.spriteAtlasManifest] is where it
+     * was kept.
+     *
+     * Called **inside** [withOperation], because the registry holding it is discarded when the
+     * invocation terminates (ADR 0016) -- which is also the guarantee that one frame's icons can never
+     * be resolved against another frame's atlas. Outside an invocation this is `null` rather than a
+     * failure, for the same reason the transport's own out-of-invocation behaviour is a refusal rather
+     * than a crash: a caller reaching here at the wrong time gets a frame without icons, not a frame
+     * with somebody else's.
+     */
+    suspend fun spriteAtlasManifest(): SpriteAtlasManifest? = activeOperation?.registry?.spriteAtlasManifest()
+
     suspend fun registerRoutes(routes: List<ResourceRouteKey>) {
         requireOpen()
         val operation = activeOperation ?: throw unplannedEngineExchangeFailure()

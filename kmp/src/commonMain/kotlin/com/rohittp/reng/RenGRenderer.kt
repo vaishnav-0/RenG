@@ -16,6 +16,7 @@ import com.rohittp.reng.internal.firewall.reportLabelContentExclusions
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
 import com.rohittp.reng.internal.firewall.ProductionRentilePrivateKeyResolver
 import com.rohittp.reng.internal.firewall.RenderedBasemapTile
+import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
 import com.rohittp.reng.internal.gl.CompositePipeline
 import com.rohittp.reng.internal.gl.CompositePipelineResult
 import com.rohittp.reng.internal.gl.GeometryPipeline
@@ -374,6 +375,17 @@ private class FrameAcquisition(
      * and collision are `prepare()`'s next step, and both are pure functions of it and the camera.
      */
     val labelCandidates: AcquiredLabelCandidates? = null,
+    /**
+     * The sprite atlas manifest this frame's style declared, as the firewall's own joint sprite gate
+     * parsed it, or `null` when this invocation held no jointly valid pair.
+     *
+     * **Carried out of acquisition because it cannot be read afterwards.** The `OperationRegistry`
+     * holding it is discarded when the invocation terminates (ADR 0016), which is also what guarantees
+     * one frame's icons can never resolve against another frame's atlas. It is the only route by which
+     * `LabelIconRef.imageName` -- an opaque key into resources Rentile deliberately does not expose --
+     * becomes atlas geometry.
+     */
+    val spriteAtlas: SpriteAtlasManifest? = null,
 )
 
 /** The concrete [RenderTarget] [RenGRenderer.mintRenderTarget] produces. */
@@ -777,7 +789,7 @@ internal class RenGRenderer(
             val placedLabels = if (labelBatch == null) {
                 emptyList()
             } else {
-                placeLabels(planned.spatialPlan.camera, labelBatch)
+                placeLabels(planned.spatialPlan.camera, labelBatch, acquired.spriteAtlas)
             }
             val labelFade = advanceLabelFade(
                 previous = previousLabelFade,
@@ -1088,6 +1100,10 @@ internal class RenGRenderer(
         var basemapTiles: List<RenderedBasemapTile> = emptyList()
         var basemapStyleDigest: String? = null
         var labelCandidates: AcquiredLabelCandidates? = null
+        // Read inside the invocation and carried out of it, because the registry that holds it is
+        // discarded when the invocation ends (ADR 0016). It is the manifest of the sprite pair this
+        // frame's own style declared, and the only way an icon's `imageName` becomes atlas geometry.
+        var spriteAtlas: SpriteAtlasManifest? = null
         val outcome = basemapEngineHost.withOperation(accessMode) {
             val driven = preparationDriver.run(definition)
             if (driven is ResourceOperationOutcome.Success) {
@@ -1126,6 +1142,10 @@ internal class RenGRenderer(
                     }
                     if (manifest != null && labelTiles.isNotEmpty()) {
                         labelCandidates = acquireLabelCandidates(manifest, style, labelTiles, accessMode)
+                        // Read after the acquisition rather than before it, because a style compiled on
+                        // an earlier invocation proxies its sprite pair again only when something asks
+                        // for it, and the label acquisition is the last thing in this block that can.
+                        spriteAtlas = basemapEngineHost.spriteAtlasManifest()
                     }
                 }
             }
@@ -1160,7 +1180,7 @@ internal class RenGRenderer(
             }
             reference.resourceKey to image
         }
-        return FrameAcquisition(decodedByKey, basemapTiles, basemapStyleDigest, labelCandidates)
+        return FrameAcquisition(decodedByKey, basemapTiles, basemapStyleDigest, labelCandidates, spriteAtlas)
     }
 
     /**
