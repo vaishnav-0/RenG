@@ -29,6 +29,7 @@ import com.rohittp.reng.internal.gl.RenderContextAdoption
 import com.rohittp.reng.internal.gl.RenderContextProbe
 import com.rohittp.reng.internal.gl.adoptRenderContext
 import com.rohittp.reng.internal.gl.measureGlyphQuadRasterisation
+import com.rohittp.reng.measureLargeQuadRasterisation
 import kotlin.io.encoding.Base64
 import kotlin.math.abs
 import kotlin.math.min
@@ -143,7 +144,6 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
         if (rasterisation.isTrustworthy) {
             assertTwoLabelsDrawAtTheirOwnAnchorsInTheirOwnColours(binding, probe, target)
             assertDroppingALayerDropsExactlyThatLabel(binding, probe, target)
-            assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
             assertOneAggregateDiagnosticWhateverTheEngineExcluded(binding, probe, target)
             assertAnIconClaimsTheScreenSpaceItsSymbolOccupies(binding, probe, target)
             assertTheIconDrawsItsOwnInkBeneathItsOwnText(binding, probe, target)
@@ -158,6 +158,26 @@ internal fun runLabelIntegrationReadbackSuite(binding: GlBinding, probe: RenderC
                     "assert an empty frame still ran.",
             )
         }
+        // This one is gated by a *different* probe. It asserts that a `drawLabels = false` frame is
+        // exactly ground and nothing else -- and it draws real, large ground quads to do it. A driver
+        // that drops those leaves clear-colour pixels the assertion counts as label ink, so it would
+        // fail for the driver's reason rather than RenG's. `Apple Software Renderer` measurably drops
+        // them (2,112 disagreeing pixels on macOS SOFTWARE, 3,040 on the iOS simulator) and is what a
+        // hosted runner gives `MacosGlRenderer.DEFAULT`, so without this gate the case fails on CI for
+        // exactly the reason `0.3.0`'s publication failed. The glyph probe cannot answer for it: glyph
+        // quads survive on that same driver, measured at 0 in the same process.
+        val groundRasterisation = measureLargeQuadRasterisation(binding, dialect, target)
+        if (groundRasterisation.isTrustworthy) {
+            assertTheTwoSwitchesAreIndependentOverAGroundThatPaints(binding, probe, target)
+        } else {
+            println(
+                "RenG label integration readback SKIPPED [the two-switches case] " +
+                    groundRasterisation.describe() +
+                    ": this driver does not rasterise large ground quads, so an exactly-zero " +
+                    "non-ground assertion would measure the driver rather than RenG.",
+            )
+        }
+
         // Neither of these asserts that anything drew, so neither can be answered by the driver's
         // rasterisation of a glyph quad: both require the frame to come back exactly as it was left.
         assertAStyleWithNoSymbolLayersDrawsNothing(binding, probe, target)

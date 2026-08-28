@@ -672,7 +672,7 @@ private fun clearAndDraw(
  * fixture camera: four 512-pixel tiles meeting at the frame's ground anchor, seen through a
  * projection whose near plane is one logical pixel away and whose far plane is at infinity.
  */
-private fun measureLargeQuadRasterisation(
+internal fun measureLargeQuadRasterisation(
     binding: GlBinding,
     dialect: ShaderDialect,
     targetFramebuffer: Int,
@@ -762,7 +762,7 @@ private fun measureLargeQuadRasterisation(
  * The failure it exists to spot is nothing like that size — `Apple Software Renderer` disagrees over
  * a whole tile, thousands of pixels at a time.
  */
-private class LargeQuadRasterisation(
+internal class LargeQuadRasterisation(
     private val mismatchedPixels: Int,
     private val worstRectangle: String,
 ) {
