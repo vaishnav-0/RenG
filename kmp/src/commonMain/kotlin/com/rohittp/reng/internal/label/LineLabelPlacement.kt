@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.label
 
+import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
 import com.rohittp.reng.internal.gl.ResolvedGlyphQuad
 import com.rohittp.reng.internal.gl.ResolvedLabelPaint
 import com.rohittp.reng.internal.projection.GeographicPosition
@@ -57,6 +58,13 @@ internal fun layOutLineLabels(
     atlas: LabelGlyphAtlas,
     candidate: LabelCandidate,
     candidateIndex: Int,
+    sprites: SpriteAtlasManifest? = null,
+    viewport: LabelScreenBox = LabelScreenBox(
+        left = 0.0,
+        top = 0.0,
+        right = camera.outputPixelSize.width.toDouble(),
+        bottom = camera.outputPixelSize.height.toDouble(),
+    ),
 ): List<PlacedLabel> {
     if (!candidate.hasFinitePlacementInputs()) return emptyList()
     if (!candidate.hasFiniteLinePlacementInputs()) return emptyList()
@@ -100,6 +108,8 @@ internal fun layOutLineLabels(
         latestLocalX = latestLocalX,
         translateX = translateX,
         translateY = translateY,
+        sprites = sprites,
+        viewport = viewport,
     )
 
     if (candidate.placement == LabelPlacement.LINE_CENTER) {
@@ -146,6 +156,8 @@ private class LineInstanceInputs(
     val latestLocalX: Double,
     val translateX: Double,
     val translateY: Double,
+    val sprites: SpriteAtlasManifest?,
+    val viewport: LabelScreenBox,
 )
 
 /**
@@ -240,6 +252,24 @@ private fun LineInstanceInputs.layOut(run: ProjectedRun, anchorDistance: Double)
         anchorPixelY = anchor.y + translateY,
         collisionBox = collisionBox,
         quads = quads,
+        // **Every repeat carries its own icon, at its own anchor and in its own frame.** A road
+        // name repeated four times along a road is four symbols, and a shield drawn once at the
+        // candidate's midpoint would belong to none of them.
+        //
+        // The anchor is `sample`, without `text-translate`: that displacement is the text's, and
+        // `icon-translate` is applied inside [resolveIcon] against the frame `icon-translate-anchor`
+        // names. The frame is the polyline's **raw** tangent rather than the direction the glyphs
+        // were read in -- `text-keep-upright` reverses the reading order of the letters and must not
+        // turn the shield they sit on, which has an `icon-keep-upright` of its own.
+        icon = resolveIcon(
+            sprites = sprites,
+            candidate = candidate,
+            anchorPixelX = anchor.x,
+            anchorPixelY = anchor.y,
+            frameCosine = anchor.tangentX,
+            frameSine = anchor.tangentY,
+            viewport = viewport,
+        ),
     )
 }
 

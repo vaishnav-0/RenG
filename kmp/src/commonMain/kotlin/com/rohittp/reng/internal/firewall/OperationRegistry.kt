@@ -942,6 +942,16 @@ internal data class SpriteAtlasEntry(
     val width: Int,
     val height: Int,
     val pixelRatio: Double,
+    /**
+     * The entry's `sdf` member, defaulting to `false` exactly as Rentile's own reader does.
+     *
+     * **It decides whether `icon-color` and `icon-halo-*` mean anything at all.** Rentile tints a
+     * sprite under `BlendMode.SRC_IN` when this is set and passes a `null` colour filter otherwise, so
+     * a consumer that tinted every sprite would repaint artwork the style never asked to recolour.
+     * Defaulted so that this file's own fixtures and every existing caller keep their arity, and read
+     * rather than assumed because an unread flag here becomes a wrong picture two layers away.
+     */
+    val sdf: Boolean = false,
 )
 
 /**
@@ -1026,13 +1036,16 @@ private fun spriteEntryWithinAtlas(entry: JsonValue, imageWidth: Int, imageHeigh
     // compare as comfortably inside the atlas.
     if (x.toLong() + width.toLong() > imageWidth.toLong()) return null
     if (y.toLong() + height.toLong() > imageHeight.toLong()) return null
+    // Rentile reads `sdf` through `booleanOrNull` and falls back to false, so an absent or
+    // unreadable member is the ordinary case rather than a rejection -- most sprites are artwork.
+    val sdf = (members["sdf"] as? JsonValue.Bool)?.value == true
     // Absent, or present but unreadable as a number, is not a rejection: Rentile falls back to 1.0 in
     // both cases, so refusing here would refuse a pair the engine compiles. That fallback is recorded on
     // the entry rather than left implicit, so a later reader sees the ratio the engine would have used.
     val pixelRatio = spriteEntryDouble(members["pixelRatio"])
-        ?: return SpriteAtlasEntry(x, y, width, height, ABSENT_SPRITE_PIXEL_RATIO)
+        ?: return SpriteAtlasEntry(x, y, width, height, ABSENT_SPRITE_PIXEL_RATIO, sdf)
     if (!pixelRatio.isFinite() || pixelRatio <= 0.0) return null
-    return SpriteAtlasEntry(x, y, width, height, pixelRatio)
+    return SpriteAtlasEntry(x, y, width, height, pixelRatio, sdf)
 }
 
 /** Rentile reads these through `JsonPrimitive.intOrNull`, which parses a quoted primitive's content
