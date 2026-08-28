@@ -1083,6 +1083,17 @@ private fun IntArray.describe(): String = "(${this[0]},${this[1]},${this[2]},${t
  * **Fewer pixels, and the specific loser gone.** A count alone would be satisfied by a pass that
  * dropped both labels, and a colour check alone would be satisfied by a pass that never drew the
  * loser at any spacing; the pair is what says one label was rejected *by* the other.
+ *
+ * **The two labels overlap by [COLLISION_OVERLAP_TRANSLATE_X] rather than exactly, and that number
+ * is a vacuity this case had to be broken to find.** Written first with both labels on the same
+ * anchor, the place-wins direction **passed with collision deleted outright** -- measured, by making
+ * `textPlaceable` ignore the index. The place label's cell is 17.33 pixels wide and the town's is
+ * 9.33, both centred on the same point, so the survivor's ink is a strict superset of the loser's
+ * and the winner simply paints over it: "no pixel carries the town colour" is then true whether the
+ * town label was rejected or merely hidden, and the pixel count falls to the winner's own ink either
+ * way. Only the town-wins direction caught the deleted collision. Ten pixels of `text-translate`
+ * leaves each label six pixels of screen the other cannot reach, so a label that drew and lost is
+ * visible as itself; both directions catch it now.
  */
 private fun assertCollisionRejectsTheLowerPriorityLabelAndKeepsTheHigher(
     binding: GlBinding,
@@ -1137,7 +1148,7 @@ private fun assertCollisionRejectsTheLowerPriorityLabelAndKeepsTheHigher(
                 "survive instead; nothing in the frame carries " + TOWN_COLOUR.describe() + "\n" +
                 townWins.asciiMap(),
         )
-    assertNear(survivingTown, PLACE_ANCHOR_X, ANCHOR_Y, "the higher-priority town label")
+    assertNear(survivingTown, COLLIDING_TOWN_ANCHOR_X, ANCHOR_Y, "the higher-priority town label")
     assertEquals(
         null,
         townWins.nearest(PLACE_COLOUR)?.describe(),
@@ -1224,18 +1235,21 @@ private fun assertEveryDrawnPixelFallsInsideTheProjectedLabelBox(
  * fixture's 14 by 16, and that shape is what gives the distance assertion its power. A glyph drawn
  * in the polyline's own frame lies *along* the line, so its cell reaches 8.7 pixels along the
  * tangent and only 2.9 across it; the same cell drawn unrotated reaches 8.7 pixels **across** a line
- * running at 50 to 70 degrees. Measured over the fixture's own five glyph cells: the worst corner is
- * 3.3 pixels from the polyline when the frames follow the tangent, 9.1 pixels when they do not, and
- * 34.8 pixels when the line is ignored altogether and the label is drawn as one horizontal row at
- * its anchor. [MAXIMUM_LINE_OFFSET_PIXELS] sits between the first two with margin on both sides. A
- * near-square cell -- the shape every other label fixture here uses -- separates those same three
- * cases by 5.3 against 7.0, which no tolerance can distinguish from rasterisation.
+ * running at 50 to 70 degrees. Measured on `Apple M3 Max`, as the worst drawn pixel's own distance
+ * from the polyline: **2.92** as this stands, **8.46** with the glyph frames taking a constant
+ * horizontal axis instead of the sampled tangent, and **10.59** with the label drawn as a rigid row
+ * along the tangent it has at its anchor -- the bug a straight fixture is definitionally blind to.
+ * [MAXIMUM_LINE_OFFSET_PIXELS] sits between the first and the second with margin on both sides. A
+ * near-square cell -- the shape every other label fixture here uses -- separates those same cases by
+ * 5.3 against 7.0, which no tolerance can distinguish from rasterisation.
  *
  * **And the ink has to climb.** The distance bound alone is satisfied by a label whose glyphs all
  * collapsed onto one anchor, since that anchor is itself on the line. The arc rises 64 pixels over
  * the span the label occupies, against the 5.3-pixel height of one glyph cell, so requiring the ink
  * to span [MINIMUM_LINE_INK_HEIGHT_PIXELS] vertically is a statement that the glyphs were
- * distributed along the curve rather than stacked at its midpoint.
+ * distributed along the curve rather than stacked at its midpoint. Sampling every glyph at the
+ * label's own anchor leaves 92 drawn pixels of the 433 this draws, so the floor is what reports that
+ * one first; the climb is the assertion that stays true of a collapse which somehow kept its ink.
  *
  * **Every number the assertion compares against is derived from the fixture's own tile coordinates**
  * -- see [LINE_SCREEN_POINTS] -- rather than from `projectGeographicPosition`, which is the function
@@ -1336,10 +1350,24 @@ private val COLLISION_CONTROL_STYLE_JSON: String =
     collisionStyle(placeSortKey = 10, townSortKey = 0, townTranslateX = TOWN_TRANSLATE_X)
 
 private val COLLISION_PLACE_WINS_STYLE_JSON: String =
-    collisionStyle(placeSortKey = 10, townSortKey = 0, townTranslateX = 0)
+    collisionStyle(placeSortKey = 10, townSortKey = 0, townTranslateX = COLLISION_OVERLAP_TRANSLATE_X)
 
 private val COLLISION_TOWN_WINS_STYLE_JSON: String =
-    collisionStyle(placeSortKey = 0, townSortKey = 10, townTranslateX = 0)
+    collisionStyle(placeSortKey = 0, townSortKey = 10, townTranslateX = COLLISION_OVERLAP_TRANSLATE_X)
+
+/**
+ * How far apart the two colliding labels' anchors sit, in screen pixels.
+ *
+ * **Not zero, and the reason is measured rather than aesthetic** -- see this case's own KDoc. Ten
+ * pixels puts the place label's ink at x 54.67..72 and the town label's at 68.67..78, so the two
+ * overlap over the 7.3 pixels of collision geometry that decide the case while each label keeps six
+ * pixels of screen the other cannot paint. Their collision boxes, which carry the default two-pixel
+ * `text-padding` on every side, are 52.67..74 and 66.67..80 and intersect comfortably.
+ */
+private const val COLLISION_OVERLAP_TRANSLATE_X: Int = 10
+
+/** Where the town label's ink sits in the two colliding frames. */
+private const val COLLIDING_TOWN_ANCHOR_X: Int = LABEL_INTEGRATION_PIXELS / 2 + COLLISION_OVERLAP_TRANSLATE_X
 
 /** `AĀ`: the place layer's feature text is two codepoints, one from each of the two sans ranges. */
 private const val PLACE_LABEL_GLYPHS: Int = 2
