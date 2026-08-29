@@ -296,6 +296,22 @@ Curvature fidelity is **not** claimed; that stays Cycle J's, and the suite's own
 Run the visual harness and record what was seen, as E8 requires. Then produce **four videos**: styles 59
 (raster) and 86 (vector), each in `MERCATOR` and `GLOBE`, **with labels on**.
 
+**The harness cannot select a projection mode yet — that is this task's first job.**
+`Storyboard.kt:69` hardcodes `projectionMode = ProjectionMode.MERCATOR`. Add a `--globe` flag beside the
+existing `--no-basemap`, `--no-labels`, `--frames` and `--verbose`, following exactly how `labelless`
+threads from `Main.kt` into the storyboard. E-labels' harness task added `--no-labels` the same way and its
+report is the precedent.
+
+**The two styles, supplied by the owner:** style **59** is a raster ground with 6 text layers, 1
+line-placed, no icons — the simple case. Style **86** is three vector sources with **157 text layers, 96
+line-placed and 78 carrying icons** — the stress case. Their URLs carry the owner's API key: **never check
+one in, never paste one into a document or a commit message**, and refer to them as style 59 and style 86.
+
+**What to look at, beyond that the videos exist.** The globe pair is the first time anyone sees this cycle's
+output. Report what is actually observed, not what is hoped: does the sphere read as a sphere; do tiles meet
+without seams; does the limb look right; do labels and icons land on their features; does anything differ
+between the two modes that should not. A defect here is worth more than a clean report.
+
 The style URLs are the owner's and carry their API key — **never check one in, never paste one into a
 document or commit message.** Refer to them as style 59 and style 86.
 
