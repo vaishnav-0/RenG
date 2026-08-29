@@ -15,6 +15,7 @@ import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
+import com.rohittp.reng.runVertexTextureFetchProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -320,6 +321,33 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
                 binding.scissor(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
                 runLatitudePrecisionProbeSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * E-terrain preflight: can a vertex shader read a DEM, on both Apple rasterisers?
+     *
+     * Same two drivers and the same reason as the latitude probe above — the Metal path and the CPU
+     * rasteriser a hosted runner is limited to. A vertex texture fetch is the difference between
+     * uploading a DEM once per tile and re-baking a vertex buffer whenever the granularity moves,
+     * so which of the two E-terrain can rely on is a property of the drivers rather than a
+     * preference.
+     */
+    @Test fun theVertexTextureFetchProbePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println(
+                    "RenG vertex texture fetch probe: skipped, $renderer is unavailable on this machine",
+                )
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                runVertexTextureFetchProbeSuite(binding, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }

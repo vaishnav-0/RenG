@@ -13,6 +13,7 @@ import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
+import com.rohittp.reng.runVertexTextureFetchProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -196,6 +197,29 @@ class LinuxGlConformanceTest {
             binding.viewport(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
             binding.scissor(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
             runLatitudePrecisionProbeSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * E-terrain preflight: can a vertex shader read a DEM on surfaceless EGL on llvmpipe?
+     *
+     * The cycle's architecture turns on the answer, because it decides between uploading a DEM once
+     * per tile and re-baking a vertex buffer whenever the granularity moves. See the probe's own
+     * KDoc for why the advertised unit count is not the measurement.
+     */
+    @Test fun theVertexTextureFetchProbePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+            binding.scissor(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+            runVertexTextureFetchProbeSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

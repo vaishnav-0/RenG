@@ -13,6 +13,7 @@ import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
+import com.rohittp.reng.runVertexTextureFetchProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -282,6 +283,24 @@ class IosGlConformanceTest {
             binding.viewport(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
             binding.scissor(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
             runLatitudePrecisionProbeSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * E-terrain preflight: can a vertex shader read a DEM on a real EAGL context?
+     *
+     * The cycle's architecture turns on the answer, because it decides between uploading a DEM once
+     * per tile and re-baking a vertex buffer whenever the granularity moves. The simulator runs
+     * `Apple Software Renderer`, which is also the only rasteriser a hosted runner has, so this is
+     * the one Apple ES answer CI can actually keep.
+     */
+    @Test fun theVertexTextureFetchProbePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            runVertexTextureFetchProbeSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }
