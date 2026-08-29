@@ -62,6 +62,12 @@ and a 45-degree vertical field of view. Agreement to 0.2 px, in a quantity nothi
 - **Placements land.** The map-anchored pin sits on the west coast of North America where its coordinate
   puts it, in both projections; the screen-anchored sticker stays pinned to the top-left corner.
 - **Labels draw on the globe and land on their features** — legible at zoom 2 on style 59.
+- **The pitched globe is the case worth looking at, and it holds up.** Mid-sweep, with bearing near 166
+  degrees and the pitch ramp well past its midpoint, the limb curves across the frame as a smooth horizon,
+  the continent is projected with visible curvature toward it, and haloed country labels — GUATEMALA, CUBA,
+  UNITED STATES — sit upright on their features rather than following the sphere's surface, which is the
+  correct viewport-aligned behaviour. Beyond the limb is the harness's clear colour and nothing else, so
+  the far hemisphere is being culled rather than drawn and overdrawn.
 
 ## One finding, and it is not a RenG defect
 

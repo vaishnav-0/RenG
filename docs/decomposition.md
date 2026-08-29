@@ -40,6 +40,13 @@ disappearing: G is designed against a scene whose ground is a smooth sphere, so 
 displacing both projections** instead of G re-projecting a ground that already displaces. Terrain is
 designed once, against a globe that exists.
 
+**Where that inheritance is concrete, now that G has shipped.** The globe ground bakes altitude zero into
+one per-frame matrix: `composeGlobeGroundUnitSphereToClip` folds the radius in as a uniform radial scale so
+the vertex shader can emit a unit direction and nothing larger. Displacing the ground means the radial
+scale becomes **per vertex rather than per frame**, which is a different shape of change from Mercator's --
+there the ground is a quad whose vertices already carry position. Both are E-terrain's, and
+`GlobeGroundPipeline.kt` says so at the point where the assumption is made rather than only here.
+
 C and D are genuinely independent — one is I/O and CPU, the other is GPU — and are the natural place to
 work in parallel. Everything from F-1 onward is a chain; the MVP release sits between F-1 and E-basemap.
 
@@ -54,7 +61,7 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | E-basemap | Basemap drawn from Rentile tiles, plus deferred Cycle C tasks 14/16/17/18/19 | First frame with pixels; analytical readback over a real GL context |
 | F-2 | Models with textures and animation | Analytical readback over a real GL context |
 | E-labels | Map text drawn as screen-space primitives from Rentile label candidates | Analytical readback over a real GL context, plus a recorded harness pass. **Not legibility** — see below |
-| E-terrain | Terrain displacing the mercator ground, plus deferred Cycle C task 20 | Golden baselines with terrain |
+| E-terrain | Terrain displacing the ground in **both** projections, plus deferred Cycle C task 20 | Golden baselines with terrain |
 | H | Android and iOS bring-up | `iosSimulatorArm64Test` in CI; two one-command device runs, neither automated |
 | G | Globe projection | Analytical readback at both projection modes, plus a recorded harness pass. **Not curvature fidelity** |
 | J | Golden-image corpus gate | Corpus job wired into `ci.yml` and `publish.yml` |
