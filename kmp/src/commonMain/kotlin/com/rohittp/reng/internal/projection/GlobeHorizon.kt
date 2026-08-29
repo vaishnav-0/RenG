@@ -97,7 +97,12 @@ internal fun globeLimbPlane(
     cameraPositionFromGlobeCentre: DoubleVector3,
     radiusLogicalPixels: Double,
 ): GlobeLimbPlane? {
-    if (!radiusLogicalPixels.isFinite() || radiusLogicalPixels <= 0.0) return null
+    // Three guards, each load-bearing and none of them a spare: the first rejects a radius that is
+    // zero, negative or NaN; the second an infinite camera, which would otherwise pass the third and
+    // build a plane with a NaN normal; the third a camera at or inside the surface. An infinite
+    // *radius* needs no guard of its own -- no distance exceeds it, so the third catches it. Written
+    // as negated comparisons so that NaN falls out on the null side rather than through.
+    if (!(radiusLogicalPixels > 0.0)) return null
     val distanceSquared = cameraPositionFromGlobeCentre.dot(cameraPositionFromGlobeCentre)
     if (!distanceSquared.isFinite()) return null
     val distance = sqrt(distanceSquared)

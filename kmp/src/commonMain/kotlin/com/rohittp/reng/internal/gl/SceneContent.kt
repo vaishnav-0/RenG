@@ -457,6 +457,13 @@ internal class SceneContent(
         }
 
         if (mapStickers.isNotEmpty()) {
+            // ADR 0038 records a pre-existing gap here and this cycle deliberately does not close it:
+            // `drawStickers` sets no cull state, so it inherits whatever the model pass's last
+            // non-`doubleSided` primitive left -- and now, on a globe with no models in the frame, the
+            // ground's own enable. Nothing moves either way, because `STICKER_QUAD` is `GROUND_QUAD`'s
+            // winding exactly, so a sticker is front-facing under `drawFrame`'s `GL_CCW`. That is the
+            // same luck ADR 0038 removed from the ground rather than a second argument for keeping it,
+            // and closing it belongs with whichever cycle owns the sticker pass.
             drawStickers(
                 binding,
                 stickerPipeline,

@@ -152,7 +152,7 @@ class GlobeHorizonTest {
      * 0.0019 logical pixels one pixel past the limb against 0.046 five pixels past it. Below that the
      * reference is measuring its own rounding. The limb itself is pinned by the two cases above.
      */
-    @Test fun thePlaneAgreesWithAMarchedSegmentEverywhereOutsideTheLimbBand() {
+    @Test fun thePlaneAgreesWithAnIndependentSegmentTestOutsideTheLimbBand() {
         val camera = cameraPosition()
         val plane = requireNotNull(globeLimbPlane(camera, RADIUS))
         var decided = 0
@@ -169,7 +169,7 @@ class GlobeHorizonTest {
                 assertEquals(
                     segmentEntersTheSphere(camera, point),
                     plane.isBeyondHorizon(point),
-                    "the plane and a marched segment must agree at polar $polar azimuth $azimuth " +
+                    "the plane and an independent segment test must agree at polar $polar azimuth $azimuth " +
                         "(signed distance $distance)",
                 )
             }
