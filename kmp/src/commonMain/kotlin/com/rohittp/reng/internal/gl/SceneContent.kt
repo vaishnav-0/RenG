@@ -956,7 +956,7 @@ private fun DoubleMatrix4.transformAffinePoint(point: DoubleVector3): DoubleVect
 )
 
 /** This matrix's elements in the column-major order [GlBinding.uniformMatrix4fv] expects. */
-private fun DoubleMatrix4.toColumnMajorFloatArray(): FloatArray = FloatArray(16) { index ->
+internal fun DoubleMatrix4.toColumnMajorFloatArray(): FloatArray = FloatArray(16) { index ->
     val row = index % 4
     val column = index / 4
     this[row, column].toFloat()
