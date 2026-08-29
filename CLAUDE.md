@@ -620,6 +620,22 @@ Cycle J's corpus is in-source Kotlin fixtures. The cost is kept rather than remo
 `ffmpeg`/libx264/`yuv420p` assembly step is **lossy** and has already once misled a judgement about image
 sharpness, so judge sharpness at `crf 12` / `yuv444p`, or on the PPM frames directly.
 
+**The harness can lie about the renderer, and once did.** Cycle G's globe frames filled the viewport and
+were byte-identical at zoom 0, 3 and 14 while Mercator responded normally — which reads exactly like a
+projection ignoring its camera, and was diagnosed as one. The cause was `parseArguments` advancing
+`index += 2` unconditionally, so it read only **even** positions: `--globe` is a valueless flag emitted
+before `--zoom`, which pushed `--zoom` onto an odd index the loop never examined, silently, because an
+unmatched argument is not an error there. Every globe run had been rendering at the storyboard's default
+zoom of 11.5 — the one zoom where the sphere is larger than the viewport and a correct globe is
+indistinguishable from a flat map. With the stride fixed the globe measures as a globe: a silhouette 180
+logical pixels across both ways at zoom 0, against an analytic tangent-cone prediction of **180.2**, and
+undrawn falling 94.3% → 53.8% → 0.0% across zooms 0, 2 and 5. **Before believing a harness frame accuses
+the renderer, confirm the harness passed the renderer what you think it did** — and prefer the harness's
+own `undrawn %`, which counts its `UNDRAWN` sentinel `(0, 96, 32)`, over any ad-hoc "how much is drawn"
+statistic computed against a guessed background. An earlier metric here counted *pixels that were not
+white*, which made the sentinel itself read as drawn and reported a 99.7%-full frame that was in fact
+98.9% empty.
+
 ## Commands
 
 Run Python and policy gates first:
