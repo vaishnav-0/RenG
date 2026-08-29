@@ -312,6 +312,14 @@ class RendererFactoryTest {
      * does: dropping any one pipeline's delete leaves the two counts unequal, and adding a fifth
      * internal pipeline without deleting it fails here rather than leaking silently on a consumer's
      * context.
+     *
+     * **The vertex-array count is one short of the program count, and that is Cycle E-terrain's
+     * doing.** Four of the five internal pipelines still allocate a vertex array at setup; the ground
+     * allocates none, because its geometry became a `GroundGrid` per granularity built on the draw
+     * path (four vertices cannot be displaced by terrain, and which granularity a frame needs follows
+     * the camera). This renderer draws no ground tile before it closes, so no grid is ever built and
+     * none is deleted. `GroundPipelineTest.deletionRemovesEveryCachedGridAndTheProgram` is where the
+     * ground's own deletion is counted, over grids that exist.
      */
     @Test
     fun closeDeletesEveryProgramTheRendererCompiledForItself() = runTest {
@@ -333,9 +341,9 @@ class RendererFactoryTest {
             "close() must delete every program it compiled, or one leaks on the consumer's context",
         )
         assertEquals(
-            INTERNAL_PIPELINE_PROGRAMS,
+            INTERNAL_PIPELINE_PROGRAMS - 1,
             binding.log.count { it.startsWith("deleteVertexArrays") },
-            "each internal pipeline owns one vertex array and close() must delete all of them",
+            "every internal pipeline that allocated a vertex array must have it deleted by close()",
         )
     }
 

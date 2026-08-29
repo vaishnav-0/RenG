@@ -9,10 +9,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * RenG's own ground pipeline, built in the shape [StickerPipeline] and [GeometryPipeline] already
- * established: one program compiled through [GlProgramCache] and keyed by an
- * [InternalPipelineRole], one unit quad allocated once and reused by every tile in every frame, and
- * a per-instance model-view-projection uniform plus one texture.
+ * RenG's own ground pipeline: one program compiled through [GlProgramCache] and keyed by an
+ * [InternalPipelineRole], a [GroundGrid] per granularity built on first use and reused by every tile
+ * of every later frame, and a per-instance model-view-projection uniform plus one texture.
+ *
+ * The geometry half moved with Cycle E-terrain. It was one unit quad allocated at setup and drawn
+ * with `glDrawArrays`; it is now a subdivided grid drawn with `glDrawElements`, because four
+ * vertices cannot be displaced by terrain. `GroundGridTest` owns the lattice itself and the claim
+ * that a single cell reproduces the quad exactly; what is asserted here is the pipeline around it —
+ * what setup allocates, what a draw issues, and what deletion frees.
  */
 class GroundPipelineTest {
     @Test fun theRosterAddsGroundAtWireValueThreeWithoutRenumberingTheOthers() {
@@ -29,38 +34,42 @@ class GroundPipelineTest {
     }
 
     /**
-     * The quad's texture coordinates are the whole ADR 0018 identity chain's last mile: `v = 0` must
-     * sit at local `+y`, because local `+y` is NORTH for a ground tile and row zero of a rendered
-     * basemap tile is its north edge. A v-flip here mirrors every tile about its own centre line, a
-     * defect that is invisible on a solid-coloured tile and catastrophic on a real map.
+     * The whole ADR 0018 identity chain's last mile, now stated in GLSL: `v = 0` must land at local
+     * `+y`, because local `+y` is NORTH for a ground tile and row zero of a rendered basemap tile is
+     * its north edge. A v-flip mirrors every tile about its own centre line — invisible on a
+     * solid-coloured tile and catastrophic on a real map.
+     *
+     * **This asserts source text, and that is a real weakening worth stating plainly.** Before the
+     * grid, the convention was four numbers in a `FloatArray` and a unit test could read them. It is
+     * now one subtraction inside a shader no unit test can execute, so the honest unit-level
+     * instrument is the text itself; the assertion that this text is also *correct* is
+     * `runBasemapReadbackSuite`'s asymmetric fixture on a real driver, and a flip fails it in pixels.
      */
-    @Test fun theUnitQuadPutsTextureRowZeroAtTheNorthEdge() {
-        // x, y, u, v per vertex, in triangle-strip order.
-        assertEquals(16, GROUND_QUAD.size)
-        val vertices = (0 until 4).map { index ->
-            listOf(
-                GROUND_QUAD[index * 4],
-                GROUND_QUAD[index * 4 + 1],
-                GROUND_QUAD[index * 4 + 2],
-                GROUND_QUAD[index * 4 + 3],
-            )
-        }
-        vertices.forEach { (x, y, u, v) ->
-            assertEquals(if (x < 0f) 0.0f else 1.0f, u, "u must run west-to-east")
-            assertEquals(if (y > 0f) 0.0f else 1.0f, v, "v must run north-to-south, row zero at north")
-        }
+    @Test fun theVertexStagePutsTextureRowZeroAtTheNorthEdge() {
+        assertTrue(
+            GROUND_VERTEX_SOURCE.contains("vec2 position = vec2(rengGroundGrid.x - 0.5, 0.5 - rengGroundGrid.y);"),
+            "u must run west-to-east and v north-to-south, row zero at the tile's north edge: " +
+                GROUND_VERTEX_SOURCE,
+        )
+        assertTrue(
+            GROUND_VERTEX_SOURCE.contains("rengGroundUv = rengGroundGrid;"),
+            "the grid coordinate IS the texture coordinate: " + GROUND_VERTEX_SOURCE,
+        )
     }
 
-    @Test fun creationBuildsAProgramAQuadAndTwoAttributes() {
+    /**
+     * Setup builds a program and **no geometry at all**, which is the shape change Cycle E-terrain
+     * makes here and the globe ground already made in Cycle G: which granularities a session reaches
+     * follows the camera, so a grid is built on the draw path or not at all.
+     */
+    @Test fun creationBuildsAProgramAndNoGeometryAtAll() {
         val binding = newBinding()
         val created = createGroundPipeline(binding, ShaderDialect.GLES, GlProgramCache())
             as GroundPipelineResult.Created
         assertTrue(created.pipeline.program > 0)
-        assertTrue(created.pipeline.vertexArray > 0)
-        assertTrue(created.pipeline.vertexBuffer > 0)
-        assertEquals(2, binding.log.count { it.startsWith("enableVertexAttribArray") })
-        assertEquals(2, binding.log.count { it.startsWith("vertexAttribPointer") })
-        assertTrue(binding.log.any { it.startsWith("bufferData(0x8892,64") })
+        assertTrue(created.pipeline.grids.isEmpty(), "no granularity has been asked for yet")
+        assertFalse(binding.log.any { it.startsWith("genVertexArrays") }, "setup allocates no grid")
+        assertFalse(binding.log.any { it.startsWith("bufferData") }, "setup uploads nothing")
         assertEquals(MODEL_VIEW_PROJECTION_LOCATION, created.pipeline.modelViewProjectionUniformLocation)
         assertEquals(TEXTURE_LOCATION, created.pipeline.textureUniformLocation)
     }
@@ -78,18 +87,66 @@ class GroundPipelineTest {
         assertTrue(ground.program != sticker.program)
     }
 
-    @Test fun deletionRemovesTheQuadAndTheProgram() {
+    @Test fun deletionRemovesEveryCachedGridAndTheProgram() {
         val binding = newBinding()
         val cache = GlProgramCache()
         val pipeline = (
             createGroundPipeline(binding, ShaderDialect.GLES, cache) as GroundPipelineResult.Created
             ).pipeline
+        drawGround(binding, pipeline, listOf(resolvedTile()), cellsPerTileSide = 4)
+        drawGround(binding, pipeline, listOf(resolvedTile()), cellsPerTileSide = 32)
         binding.log.clear()
+
         deleteGroundPipeline(binding, cache, pipeline)
-        assertEquals(1, binding.log.count { it.startsWith("deleteVertexArrays") })
-        assertEquals(1, binding.log.count { it.startsWith("deleteBuffers") })
+
+        assertEquals(2, binding.log.count { it.startsWith("deleteVertexArrays") })
+        assertEquals(2, binding.log.count { it.startsWith("deleteBuffers(2") }, "vertex and index")
         assertEquals(1, binding.log.count { it.startsWith("deleteProgram") })
+        assertTrue(pipeline.grids.isEmpty())
         assertNull(cache.program(pipeline.key))
+    }
+
+    /**
+     * One grid per granularity, shared by every tile of every frame — the whole economy the shared
+     * lattice buys, and invisible to every pixel: a grid rebuilt per tile draws an identical frame
+     * and leaks a vertex array and two buffers each time. Asserted on the call log for that reason.
+     */
+    @Test fun theGridIsBuiltOnceAndSharedByEveryTileAndEveryFrame() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGround(binding, pipeline, listOf(resolvedTile(1), resolvedTile(2), resolvedTile(3)), cellsPerTileSide = 8)
+        drawGround(binding, pipeline, listOf(resolvedTile(1), resolvedTile(2), resolvedTile(3)), cellsPerTileSide = 8)
+
+        assertEquals(1, binding.log.count { it.startsWith("genVertexArrays") })
+        assertEquals(2, binding.log.count { it.startsWith("genBuffers") }, "one vertex, one index")
+        assertEquals(6, binding.log.count { it.startsWith("drawElements") }, "three tiles, twice")
+        assertEquals(1, pipeline.grids.size)
+        assertEquals(8, pipeline.grids.getValue(8).cellsPerSide)
+
+        drawGround(binding, pipeline, listOf(resolvedTile()), cellsPerTileSide = 16)
+        assertEquals(2, pipeline.grids.size, "a second granularity is a second cached grid")
+        assertEquals(2, binding.log.count { it.startsWith("genVertexArrays") })
+    }
+
+    /**
+     * The default granularity is one cell, and one cell is the two triangles the four-vertex quad
+     * drew. Nothing in production passes a granularity yet — displacement is what will give a caller
+     * a reason to — so this is the arm every Mercator frame currently takes, and it must not have
+     * changed what it draws.
+     */
+    @Test fun theDefaultGranularityDrawsTheTwoTrianglesTheQuadDrew() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+        drawGround(binding, pipeline, listOf(resolvedTile()))
+        assertEquals(
+            1,
+            binding.log.count { it == "drawElements(${hex(GL_TRIANGLES)},6,${hex(GL_UNSIGNED_SHORT)},0)" },
+            "the default ground draw is six indices, two triangles, one cell: " + binding.log,
+        )
+        assertEquals(setOf(1), pipeline.grids.keys)
     }
 
     /**
@@ -108,7 +165,7 @@ class GroundPipelineTest {
         drawGround(binding, pipeline, listOf(resolvedTile()))
         assertTrue(binding.log.contains("enable(${hex(GL_DEPTH_TEST)})"), "the ground is depth-tested")
         val maskedOff = binding.log.indexOfFirst { it == "depthMask(false)" }
-        val firstDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
+        val firstDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
         assertTrue(firstDraw >= 0, "the ground must actually draw")
         assertTrue(
             maskedOff in 0 until firstDraw,
@@ -139,7 +196,7 @@ class GroundPipelineTest {
         val first = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},11)" }
         val second = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},22)" }
         assertTrue(first in 0 until second)
-        assertEquals(2, binding.log.count { it.startsWith("drawArrays") })
+        assertEquals(2, binding.log.count { it.startsWith("drawElements") })
     }
 
     @Test fun anEmptyGroundIssuesNoGlCallsAtAll() {
@@ -173,8 +230,8 @@ class GroundPipelineTest {
     /**
      * ADR 0038's ownership half, and the whole of it for this pass. Before Cycle G `drawGround` set
      * no cull state at all and inherited whatever the caller had left enabled — harmless only
-     * because [GROUND_QUAD] happens to wind counter-clockwise. The disable is what makes a mercator
-     * frame's pixels a function of this pass rather than of its caller.
+     * because the ground's triangles happen to wind counter-clockwise. The disable is what makes a
+     * mercator frame's pixels a function of this pass rather than of its caller.
      *
      * **The globe arm this pair used to have is gone**, with task 10: `drawGround` is the Mercator
      * ground and `drawGlobeGround` is the globe's, and the enable ADR 0038 asks for on a sphere is
@@ -188,7 +245,7 @@ class GroundPipelineTest {
         binding.log.clear()
         drawGround(binding, pipeline, listOf(resolvedTile()))
         val disabled = binding.log.indexOfFirst { it == "disable(${hex(GL_CULL_FACE)})" }
-        val firstDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
+        val firstDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
         assertTrue(firstDraw >= 0, "the ground must actually draw")
         assertTrue(
             disabled in 0 until firstDraw,

@@ -362,6 +362,12 @@ class SceneContentTest {
         var flatDraws = 0
         var modelDraws = 0
         var labelDraws = 0
+        var firstModelDraw = -1
+        // Every draw is classified by the program bound before it, never by its shape. The ground
+        // joined the geometry pass in issuing `drawElements(GL_TRIANGLES, ..., GL_UNSIGNED_SHORT, 0)`
+        // when Cycle E-terrain subdivided it, which is byte-identical to an opaque model's draw; a
+        // classifier keyed on the call alone read the ground as a model and demanded it write depth.
+        val flatPrograms = setOf(geometryPipeline.program, groundPipeline.program)
         binding.log.forEachIndexed { index, call ->
             when {
                 call == "depthMask(true)" -> depthWrites = true
@@ -369,7 +375,7 @@ class SceneContentTest {
                 call.startsWith("useProgram(") ->
                     currentProgram = call.removePrefix("useProgram(").removeSuffix(")").toInt()
                 call.startsWith("drawArrays") ||
-                    (call.startsWith("drawElements") && currentProgram == geometryPipeline.program) -> {
+                    (call.startsWith("drawElements") && currentProgram in flatPrograms) -> {
                     flatDraws += 1
                     assertFalse(
                         depthWrites,
@@ -388,6 +394,7 @@ class SceneContentTest {
                 }
                 call.startsWith("drawElements") -> {
                     modelDraws += 1
+                    if (firstModelDraw < 0) firstModelDraw = index
                     assertTrue(
                         depthWrites,
                         "call $index ($call) is an opaque model draw and ADR 0030 requires it to " +
@@ -409,8 +416,11 @@ class SceneContentTest {
         // sets the mask before it binds any program, so the ground and the geometry -- and only
         // those two -- have already drawn by the time it fires.
         val writesOn = binding.log.indexOf("depthMask(true)")
-        val geometryDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
-        val modelDraw = binding.log.indices.first { it > geometryDraw && binding.log[it].startsWith("drawElements") }
+        // The model's own draw, located by the program bound before it rather than by its shape: the
+        // ground, the geometry and the model all issue an indexed triangle draw now, so "the second
+        // drawElements in the log" names the geometry pass and not the model pass.
+        val modelDraw = firstModelDraw
+        assertTrue(modelDraw > 0, "the scene must contain a model draw to locate")
         assertTrue(writesOn in 0 until modelDraw, "the one depth-write enable precedes the model's own draw")
         assertEquals(
             2,
@@ -437,11 +447,11 @@ class SceneContentTest {
     /**
      * ADR 0025's map-regime order with ADR 0030's models inserted before the stickers, because a
      * map-anchored sticker is a marker and a marker paints over the scene it marks. Each pass is
-     * located by its own `useProgram`, not by its draw call: the ground and a sticker both issue a
-     * bit-identical `drawArrays(GL_TRIANGLE_STRIP, 0, 4)`, so a draw-call index cannot tell those two
-     * passes apart. A `Geometry` no longer joins them — Cycle G task 9 made it an indexed grid — but
-     * its draw is then bit-identical in shape to the model pass's, so locating a pass by its program
-     * remains the only rule that works for all four.
+     * located by its own `useProgram`, not by its draw call: before Cycle E-terrain the ground and a
+     * sticker both issued a bit-identical `drawArrays(GL_TRIANGLE_STRIP, 0, 4)`, and now the ground
+     * is an indexed grid whose draw is bit-identical in shape to a `Geometry`'s (Cycle G task 9) and
+     * to the model pass's. Every pairing has collided at some point, which is why locating a pass by
+     * its program is the only rule that has ever worked for all four.
      *
      * `mapOrder` here is the planner's own `[StickerAt(0), ModelAt(0)]` — stickers-then-models by
      * declaration, which is what `MercatorSpatialPlan.mapEntries` actually produces. That is the
@@ -1530,15 +1540,18 @@ class SceneContentTest {
 
     /**
      * **The seam, at the one place it can be got wrong silently.** There are two ground entry points
-     * — `drawGround`, which draws the flat quad with `glDrawArrays`, and `drawGlobeGround`, which
-     * draws the subdivided grid with `glDrawElements` — and the frame's camera is what chooses
-     * between them. Routing a globe frame to the first would draw a tangent plane, which at anything
-     * above about zoom 12 looks exactly like a globe.
+     * — `drawGround` and `drawGlobeGround` — and the frame's camera is what chooses between them.
+     * Routing a globe frame to the first would draw a tangent plane, which at anything above about
+     * zoom 12 looks exactly like a globe.
      *
-     * Both arms are asserted, and each is pinned by two independent things: the **program** bound
-     * (the two pipelines are required to differ, or neither could be located) and the **draw call**
-     * issued. A case that checked only the cull state would pass with the ground routed to the wrong
-     * entry point entirely, because both functions establish one.
+     * **The draw call stopped discriminating with Cycle E-terrain and the program now carries the
+     * whole assertion.** Until this cycle the mercator ground drew a flat quad with `glDrawArrays`
+     * and only the globe drew an indexed grid, so the two entry points were distinguishable by their
+     * draw call alone. Both are subdivided grids now and both issue a byte-identical
+     * `drawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0)` at one cell a side, so what is left is
+     * the **program** bound before it — which the fixture asserts the two pipelines do not share, or
+     * neither could be located. The draw call is still required to appear, because a pass that drew
+     * nothing would otherwise satisfy a program-only check.
      */
     @Test
     fun theFramesCameraChoosesWhichGroundEntryPointDrawsIt() {
@@ -1550,7 +1563,7 @@ class SceneContentTest {
             "the fixture must give the two ground pipelines distinct programs or neither can be located",
         )
         listOf(
-            Triple(topDownCamera(), groundPipeline.program, "drawArrays"),
+            Triple(topDownCamera(), groundPipeline.program, "drawElements"),
             Triple(globeCamera(), globePipeline.program, "drawElements"),
         ).forEach { (camera, expectedProgram, expectedDraw) ->
             val scene = Scene(
@@ -1587,7 +1600,7 @@ class SceneContentTest {
         val groundPipeline = newGroundPipeline(binding)
         val globePipeline = newGlobeGroundPipeline(binding)
         listOf(
-            Triple(topDownCamera(), "disable(${hex(GL_CULL_FACE)})", "drawArrays"),
+            Triple(topDownCamera(), "disable(${hex(GL_CULL_FACE)})", "drawElements"),
             Triple(globeCamera(), "enable(${hex(GL_CULL_FACE)})", "drawElements"),
         ).forEach { (camera, expected, drawCall) ->
             val scene = Scene(
