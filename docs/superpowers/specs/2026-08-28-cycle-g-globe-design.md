@@ -227,6 +227,34 @@ Three mitigations, none needing a device:
    driver rather than naming it** — one case skips out loud when the probe distrusts the driver, and the
    others still run. MapLibre shipped (and later deleted) exactly such an `atan`-error probe.
 
+### Measured on real drivers, 2026-08-29 — and the mitigation is load-bearing where nobody expected
+
+The probe ran. What it found on **`Apple Software Renderer`** — the rasteriser a hosted macOS runner gives
+RenG, and the only one it has — was not predicted by anything:
+
+| driver | `atan` | `sin` | `cos` | naive path | half-angle path |
+|---|---:|---:|---:|---:|---:|
+| Apple M3 Max | 2 ULP | 2 | 2 | 2.209 m | **0.829 m** |
+| Apple Software Renderer (CGL) | **1,687 ULP** | **170,439** | **117,441** | **7,118.2 m** | **0.680 m** |
+| Apple Software Renderer (iOS sim) | **1,687** | **170,439** | **117,440** | **7,117.9 m** | **0.680 m** |
+
+**The naive formulation is 7.1 kilometres out on a driver this project ships against every CI run.** The
+half-angle path is 0.68 m on the same driver in the same process. G5's mitigation was chosen from MapLibre's
+Mali field reports with no device to check them against; it turns out to be doing its work on Apple's
+software rasteriser, which nobody had suspected.
+
+The two software rows agree to one ULP of `cos` across two context types and two shader dialects, which
+says the figure belongs to the rasteriser rather than to the probe.
+
+Two limits measured rather than quoted. Driving `exp` to its own specified 9.283 ULP takes the half-angle
+path from 0.83 m to **7.36 m** — the documented "only as good as `exp`" bound, observed. And injecting 1 ULP
+of non-smooth trig gives the naive path 100 resolved inversions and 3.57 m while the half-angle path stays
+**bit-identical**, reproducing the "distinct latitudes overlap" symptom the spike predicted.
+
+**Still unmeasured, and named in the probe's own KDoc:** Linux `llvmpipe` (wired into the Linux conformance
+test, no Linux host here), **Mali-G610/G710** and Adreno (wired into `androidDeviceTest`, manual under ADR
+0033), and the `iosArm64` device.
+
 **The probe reports and skips; it does not gate.** A hard budget would be a number chosen without ever
 having measured a Mali device — the thing E5 and G3 both declined to do.
 
