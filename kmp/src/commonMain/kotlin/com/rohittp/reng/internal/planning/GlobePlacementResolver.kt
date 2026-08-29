@@ -72,12 +72,16 @@ internal data class GlobePlacement(
  * handled inside [projectGlobe], which documents [MercatorPosition.z] as deliberately unused; the
  * scale half is [globeMetresToLogicalPixels] here.
  *
- * There is a second trap stacked on the first, and it is why the scale test in this file's suite
- * uses a placement latitude away from the camera's. ADR 0037's latitude-matched zoom already scales
- * the whole globe by `1 / cos(cameraLatitude)`, so at a placement sitting at the **camera's own**
- * latitude the correct globe scale and the buggy cosine-divided one are numerically identical. The
- * convention that makes the two modes agree where they should is the same convention that hides the
- * defect where a fixture would naturally sit.
+ * **The defect's fixed point is the equator and nowhere else, which a mutation run had to establish
+ * because this paragraph first claimed otherwise.** It said ADR 0037's latitude-matched zoom makes
+ * the correct and the cosine-divided scale identical at the camera's own latitude, so that a
+ * cross-mode fixture would be blind to the defect. That is wrong: the latitude-matched world size
+ * carries `1 / cos(cameraLatitude)` and the copied distortion would carry `1 / cos(placementLatitude)`
+ * on top of it, so at `placementLatitude == cameraLatitude` the buggy value is `1 / cos` **times** the
+ * mercator one rather than equal to it. Deliberately reintroducing the cosine turned three cases red,
+ * `mapScaleMatchesMercatorAtTheCameraOwnLatitude` among them. What ADR 0037 buys is a genuine
+ * cross-mode agreement at the camera's own latitude, not a blind spot — and the one place a fixture
+ * really is blind is the equator, where every `cos` in sight is 1.
  *
  * ## The one guard that survives, and the one that does not
  *

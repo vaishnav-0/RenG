@@ -44,9 +44,10 @@ import kotlin.test.assertTrue
  * `unitSphereDirection`; agreement with the production path through the Mercator round trip is then a
  * real result rather than an identity.
  *
- * **No fixture sits at the equator, at zero altitude and at the camera's own anchor at once.** That
- * point is symmetric in every axis and additionally, under ADR 0037's latitude-matched zoom, is where
- * the mercator cosine this task exists to drop makes no numerical difference at all.
+ * **No map-scale or map-altitude fixture sits at the equator**, because a `cos(latitude)` copied from
+ * mercator is the identity there, so a fixture written at the natural place would be green against the
+ * very defect this task exists to avoid. No fixture is a placement at the viewport centre, at zero
+ * altitude and at the camera's own anchor at once either — that point is symmetric in every axis.
  */
 class GlobePlacementResolverTest {
     /**
@@ -164,9 +165,12 @@ class GlobePlacementResolverTest {
      * ADR 0037's own promise, tested with content rather than argued: at the camera's **own**
      * latitude a map-scaled thing is the same size in both projection modes.
      *
-     * That is what the latitude-matched zoom `z_eff = zoom - log2 cos(latitude)` buys, and it is the
-     * reason a scale fixture must not be written here — this case is green whether or not the cosine
-     * was copied, which is exactly why it is not the only scale case in this file.
+     * That is what the latitude-matched zoom `z_eff = zoom - log2 cos(latitude)` buys. It was written
+     * expecting to be blind to a copied `cos(latitude)`, on the argument that the two cosines cancel at
+     * this fixture's own latitude; running that mutation showed they do not — the world size carries
+     * `1 / cos(cameraLatitude)` and the copied distortion would carry `1 / cos(placementLatitude)`
+     * **on top of** it — and this case turned red with the other two. The reasoning was wrong and the
+     * measurement is what says so.
      */
     @Test
     fun mapScaleMatchesMercatorAtTheCameraOwnLatitude() {
