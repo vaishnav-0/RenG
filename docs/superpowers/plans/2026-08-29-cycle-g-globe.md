@@ -133,10 +133,24 @@ only two arithmetic sites exist outside `internal/projection/`.
 ### Task 6 — cull the far hemisphere
 
 `glCullFace` for ground patches — consistent winding makes the far side back-facing, with no depth
-involvement. A **horizon test** for placements, from the sign of `w` that `ScreenProjection` already
-computes.
+involvement. A **horizon test** for placements: **a limb-plane dot product on the CPU.**
 
-**Face culling joins ADR 0023's Restore Set**; RenG does not currently enable it.
+**Two corrections to this plan's first draft, both found by Task 3 and both worth knowing because the
+original instructions were plausible and wrong.**
+
+**The horizon test is not the sign of `w`.** `w` is `-z_view`, the distance in front of the *camera plane*,
+and `ScreenProjection`'s KDoc says it "is always at least `NEAR_DISTANCE_LOGICAL_PIXELS` here". A camera
+outside the sphere has the whole planet in front of it, so an antipodal placement carries a large *positive*
+`w`. **Implementing the original sentence literally would have culled nothing** while looking correct.
+
+**Face culling adds nothing to the Restore Set**, and RenG already enables it. Cull enable, mode and winding
+have been captured and restored since ADR 0006, and `drawModels` enables `GL_CULL_FACE` per-primitive for
+every non-`doubleSided` material. The real obligation is **ownership**: `drawGround` has never set a cull
+state and inherits the caller's, harmless today only because the ground quad happens to wind CCW. Set it
+explicitly in **both** modes — enabled on the globe, disabled under mercator — so no mercator pixel moves.
+
+*Vacuity warning specific to this:* a test that only checks the globe path passes with the mercator arm
+deleted, and vice versa. Assert both, and assert that a mercator frame's pixels are unchanged.
 
 *Known gap, accepted and recorded rather than fixed:* content straddling the limb — a tall model just beyond
 the horizon is culled entirely rather than having its top drawn.

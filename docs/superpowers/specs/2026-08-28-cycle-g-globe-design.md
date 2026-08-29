@@ -92,8 +92,15 @@ renderers have one.
 
 - The far hemisphere is **back-facing**. Ground patches have consistent winding on a sphere, so `glCullFace`
   removes it with no depth involvement.
-- A placement is beyond the horizon exactly when a cheap CPU test says so — and the sign of `w` from
-  `ScreenProjection` (built for E-labels, `internal/projection/ScreenProjection.kt`) already computes it.
+- A placement is beyond the horizon exactly when a cheap CPU test says so — **a limb-plane dot product**,
+  not anything `ScreenProjection` already returns.
+
+  **Corrected 2026-08-29, and the original wording would have produced a cull that culls nothing.** This
+  section previously said the horizon test comes "from the sign of `w`". It does not. `w` is `-z_view`, the
+  distance in front of the *camera plane*, and `ScreenProjection`'s own KDoc says it "is always at least
+  `NEAR_DISTANCE_LOGICAL_PIXELS` here". A camera outside the sphere has the **whole planet** in front of it,
+  so an antipodal placement has a large *positive* `w` and would never be rejected. `w` answers "is this
+  behind the camera", which is a different question from "is this behind the planet".
 
 **The web renderers' trick is unavailable to RenG.** MapLibre and Mapbox both clip the far side by
 overwriting `gl_Position.z`, which works only because their depth buffer holds layer-ordering slices of
@@ -111,8 +118,17 @@ standing on it.
 **Known gap, accepted:** content that *straddles* the limb is handled wrongly. A tall model just beyond the
 horizon is culled entirely rather than having its top drawn, and a geometry spanning the limb likewise.
 
-**Cost:** enabling face culling adds an entry to the GL Restore Set that ADR 0023 governs. RenG does not
-currently enable it.
+**Cost — corrected 2026-08-29, and it was wrong twice over.** Face culling adds **nothing** to the Restore
+Set: cull enable, mode and winding have been captured and restored since ADR 0006
+(`GlStateSnapshot.kt:60-62,150-152,247-249`). And RenG **already enables `GL_CULL_FACE`** — `drawModels`
+disables it on entry and enables it per-primitive for every non-`doubleSided` material, with the frame
+drawer setting `GL_CCW`/`GL_BACK` scene-wide.
+
+The real new obligation is **ownership**: `drawGround` has never set a cull state at all and inherits
+whatever the caller left, which is harmless today only because the ground quad happens to wind CCW. The
+ground pass must set it explicitly in both modes — enabled on the globe, disabled under mercator — so that
+no mercator pixel moves. A pre-existing instance of the same gap is recorded in ADR 0038: the sticker pass
+also sets no cull state and inherits whatever the model pass's last primitive left behind.
 
 ---
 
