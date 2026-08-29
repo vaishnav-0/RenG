@@ -9,6 +9,7 @@ import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.test.Test
@@ -138,15 +139,28 @@ class GlobeGroundFootprintTest {
                     )
                     val horizonMargin = requireNotNull(
                         globeLimbPlane(camera.eyeGlobeFixed, camera.radiusLogicalPixels),
-                    ).signedDistanceLogicalPixels(position)
+                    ).signedDistanceLogicalPixels(position) / camera.radiusLogicalPixels
+                    if (abs(horizonMargin) <= UNIT_SPHERE_GUARD) return@run
+
+                    val contained = footprint.containsUnitDirection(direction)
                     val projected = projectCameraRelativeLogicalPosition(
                         camera,
                         cameraRelativeLogicalPosition(camera, position),
                     )
+                    if (projected is ScreenProjection.OutsideSupportedDomain) return@run
+                    val depth = when (projected) {
+                        is ScreenProjection.Projected -> projected.w
+                        is ScreenProjection.BehindNearPlane -> projected.w
+                        else -> return@run
+                    }
+                    val nearMargin = (depth - NEAR_DISTANCE_LOGICAL_PIXELS) / camera.radiusLogicalPixels
+                    if (abs(nearMargin) <= UNIT_SPHERE_GUARD) return@run
 
-                    val contained = footprint.containsUnitDirection(direction)
                     if (projected !is ScreenProjection.Projected) {
-                        assertTrue(!contained, "${fixture.name}: a point behind the near plane was contained")
+                        assertTrue(
+                            !contained,
+                            "${fixture.name}: ground inside the near plane was admitted as visible",
+                        )
                         outsideCount += 1
                         return@run
                     }
@@ -156,10 +170,9 @@ class GlobeGroundFootprintTest {
                         projected.pixelY,
                         height - projected.pixelY,
                     )
-                    val visible = pixelMargin > 0.0 && !hidden
-                    val margin = minOf(abs(horizonMargin), abs(pixelMargin))
-                    if (margin <= BOUNDARY_GUARD_LOGICAL_PIXELS) return@run
+                    if (abs(pixelMargin) <= VIEWPORT_GUARD_LOGICAL_PIXELS) return@run
 
+                    val visible = pixelMargin > 0.0 && !hidden
                     assertEquals(
                         visible,
                         contained,
@@ -222,6 +235,124 @@ class GlobeGroundFootprintTest {
         assertTrue(
             !footprint.containsUnitDirection(rotatedFromAnchor(camera, limbAngle + 1e-6)),
             "just outside the limb must not be",
+        )
+    }
+
+    /**
+     * Ground that the frustum contains and the near plane excludes, which is not a corner case at a
+     * grazing camera: at pitch 89.99 and zoom 14 the eye stands a quarter of a logical pixel off the
+     * surface, and **11,200 of 28,800 sampled pixels** look at ground closer to it than the near
+     * plane. Those pixels draw nothing, so the ground behind them is not visible ground, and a
+     * footprint that admitted it would be claiming a tile is visible on the strength of pixels the
+     * pipeline discards.
+     *
+     * [physicalPixelGlobeRay] is the independent witness: it near-clips a *pixel* ray, so a
+     * [GlobeRayResult.NearClipped] result is the statement "the frustum contains ground inside the
+     * near plane" made without reference to any half-space.
+     */
+    @Test
+    fun groundTheFrustumContainsButTheNearPlaneExcludesIsNotVisibleGround() {
+        val camera = globeCamera(HARNESS_SIZE, latitude = 31.0, zoom = 14.0, pitch = 89.99)
+        val footprint = globeGroundFootprint(camera)
+
+        var nearClippedPixels = 0
+        for (pixelY in 0 until HARNESS_SIZE.height step 3) {
+            for (pixelX in 0 until HARNESS_SIZE.width step 3) {
+                if (physicalPixelGlobeRay(camera, pixelX, pixelY) is GlobeRayResult.NearClipped) {
+                    nearClippedPixels += 1
+                }
+            }
+        }
+        assertTrue(
+            nearClippedPixels > 1000,
+            "only $nearClippedPixels near-clipped pixels: the fixture does not reach the near plane",
+        )
+
+        var behindNearPlane = 0
+        var justBeyondAndVisible = 0
+        for (direction in sampledDirections(camera)) {
+            val logical = cameraRelativeLogicalPosition(camera, direction * camera.radiusLogicalPixels)
+            when (val projected = projectCameraRelativeLogicalPosition(camera, logical)) {
+                is ScreenProjection.BehindNearPlane -> {
+                    if (projected.w > 0.0) {
+                        behindNearPlane += 1
+                        assertTrue(
+                            !footprint.containsUnitDirection(direction),
+                            "ground $projected in front of the camera but inside the near plane " +
+                                "was admitted as visible",
+                        )
+                    }
+                }
+
+                is ScreenProjection.Projected -> {
+                    val inViewport = projected.pixelX in 0.0..HARNESS_SIZE.width.toDouble() &&
+                        projected.pixelY in 0.0..HARNESS_SIZE.height.toDouble()
+                    if (inViewport && projected.w < 4.0 * NEAR_DISTANCE_LOGICAL_PIXELS) {
+                        justBeyondAndVisible += 1
+                        assertTrue(
+                            footprint.containsUnitDirection(direction),
+                            "ground just beyond the near plane at $projected was excluded",
+                        )
+                    }
+                }
+
+                ScreenProjection.OutsideSupportedDomain -> Unit
+            }
+        }
+        assertTrue(behindNearPlane > 0, "no sample landed inside the near plane")
+        assertTrue(
+            justBeyondAndVisible > 0,
+            "no sample landed just beyond it, so the exclusion could be the side planes instead",
+        )
+    }
+
+    /**
+     * The feasibility decision's **completeness**, on configurations a camera never produces.
+     *
+     * Maximising one constraint over a non-empty feasible set lands in one of three places: that
+     * constraint's own normal, a point where two boundary circles meet, or the point of one circle
+     * nearest the objective. The third family looks redundant and is not: two caps *larger* than a
+     * hemisphere can meet in a band whose boundary is two disjoint circles, with no corner anywhere
+     * and neither cap's centre inside. Deleting that family moves no tile at any camera measured in
+     * this file, so this is the only case that would ever see it.
+     */
+    @Test
+    fun theFeasibilityDecisionFindsARegionWithNoCornersAndNoFeasibleCentres() {
+        val band = listOf(
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 0.0, 1.0), -0.9),
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 0.0, -1.0), -0.9),
+        )
+        // Neither centre is feasible and the two circles never meet, yet everything between them is.
+        assertTrue(band.none { candidate -> band.all { it.admits(candidate.normal) } })
+        assertTrue(anyFeasibleGlobeDirection(band), "the band between two large caps is non-empty")
+
+        val nested = listOf(
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 0.0, 1.0), 0.99),
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 0.0, 1.0), 0.2),
+        )
+        assertTrue(anyFeasibleGlobeDirection(nested), "the smaller of two nested caps is non-empty")
+
+        val disjoint = listOf(
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 0.0, 1.0), 0.5),
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 0.0, -1.0), 0.5),
+        )
+        assertTrue(!anyFeasibleGlobeDirection(disjoint), "two opposed caps share nothing")
+
+        val impossible = listOf(GlobeGroundHalfSpace(DoubleVector3(1.0, 0.0, 0.0), 1.0 + 1e-9))
+        assertTrue(!anyFeasibleGlobeDirection(impossible), "a cap beyond the sphere is empty")
+
+        // Three caps whose pairwise corners are all infeasible except the ones bounding the answer.
+        val corner = listOf(
+            GlobeGroundHalfSpace(DoubleVector3(1.0, 0.0, 0.0), 0.4),
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 1.0, 0.0), 0.4),
+            GlobeGroundHalfSpace(DoubleVector3(0.0, 0.0, 1.0), 0.4),
+        )
+        assertTrue(anyFeasibleGlobeDirection(corner), "the octant the three caps share is non-empty")
+        assertTrue(
+            !anyFeasibleGlobeDirection(
+                corner + GlobeGroundHalfSpace(DoubleVector3(-1.0, -1.0, -1.0) * (1.0 / sqrt(3.0)), 0.1),
+            ),
+            "and adding its own antipodal cap empties it",
         )
     }
 
@@ -357,7 +488,17 @@ class GlobeGroundFootprintTest {
         const val LOCAL_ANGLE_SAMPLES = 37
         const val LOCAL_AZIMUTH_SAMPLES = 31
         const val BOX_SAMPLES = 24
-        const val BOUNDARY_GUARD_LOGICAL_PIXELS = 1.0
+        const val NEAR_FAN_DECADES = 12
+        /**
+         * Samples nearer a boundary than this are skipped rather than asserted, because the
+         * footprint is deliberately inclusive by `1e-12` on the unit sphere and a sample straddling
+         * an edge would be measuring rounding. **On the unit sphere, not in logical pixels**: at the
+         * grazing fixture the eye stands a quarter of a logical pixel off the surface, so the entire
+         * visible cap is within 0.25 logical pixels of its own limb plane and an absolute guard in
+         * pixels would skip every sample the case exists to make.
+         */
+        const val UNIT_SPHERE_GUARD = 1e-9
+        const val VIEWPORT_GUARD_LOGICAL_PIXELS = 1e-3
 
         val VISIBILITY_FIXTURES = listOf(
             GlobeVisibilityFixture("whole globe in frame, latitude 61", HARNESS_SIZE, 61.0, 0.0, 0.0, 0.0),
@@ -365,6 +506,7 @@ class GlobeGroundFootprintTest {
             GlobeVisibilityFixture("high latitude, ground fills the frame", HARNESS_SIZE, 82.0, 6.0, 0.0, 0.0),
             GlobeVisibilityFixture("southern, rotated and pitched", HARNESS_SIZE, -47.3, 2.0, 137.0, 38.0),
             GlobeVisibilityFixture("phone viewport across the antimeridian", OutputPixelSize(1179, 2556), 63.0, 1.0, 0.0, 0.0, longitude = 179.4),
+            GlobeVisibilityFixture("grazing, ground inside the near plane", HARNESS_SIZE, 31.0, 14.0, 0.0, 89.99),
         )
 
         val RECTANGLES = listOf(
@@ -479,15 +621,46 @@ class GlobeGroundFootprintTest {
             )
             for (angleIndex in 0..LOCAL_ANGLE_SAMPLES) {
                 val angle = maximumAngle * angleIndex / LOCAL_ANGLE_SAMPLES
-                val alongAngle = camera.anchorUp * cos(angle)
-                for (azimuthIndex in 0 until LOCAL_AZIMUTH_SAMPLES) {
-                    val azimuth = 2.0 * PI * azimuthIndex / LOCAL_AZIMUTH_SAMPLES
-                    directions += alongAngle +
-                        (camera.anchorNorth * cos(azimuth) + camera.anchorEast * sin(azimuth)) * sin(angle)
-                }
+                directions += fanAbout(camera.anchorUp, camera.anchorNorth, angle)
+            }
+
+            // ...and a geometric fan about the point of the sphere nearest the eye, spanning six
+            // orders of magnitude of angle. A near-plane boundary sits about one logical pixel from
+            // that point, which on a zoom-14 sphere is 6 x 10^-7 radians -- four decades below
+            // anything a linear grid over the frame reaches, and the only place a camera grazing
+            // the surface can be caught admitting ground it cannot draw.
+            val subEye = normalisedVector(camera.eyeGlobeFixed)
+            var decade = 0
+            while (decade <= NEAR_FAN_DECADES) {
+                val angle = maximumAngle * 10.0.pow(-decade / 2.0)
+                directions += fanAbout(subEye, camera.anchorNorth, angle)
+                decade += 1
             }
             return directions
         }
+
+        /** Unit directions at [angle] from [axis], all the way round it. */
+        fun fanAbout(
+            axis: DoubleVector3,
+            towards: DoubleVector3,
+            angle: Double,
+        ): List<DoubleVector3> {
+            val projected = towards - axis * axis.dot(towards)
+            val first = if (sqrt(projected.dot(projected)) > 1e-9) {
+                normalisedVector(projected)
+            } else {
+                normalisedVector(axis.cross(DoubleVector3(0.0, 0.0, 1.0)))
+            }
+            val second = axis.cross(first)
+            val along = axis * cos(angle)
+            return List(LOCAL_AZIMUTH_SAMPLES) { azimuthIndex ->
+                val azimuth = 2.0 * PI * azimuthIndex / LOCAL_AZIMUTH_SAMPLES
+                along + (first * cos(azimuth) + second * sin(azimuth)) * sin(angle)
+            }
+        }
+
+        fun normalisedVector(vector: DoubleVector3): DoubleVector3 =
+            vector * (1.0 / sqrt(vector.dot(vector)))
     }
 }
 

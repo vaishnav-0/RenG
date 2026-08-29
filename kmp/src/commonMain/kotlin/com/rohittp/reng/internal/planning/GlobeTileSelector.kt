@@ -65,9 +65,11 @@ internal fun selectGlobeTiles(
     require(lod in MINIMUM_LOD..MAXIMUM_LOD) { "lod must be within the Mercator LOD range" }
     require(maximumInstances > 0) { "maximumInstances must be positive" }
 
+    // The LOD 0 cell is the whole Mercator world and is entered untested on purpose: a separate
+    // guard for it would be dead code. At LOD 0 the exact filter below is the test, and above it
+    // the four children are each tested on their own rectangle.
     var frontier: List<GlobeTileCandidate> = listOf(GlobeTileCandidate(0L, 0L))
     var level = 0
-    if (!footprint.mayAdmitMercatorCell(0.0, 1.0, 0.0, 1.0)) return emptyGlobeTileSelection()
 
     val frontierCeiling = maximumInstances.toLong() * FRONTIER_BUDGET_HEADROOM
     while (level < lod) {

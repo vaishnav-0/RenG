@@ -116,7 +116,7 @@ internal class GlobeGroundFootprint internal constructor(
         val cell = mercatorCell(minimumX, maximumX, minimumY, maximumY)
         if (!mayAdmit(cell)) return false
         if (cell.representativeDirections().any(::containsUnitDirection)) return true
-        return anyFeasibleDirection(cameraHalfSpaces + cell.halfSpaces())
+        return anyFeasibleGlobeDirection(cameraHalfSpaces + cell.halfSpaces())
     }
 
     private fun mayAdmit(cell: MercatorCell): Boolean = cameraHalfSpaces.all { halfSpace ->
@@ -226,9 +226,10 @@ private fun MutableList<GlobeGroundHalfSpace>.addIfUsable(
  * wrapped one, [angularGapToInterval].
  *
  * The alternative every renderer reaches for first — an axis-aligned bounding box around the
- * patch — overestimates this by the box's own corners, which at the measured harness camera is
- * about 50 logical pixels against a 4-pixel margin: enough to select a tile column that shows no
- * ground at all.
+ * patch — is a true bound and a useless one: its corners sit above the surface and outside the
+ * patch's own longitude span, and swapping it in here keeps strictly more cells at the measured
+ * harness camera, whose ground clears its neighbouring column by 0.8% of a tile
+ * (`GlobeGroundFootprintTest.theBoundingBoxSupportBoundKeepsCellsTheExactMaximumRejects`).
  */
 internal fun maximumOverSphericalRectangle(
     normal: DoubleVector3,
@@ -273,6 +274,11 @@ private fun wrappedToHalfTurn(angle: Double): Double {
  * Whether any unit direction satisfies every one of [constraints] — spherical convex feasibility,
  * decided by enumerating the only places an answer can hide.
  *
+ * Reachable outside this file so that its **completeness** can be asserted on configurations a
+ * camera does not produce. Deleting the [extremeOnCircle] family below moves no tile at any camera
+ * measured here, and is still a defect: it is the family a band between two caps larger than a
+ * hemisphere needs, and nothing but a direct test of this function can see that.
+ *
  * Maximise any one constraint's own functional over the feasible set. The maximiser exists whenever
  * the set is non-empty, and exactly three things can be true of it: **no** other constraint is
  * active, so it is that constraint's own normal; **one** is active, so it is the point of that
@@ -286,7 +292,7 @@ private fun wrappedToHalfTurn(angle: Double): Double {
  * for cells that survive [GlobeGroundFootprint.mayAdmitMercatorCell] *and* whose sampled
  * representatives are all outside — the perimeter of the visible ground rather than its area.
  */
-private fun anyFeasibleDirection(constraints: List<GlobeGroundHalfSpace>): Boolean {
+internal fun anyFeasibleGlobeDirection(constraints: List<GlobeGroundHalfSpace>): Boolean {
     for (constraint in constraints) {
         if (satisfiesAll(constraints, constraint.normal)) return true
     }
