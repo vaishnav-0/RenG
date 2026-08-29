@@ -33,6 +33,7 @@ import com.rohittp.reng.ResourceAccessMode as RenGResourceAccessMode
 import com.rohittp.rentile.BasemapRasterizer
 import com.rohittp.rentile.CredentialProvider
 import com.rohittp.rentile.GlyphTemplateMismatchException
+import com.rohittp.rentile.GroundRadianceDescriptor
 import com.rohittp.rentile.LabelCandidateBatch
 import com.rohittp.rentile.LabelCandidatePlan
 import com.rohittp.rentile.MapSessionProvider
@@ -50,10 +51,12 @@ import com.rohittp.rentile.ResourceSubstitution
 import com.rohittp.rentile.ResourceTransport as EngineResourceTransport
 import com.rohittp.rentile.StoredRawResource as EngineStoredRawResource
 import com.rohittp.rentile.StyleInput
+import com.rohittp.rentile.TerrainSourceDescriptor
 import com.rohittp.rentile.TileId
 import com.rohittp.rentile.TileSubstitutionPolicy
 import com.rohittp.rentile.TransportRequest as EngineTransportRequest
 import com.rohittp.rentile.TransportResponse as EngineTransportResponse
+import com.rohittp.rentile.ValidatedDemTile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 
@@ -506,6 +509,71 @@ internal class BasemapEngineHost(
     }
 
     /**
+     * The `terrain` source [style] declares, or `null` when it declares none.
+     *
+     * Reaches no adapter and performs no I/O -- `DefaultBasemapRasterizer.terrainSourceDescriptor` reads
+     * the compiled style and returns -- so it needs no open invocation, only an open host. It is routed
+     * through [engineCall] all the same, because `requireOwnedStyle` throws a `RentileException` for a
+     * style this engine did not compile and no `RentileException` leaves this file.
+     *
+     * **[TerrainSourceDescriptor.sourceId] is a digest, not the style's source id.** Rentile sets it to
+     * `sha256Hex(sourceId)` (`StyleCompiler.kt:1770`), so comparing it against
+     * [com.rohittp.reng.internal.basemap.BasemapStyleManifest.terrainSourceId] requires hashing first --
+     * see [TerrainAcquisition.terrainSource], which is where that comparison belongs.
+     */
+    fun terrainSourceDescriptor(style: PreparedStyle): TerrainSourceDescriptor? {
+        requireOpen()
+        return engineCall { engine.terrainSourceDescriptor(style) }
+    }
+
+    /**
+     * The ground radiance [style] compiles to, or `null` when it declares no complete ground-light pair.
+     *
+     * **This is not about terrain**, and the neighbouring method is the reason it is worth saying here:
+     * Rentile compiles it from the style's top-level `lights` array (`internal/style/GroundLight.kt`),
+     * entirely independently of `terrain`, so a style with lights and no terrain yields one and a style
+     * with terrain and no lights yields `null`. Like [terrainSourceDescriptor] it reads the compiled
+     * style and reaches no adapter.
+     */
+    fun groundRadianceDescriptor(style: PreparedStyle): GroundRadianceDescriptor? {
+        requireOpen()
+        return engineCall { engine.groundRadianceDescriptor(style) }
+    }
+
+    /**
+     * Acquires [tiles]' DEM tiles -- through the firewall, so through this invocation's preregistered
+     * routes and nothing else.
+     *
+     * **The routes are already there.** `tileTimeRoutes` preregisters the 3x3 neighbourhood of every
+     * visible tile for every `raster-dem` source, and a one-tile perimeter ring around the visible set is
+     * a subset of that union at *any* overzoom factor: a request one tile away moves the source sample by
+     * at most one in each axis, since `sampleFor` divides by a `childScale` of at least one. So this
+     * widens the acquisition without widening preregistration.
+     *
+     * **All or nothing on error, shorter than the request on absence.** One failing tile fails the whole
+     * call (`throwAcquisitionFailures`), while tiles below the source's `minimumZoom` or outside its
+     * `bounds` are dropped by `mapNotNull` with no diagnostic and no exception. Neither is decided here:
+     * [TerrainAcquisition] owns both answers under ADR 0041, and it matches what comes back by
+     * [ValidatedDemTile.requestedTile] rather than by position for exactly the second reason.
+     *
+     * `distinct()` mirrors [prepareTiles]; Rentile de-duplicates again on its own side.
+     */
+    suspend fun acquireTerrainTiles(
+        style: PreparedStyle,
+        tiles: List<CanonicalBasemapTile>,
+    ): List<ValidatedDemTile> {
+        requireOpen()
+        val operation = activeOperation ?: throw unplannedEngineExchangeFailure()
+        return engineCall {
+            engine.acquireTerrainTiles(
+                style = style,
+                tiles = tiles.distinct().map(::engineTileIdOf),
+                resourceAccess = engineAccessModeOf(operation.accessMode),
+            )
+        }
+    }
+
+    /**
      * The engine's **own** identity for the Label acquisition [acquireLabelCandidates] would perform for
      * [style] over [tiles], available before any adapter is touched. Performs no engine work beyond the
      * digest, no consumer exchange, and needs no open invocation.
@@ -777,7 +845,12 @@ internal class BasemapEngineHost(
         if (closed) throw basemapRenderFailure().toException()
     }
 
-    private fun engineTileIdOf(tile: CanonicalBasemapTile): TileId =
+    /**
+     * `internal` rather than `private` for one reason: [TerrainAcquisition] matches DEM results back onto
+     * the tiles it asked for by [ValidatedDemTile.requestedTile], and a second copy of this two-field
+     * mapping is a second thing that can drift out of agreement with the request it is matching against.
+     */
+    internal fun engineTileIdOf(tile: CanonicalBasemapTile): TileId =
         TileId(z = tile.lod, x = tile.canonicalX, y = tile.tileY)
 
     /**
