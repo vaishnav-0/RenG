@@ -351,6 +351,32 @@ years of continuous 60fps; `frameIndex` is an ordering key rather than a clock, 
 correctness hazard. See ADR 0024 for the hazard of renaming one of these names later.
 _Avoid_: uniform preamble, injected include, varying, built-in attribute
 
+**Terrain**:
+The elevation the ground is displaced by, decoded by RenG from the DEM tiles Rentile acquires for the
+style's `terrain` source. Terrain is **geometry, not appearance**: it moves the ground surface and
+nothing else. Relief shading is the style's business — a style that wants it declares a `hillshade`
+layer, which the engine draws into the tile image — with one exception, below.
+_Avoid_: Elevation model, heightmap, DEM (that is the *source data*, not the drawn thing), relief,
+hillshade (that is a style layer type and means shading, not displacement).
+
+**Altitude Mode**:
+Whether a **Placement**'s `position.z` is measured from the ellipsoid or from the **Terrain** beneath
+it — `ABSOLUTE` or `GROUND_RELATIVE`. **`ABSOLUTE` is the default and the meaning the glossary already
+carried**: altitude is ellipsoidal metres, so a caller who says zero over a plateau means sea level and
+gets it. `GROUND_RELATIVE` is the opt-in that means the other thing. The two are identical wherever the
+ground is flat, which is every style that declares no terrain.
+_Avoid_: Clamp to ground, sea level (as a mode name), height mode, elevation offset.
+
+**Terrain Shading**:
+A **Renderer Configuration** option, **default off**, that shades the displaced ground from a normal
+derived from the DEM. Off, the ground stays unlit exactly as ADR 0026 says, which is what the style
+asked for: in the corpus the styles that wanted relief shading declared `hillshade` and the styles that
+displace declined it. It exists because two of the six displacing styles are pure vector, whose flat
+fills read as flat however far they move. It is a property of the renderer rather than of a **Frame
+Plan**, so it cannot vary frame to frame.
+_Avoid_: Hillshade (a style layer type), lighting (ADR 0026's light is a different, world-anchored
+thing that shades **Model**s), relief.
+
 **Basemap Tile**:
 One canonical PNG tile acquired from Rentile and drawn as the ground beneath a frame. A canonical tile
 may back multiple unwrapped world-copy draw instances when repeated Mercator worlds intersect the output.
