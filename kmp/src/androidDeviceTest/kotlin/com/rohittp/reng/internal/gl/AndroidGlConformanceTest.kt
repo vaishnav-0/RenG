@@ -3,10 +3,12 @@ package com.rohittp.reng.internal.gl
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
 import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
+import com.rohittp.reng.LATITUDE_PROBE_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -152,6 +154,28 @@ class AndroidGlConformanceTest {
             binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
             binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
             runGlobeGroundReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 11's probe on Android's driver — the one target where it could answer the
+     * question that started the cycle, and where nothing has ever run it.
+     *
+     * MapLibre's 200-300 metre latitude error was measured on **Mali-G610/G710**. RenG's only Android
+     * device evidence is an Adreno 830, the family that was fine, and this source set is manual
+     * (ADR 0033), so no Mali number exists anywhere in this project. Whoever first runs this against
+     * a Mali should record the printed line: it is the measurement the whole latitude spike could not
+     * make.
+     */
+    @Test fun theLatitudePrecisionProbePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+            binding.scissor(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+            runLatitudePrecisionProbeSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

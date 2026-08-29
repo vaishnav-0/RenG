@@ -64,21 +64,57 @@ import kotlin.test.assertTrue
  *
  * ## What it measures
  *
- * A sweep of **[SAMPLES_PER_BASE] consecutive representable float32 isometric latitudes** at each of
- * [BASE_LATITUDES_DEGREES] — [TOTAL_SAMPLES] samples in all — is handed to the driver one per vertex,
- * and the driver's own bits come back one per pixel. From those bits:
+ * [TOTAL_SAMPLES] float32 isometric latitudes, [SAMPLES_PER_BASE] at each of
+ * [BASE_LATITUDES_DEGREES], are handed to the driver one per vertex, and the driver's own float bits
+ * come back one per pixel. From those bits:
  *
- * - the ULP error of `exp`, `atan`, `sin` and `cos` against a `Double` reference, and **whether the
- *   driver's `exp` is monotone** across consecutive inputs;
+ * - the ULP error of `exp`, `atan`, `sin` and `cos` against a `Double` reference, **whether the
+ *   driver's `exp` is monotone**, and what the driver's own multiply, subtract and **divide** cost
+ *   after `exp` — measured against the correctly rounded float32 chain evaluated from the driver's
+ *   own `t`, which is the only way to tell a bad transcendental from a divide implemented as a
+ *   reciprocal multiply;
  * - the latitude error in metres of both the half-angle and the naive formulation, recovered as
  *   `atan2(sin phi, cos phi)` in `Double` outside the driver and compared against `atan(sinh psi)`;
- * - the **number of monotonicity inversions** of each formulation across the sweep.
+ * - the **number of monotonicity inversions** of each formulation, counted twice — see
+ *   [SAMPLES_PER_HALF];
+ * - all of the above again with **non-smooth error injected** into `atan`, `sin` and `cos`, and again
+ *   with `exp` driven to its own specified bound. Those two are the controls: without them a zero is
+ *   indistinguishable from a counter that counts nothing.
  *
  * **Monotonicity is the point, not magnitude.** MapLibre #7419's complaint is not an offset — it is
  * *"some distinct latitude values will overlap"* — and the spike measured a single ULP of *non-smooth*
  * `atan` error inverting **1,134 of 19,999** consecutive float32 values under the naive form and
  * **zero** under the half-angle one. A probe that reported only a worst-case error in metres would
- * miss that entirely, because 1 ULP of `atan` is worth only 1.66 metres and looks like nothing.
+ * miss that entirely, because 1 ULP of `atan` is worth only 1.66 metres and looks like nothing. The
+ * converse is measured here too, and it is why both numbers are reported: on `Apple Software
+ * Renderer` the naive form is **7,118 metres** out with only 85 raw inversions, because a large
+ * *smooth* error moves every latitude together.
+ *
+ * ## What it has measured, and on what
+ *
+ * | driver | `exp` | `atan` | `sin` | `cos` | post-`exp` arithmetic | half-angle worst | naive worst |
+ * |---|---:|---:|---:|---:|---:|---:|---:|
+ * | `Apple M3 Max` (CGL, desktop dialect) | 4 ULP, monotone | 2 | 2 | 2 | 32 ULP | **0.83 m** | 2.21 m |
+ * | `Apple Software Renderer` (CGL, desktop dialect) | 1 ULP, monotone | **1,687** | **170,439** | **117,441** | 0 ULP | **0.68 m** | **7,118 m** |
+ * | `Apple Software Renderer` (EAGL simulator, GLES dialect) | 1 ULP, monotone | **1,687** | **170,439** | **117,440** | 0 ULP | **0.68 m** | **7,118 m** |
+ *
+ * The bottom two rows are G5's whole argument, on a driver RenG ships against rather than on a model
+ * of a Mali: a hosted GitHub macOS runner has no GPU and no other rasteriser, and on it the
+ * formulation RenG rejected is **four orders of magnitude** worse than the one it took. Nothing
+ * predicted that — the spike modelled a Mali it could not reach, and this was sitting on a Mac. The
+ * two software rows agree to one ULP of `cos` across two context types and two shader dialects, which
+ * is worth as much as the numbers themselves: it says the measurement is of the rasteriser rather
+ * than of how the probe reached it.
+ *
+ * On all three, the half-angle path reports **zero** inversions among the pairs the output format
+ * separates, and is **bit-for-bit unmoved** by injected trigonometric error at 1 and 64 ULP.
+ *
+ * **Drivers this has never run on**, and no number here should be read as covering them: Linux
+ * `llvmpipe` (this suite is wired into `LinuxGlConformanceTest`, and no Linux host was available to
+ * run it) and **every real mobile GPU** — Adreno and Apple's own included, both of which are manual
+ * source sets under ADR 0033. **Mali-G610/G710, the family the original 200-300 metre failure was
+ * measured on, remains unmeasured on this project**, which is exactly the state G5 designed a probe
+ * rather than a budget for.
  *
  * ## What it does not measure, stated so nobody reads more into a green run
  *
