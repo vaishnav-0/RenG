@@ -7,6 +7,8 @@ import com.rohittp.reng.LATITUDE_PROBE_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
+import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
+import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -138,6 +140,23 @@ class AndroidGlConformanceTest {
             binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             runGroundCullReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 9's gate on Android's driver: a `Geometry` is a subdivided, CPU-projected grid now, and
+     * subdividing one under Mercator must move no pixel. The suite prints, for whichever rasteriser
+     * it lands on, how far each granularity moves the frame the four-corner strip of `0.3.0` drew.
+     */
+    @Test fun theGeometrySubdivisionReadbackSuitePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
+            binding.scissor(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
+            runGeometrySubdivisionReadbackSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

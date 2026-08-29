@@ -20,9 +20,9 @@ import com.rohittp.reng.internal.planning.ResolvedGeometry
 import com.rohittp.reng.internal.planning.ResolvedPlacement
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.resolveBasemapTileQuad
-import com.rohittp.reng.internal.planning.resolveGeometry
 import com.rohittp.reng.internal.planning.resolvePlacement
 import com.rohittp.reng.internal.projection.ResolvedFrameCamera
+import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.renGFailure
 
@@ -313,7 +313,7 @@ internal class Scene(
  *
  * **Why resolving [Placement]/[Geometry] here does not put spatial-failure handling inside a GL
  * draw call.** Cycle F-1 Tasks 5 and 6 pushed placement and geometry resolution out of
- * [drawStickers]/[drawGeometry] because [resolvePlacement]/[resolveGeometry] can fail and a GL draw
+ * [drawStickers]/[drawGeometry] because [resolvePlacement]/[geometryGrid] can fail and a GL draw
  * call has no way to surface that failure. That resolution still happens exactly once, at
  * `FRAME_PLANNING`, inside `internal.planning.planMercatorSpatial` — whoever assembles a
  * [SceneContent] (Task 9's renderer) only does so with a [Geometry]/[Placement] plus [camera] pair
@@ -413,11 +413,16 @@ internal class SceneContent(
             binding.disable(GL_CULL_FACE)
             val geometryViewProjection = composeGeometryViewProjection(camera)
             for (sceneGeometry in scene.geometries) {
-                val resolved = resolveGeometry(sceneGeometry.geometry, camera).requireResolvedAtDrawTime()
+                // Subdivided and CPU-projected, in both projection modes, so that the matrix below
+                // stays linear and a consumer's shader pair survives a globe unchanged (ADR 0008's
+                // 2026-08-29 erratum). Under Mercator the camera implies a single cell, so this
+                // resolves the same four corners `resolveGeometry` always did and the frame is the
+                // one `0.3.0` drew.
+                val grid = geometryGrid(sceneGeometry.geometry, camera).requireResolvedAtDrawTime()
                 drawGeometry(
                     binding = binding,
                     pipeline = sceneGeometry.pipeline,
-                    cameraRelativeCornersXyz = resolved.cornersToFloatArray(),
+                    grid = grid,
                     modelViewProjection = geometryViewProjection,
                     resolutionWidthPixels = scene.outputPixelSize.width.toFloat(),
                     resolutionHeightPixels = scene.outputPixelSize.height.toFloat(),
@@ -688,7 +693,7 @@ private fun DoubleMatrix4.linearDeterminant(): Double =
  * Unwraps a draw-time re-resolution (of a [Placement], [Geometry], or [com.rohittp.reng.Camera])
  * that a reviewer established CANNOT legitimately fail: only per-object resolution is re-derived at
  * draw time (the camera itself arrives already resolved), and every resolver this calls
- * ([resolvePlacement], [resolveGeometry], [com.rohittp.reng.internal.projection.resolveMercatorCamera])
+ * ([resolvePlacement], [geometryGrid], [com.rohittp.reng.internal.projection.resolveMercatorCamera])
  * is pure and deterministic in its inputs, which are themselves immutable
  * (`com.rohittp.reng.RenGPreparedFrame` snapshots every mutable input before this ever runs — see
  * `Geometry.uniforms`/`.textures`'s KDoc). A [SpatialOutcome.Failure] reaching here is therefore a
@@ -700,7 +705,7 @@ private fun DoubleMatrix4.linearDeterminant(): Double =
  * still escapes to the caller of `Renderer.draw`).
  *
  * **`RenGErrorCode.INVALID_VALUE` at [PipelineStage.DRAW], not `GPU_OPERATION_FAILED`.** A
- * resolution failure is semantically an invalid-value fault: [resolvePlacement], [resolveGeometry],
+ * resolution failure is semantically an invalid-value fault: [resolvePlacement], [geometryGrid],
  * and [com.rohittp.reng.internal.projection.resolveMercatorCamera] all report their OWN internal
  * failures as `INVALID_VALUE` at `FRAME_PLANNING`, so this reuses the SAME code, only relocated to
  * the stage it fires from here. `GPU_OPERATION_FAILED` ([glOperationFailure]) is
@@ -726,23 +731,6 @@ internal fun <T> SpatialOutcome<T>.requireResolvedAtDrawTime(): T = when (this) 
 }
 
 /**
- * [ResolvedGeometry.cornersClockwiseFromTopLeft] narrowed to a flat `x,y,z,x,y,z,...` `FloatArray`
- * in the same clockwise-from-top-left order [drawGeometry] documents. This is the only place a
- * resolved corner's `Double` components lose precision, and it is a direct per-component
- * `toFloat()` narrowing — never a recomputation from degrees.
- */
-private fun ResolvedGeometry.cornersToFloatArray(): FloatArray {
-    val corners = cornersClockwiseFromTopLeft
-    val result = FloatArray(corners.size * 3)
-    corners.forEachIndexed { index, corner ->
-        result[index * 3] = corner.x.toFloat()
-        result[index * 3 + 1] = corner.y.toFloat()
-        result[index * 3 + 2] = corner.z.toFloat()
-    }
-    return result
-}
-
-/**
  * The informational `uGeometryBounds` payload: west, south, east, north in degrees, straight from
  * [Geometry]'s own construction-time-validated corners (`topLeft.x > bottomRight.x` and
  * `topLeft.y < bottomRight.y`). Never fed into a vertex position — see [UNIFORM_GEOMETRY_BOUNDS].
@@ -756,11 +744,29 @@ private fun Geometry.boundsWestSouthEastNorth(): FloatArray = floatArrayOf(
 
 /**
  * A geometry carries no [Placement] (`CONTEXT.md`), so its vertices need no per-object model
- * matrix — [resolveGeometry] already resolved every corner directly into camera-relative logical
- * pixels. The uniform documented as `uModelViewProjection` is therefore exactly the camera's own
- * view-projection for a geometry.
+ * matrix — [geometryGrid] already resolved and projected every grid vertex directly into
+ * camera-relative logical pixels. The uniform documented as `uModelViewProjection` is therefore
+ * exactly the camera's own view-projection for a geometry, and it stays a plain linear matrix on a
+ * globe too, because the nonlinearity was spent on the CPU before any vertex was handed over.
  */
 internal fun composeGeometryViewProjection(camera: ResolvedMercatorCamera): FloatArray =
+    (camera.projectionMatrix * camera.viewMatrix).toColumnMajorFloatArray()
+
+/**
+ * The same matrix for a globe camera, and it is the same two factors in the same order.
+ *
+ * It is **not** [com.rohittp.reng.internal.projection.globeFixedViewProjection], which the globe
+ * ground uploads: that one carries the globe-fixed-to-camera-relative transform as a third factor
+ * because the ground's vertex shader emits a unit sphere direction. A `Geometry`'s vertices are
+ * projected on the CPU and arrive already camera-relative — [geometryGrid] applies exactly that
+ * third factor itself, in `Double`, before narrowing — so folding it in here would apply it twice.
+ *
+ * That is the whole of ADR 0008 surviving the globe: what a consumer's shader receives is still a
+ * position and still a linear view-projection, because the nonlinearity was spent before the vertex
+ * was handed over. Nothing in production reaches this yet — a `PreparedFrame` carries no projection
+ * mode and `FramePlanningCore` still refuses `GLOBE` — and closing that seam is task 10's.
+ */
+internal fun composeGeometryViewProjection(camera: ResolvedGlobeCamera): FloatArray =
     (camera.projectionMatrix * camera.viewMatrix).toColumnMajorFloatArray()
 
 /**
