@@ -9,6 +9,8 @@ import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
+import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
+import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -176,6 +178,30 @@ class AndroidGlConformanceTest {
         } finally {
             fixture.destroy()
         }
+
+    /**
+     * Cycle G task 12's gate on Android's driver: a `ProjectionMode.GLOBE` frame through the
+     * **public** API. Manual, like everything in this source set (ADR 0033).
+     *
+     * Whether the cross-mode case's Mercator ground-coverage assertion runs or stands down here is a
+     * measurement rather than a prediction: the suite opens with `measureLargeQuadRasterisation` and
+     * prints what this driver does with a quad that reaches far outside the viewport. On the only
+     * two Android rasterisers RenG has ever met — an Adreno 830 and an ANGLE-over-Vulkan-over-
+     * SwiftShader emulator — the equivalent probe reported zero disagreeing pixels, so the
+     * expectation is that nothing stands down; a run that does is worth reading rather than working
+     * around.
+     */
+    @Test fun theGlobeFrameReadbackSuitePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+            binding.scissor(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+            runGlobeFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
     }
 
     /**

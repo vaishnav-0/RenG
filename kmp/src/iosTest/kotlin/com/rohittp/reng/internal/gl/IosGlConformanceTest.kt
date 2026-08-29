@@ -9,6 +9,8 @@ import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
+import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
+import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -232,6 +234,29 @@ class IosGlConformanceTest {
             binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
             binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
             runGlobeGroundReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 12's gate on EAGL: a `ProjectionMode.GLOBE` frame through the **public** API.
+     *
+     * **One assertion here is expected to stand down, and that is the point of running it on this
+     * target.** The cross-mode case draws the same camera under `MERCATOR` as well, and a Mercator
+     * ground tile is the far-off-screen quad this rasteriser drops — 3,040 pixels of disagreement
+     * against a 512-pixel budget. Its Mercator ground-coverage assertion therefore prints a
+     * stand-down line and every other assertion in the case, including all four cross-mode
+     * fiducials, still runs. The globe's own ground is a subdivided grid of small on-screen cells,
+     * so the limb, antipodal and antimeridian cases are asserted in full here.
+     */
+    @Test fun theGlobeFrameReadbackSuitePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+            binding.scissor(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+            runGlobeFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

@@ -9,6 +9,8 @@ import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
+import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
+import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
@@ -261,6 +263,35 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
                 binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
                 runGlobeGroundReadbackSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * Cycle G task 12's gate: a `ProjectionMode.GLOBE` frame through the **public** API, on both
+     * Apple rasterisers this machine can offer.
+     *
+     * Both rather than one, because this suite is the only globe case that draws a **Mercator**
+     * frame too — the cross-mode comparison needs one — and a Mercator ground tile is exactly the
+     * far-off-screen quad `Apple Software Renderer` drops. The suite measures that driver with
+     * `measureLargeQuadRasterisation` and stands its Mercator ground-coverage assertion down out
+     * loud when the probe distrusts it, so running here on both rasterisers is what exercises the
+     * stand-down rather than only the trusted path.
+     */
+    @Test fun theGlobeFrameReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG globe frame readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+                binding.scissor(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+                runGlobeFrameReadbackSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }

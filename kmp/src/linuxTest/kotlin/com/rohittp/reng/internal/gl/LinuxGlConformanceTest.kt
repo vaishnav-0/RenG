@@ -9,6 +9,8 @@ import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
+import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
+import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -146,6 +148,32 @@ class LinuxGlConformanceTest {
         } finally {
             fixture.destroy()
         }
+
+    /**
+     * Cycle G task 12's gate on llvmpipe: a `ProjectionMode.GLOBE` frame through the **public** API.
+     *
+     * **This is the job that keeps the cross-mode case's Mercator half gated at all.** That case
+     * draws the same camera under both modes, and a Mercator ground tile is the far-off-screen quad
+     * `Apple Software Renderer` drops — so on the iOS simulator, and on macOS's software rasteriser,
+     * the suite stands its Mercator ground-coverage assertion down out loud. llvmpipe is a software
+     * rasteriser that rasterises those quads correctly, which is exactly the position the ground
+     * coverage case has been in since `0.3.0`.
+     */
+    @Test fun theGlobeFrameReadbackSuitePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+            binding.scissor(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
+            runGlobeFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
     }
 
     /**
