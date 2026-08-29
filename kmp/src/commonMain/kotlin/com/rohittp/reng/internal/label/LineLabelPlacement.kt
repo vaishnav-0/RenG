@@ -4,9 +4,9 @@ import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
 import com.rohittp.reng.internal.gl.ResolvedGlyphQuad
 import com.rohittp.reng.internal.gl.ResolvedLabelPaint
 import com.rohittp.reng.internal.projection.GeographicPosition
-import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
+import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import com.rohittp.reng.internal.projection.ScreenProjection
-import com.rohittp.reng.internal.projection.projectGeographicPosition
+import com.rohittp.reng.internal.projection.projectVisibleGeographicPosition
 import com.rohittp.rentile.LabelCandidate
 import com.rohittp.rentile.LabelGlyphAtlas
 import com.rohittp.rentile.LabelLinePoint
@@ -30,7 +30,7 @@ import kotlin.math.sqrt
  * here:
  *
  *  1. **Project the line.** Every source point goes through
- *     [projectGeographicPosition], which is a sealed answer rather than a pixel precisely so that a
+ *     [projectVisibleGeographicPosition], which is a sealed answer rather than a pixel precisely so that a
  *     point behind the camera cannot become a plausible pixel on the wrong side of the screen. See
  *     [projectLineRuns] for what a line that is only partly on screen becomes.
  *  2. **Walk it at `symbolSpacing`.** [LabelPlacement.LINE] repeats the label along the run;
@@ -54,7 +54,7 @@ import kotlin.math.sqrt
  * is the one thing this whole file exists to prevent. It stays a point-placement property.
  */
 internal fun layOutLineLabels(
-    camera: ResolvedMercatorCamera,
+    camera: ResolvedFrameCamera,
     atlas: LabelGlyphAtlas,
     candidate: LabelCandidate,
     candidateIndex: Int,
@@ -411,7 +411,7 @@ private class LineSample(
  * [ProjectedRun.sampleAt] rather than a visible defect.
  */
 private fun projectLineRuns(
-    camera: ResolvedMercatorCamera,
+    camera: ResolvedFrameCamera,
     line: List<LabelLinePoint>,
 ): List<ProjectedRun> {
     val runs = ArrayList<ProjectedRun>()
@@ -433,7 +433,7 @@ private fun projectLineRuns(
     }
 
     for (point in line) {
-        val projected = projectGeographicPosition(
+        val projected = projectVisibleGeographicPosition(
             camera,
             GeographicPosition(
                 latitude = point.latitude,

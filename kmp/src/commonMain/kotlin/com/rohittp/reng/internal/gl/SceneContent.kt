@@ -22,6 +22,7 @@ import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.resolveBasemapTileQuad
 import com.rohittp.reng.internal.planning.resolveGeometry
 import com.rohittp.reng.internal.planning.resolvePlacement
+import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.renGFailure
 
@@ -813,7 +814,7 @@ internal fun composeGroundModelViewProjection(
  * local size of its own to report.
  */
 internal fun composeMapModelViewProjection(
-    camera: ResolvedMercatorCamera,
+    camera: ResolvedFrameCamera,
     placement: ResolvedPlacement,
     localDimensions: DoubleVector3 = DoubleVector3(1.0, 1.0, 1.0),
 ): FloatArray = (camera.projectionMatrix * composeMapCameraSpaceModel(camera, placement, localDimensions))
@@ -832,9 +833,18 @@ internal fun composeMapModelViewProjection(
  *
  * See [composeMapModelViewProjection] for what each term means and why the rotation and scale are
  * applied in camera space rather than re-multiplied against the view matrix.
+ *
+ * **Both functions take a [ResolvedFrameCamera] rather than a Mercator one, and neither needed a
+ * globe arm to do it.** They read only [ResolvedFrameCamera.viewMatrix] and
+ * [ResolvedFrameCamera.projectionMatrix], which are the same two expressions in both projection
+ * modes, and their other argument is a [ResolvedPlacement] whose `logicalPosition` is already
+ * camera-relative east/north/up logical pixels — the frame
+ * `internal.planning.resolveCameraRelativeMapPosition` produces under Mercator and
+ * `internal.planning.resolveGlobePlacement` produces on a globe. Every mode-specific step was spent
+ * before a placement got here, which is what lets one sticker and one model matrix path serve both.
  */
 internal fun composeMapCameraSpaceModel(
-    camera: ResolvedMercatorCamera,
+    camera: ResolvedFrameCamera,
     placement: ResolvedPlacement,
     localDimensions: DoubleVector3 = DoubleVector3(1.0, 1.0, 1.0),
 ): DoubleMatrix4 {

@@ -139,6 +139,51 @@ internal fun projectGeographicPosition(
 }
 
 /**
+ * [projectGeographicPosition] for a caller that has not chosen a projection mode, plus the one
+ * question a globe adds: **is the planet standing in front of this?**
+ *
+ * The label path is that caller. E-labels wrote it against `ResolvedMercatorCamera` and it reads
+ * exactly three things off the camera — [ResolvedFrameCamera.outputPixelSize] for its viewport,
+ * [ResolvedFrameCamera.right] for the map's on-screen rotation, and this projection — so widening
+ * the parameter type is the whole of what a globe needed from it. **`ScreenProjection`'s arithmetic
+ * needed no globe arm**: the perspective divide and the viewport transform are mode-independent, and
+ * the mode-specific step happens before them, in [globeCameraRelativePosition].
+ *
+ * The horizon test is not, and could not be, part of that arithmetic. A label anchor on the far side
+ * of the planet is [ScreenProjection.Projected] with a large positive [ScreenProjection.Projected.w]
+ * and a pixel that can sit anywhere on screen including dead centre, so nothing about the projected
+ * value distinguishes it. [isBeyondGlobeHorizon] is a separate dot product against
+ * [ResolvedGlobeCamera.limbPlane], and this function is where the label path gets both answers as
+ * one.
+ *
+ * A hidden anchor collapses to [ScreenProjection.OutsideSupportedDomain] rather than to a fourth
+ * case, because every caller of this already treats "not [ScreenProjection.Projected]" as "this
+ * label has no place on this screen", and inventing a case they would all fold back together buys a
+ * distinction nobody reads. Under Mercator this is [projectGeographicPosition] and nothing else, so
+ * no mercator label moves by a pixel.
+ *
+ * **What it deliberately does not fix.** A label far from the camera anchor still takes its
+ * map-space rotation from [ResolvedFrameCamera.right], which is the *camera anchor's* north rather
+ * than the label's own. On a plane those are the same direction everywhere; on a sphere they diverge
+ * with distance, so `text-rotation-alignment: map` is approximated near the limb. It is recorded
+ * here rather than hidden, and it is the same approximation the shipping web renderers make.
+ */
+internal fun projectVisibleGeographicPosition(
+    camera: ResolvedFrameCamera,
+    position: GeographicPosition,
+): ScreenProjection = when (camera) {
+    is ResolvedMercatorCamera -> projectGeographicPosition(camera, position)
+    is ResolvedGlobeCamera -> {
+        val projected = projectGeographicPosition(camera, position)
+        if (projected is ScreenProjection.Projected && isBeyondGlobeHorizon(camera, position)) {
+            ScreenProjection.OutsideSupportedDomain
+        } else {
+            projected
+        }
+    }
+}
+
+/**
  * The half of [projectGeographicPosition] that starts from an already camera-relative logical
  * position — the shape [resolveCameraRelativeMapPosition] and
  * [com.rohittp.reng.internal.planning.ResolvedPlacement.logicalPosition] both produce, so a caller

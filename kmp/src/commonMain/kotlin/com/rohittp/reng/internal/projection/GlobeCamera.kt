@@ -2,6 +2,7 @@ package com.rohittp.reng.internal.projection
 
 import com.rohittp.reng.Camera
 import com.rohittp.reng.OutputPixelSize
+import com.rohittp.reng.internal.math.DoubleMatrix3
 import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.math.DoubleVector3
 import com.rohittp.reng.internal.planning.SpatialOutcome
@@ -82,7 +83,7 @@ import kotlin.math.sqrt
  * **Camera** entry, which this must not contradict.
  */
 internal data class ResolvedGlobeCamera(
-    val outputPixelSize: OutputPixelSize,
+    override val outputPixelSize: OutputPixelSize,
     val mercatorAnchor: MercatorPosition,
     val geographicGroundAnchor: GeographicPosition,
     val effectiveZoom: Double,
@@ -91,15 +92,30 @@ internal data class ResolvedGlobeCamera(
     val anchorEast: DoubleVector3,
     val anchorNorth: DoubleVector3,
     val anchorUp: DoubleVector3,
-    val right: DoubleVector3,
-    val cameraUp: DoubleVector3,
-    val cameraBack: DoubleVector3,
+    override val right: DoubleVector3,
+    override val cameraUp: DoubleVector3,
+    override val cameraBack: DoubleVector3,
     val cameraDistanceLogicalPixels: Double,
     val globeFixedToCameraRelative: DoubleMatrix4,
-    val viewMatrix: DoubleMatrix4,
-    val projectionMatrix: DoubleMatrix4,
+    override val viewMatrix: DoubleMatrix4,
+    override val projectionMatrix: DoubleMatrix4,
     val eyeGlobeFixed: DoubleVector3,
-)
+) : ResolvedFrameCamera {
+    /**
+     * The plane through this camera's horizon circle, or `null` when the globe hides nothing from
+     * it -- [globeLimbPlane] applied to [eyeGlobeFixed] and [radiusLogicalPixels].
+     *
+     * It is derived **once per frame**, in the class body rather than in the constructor, for two
+     * reasons. [GlobeLimbPlane]'s own KDoc says a frame with many placements must build the plane
+     * once and ask it repeatedly, because the plane is a property of the camera and rebuilding it
+     * per placement pays a square root each time. And a body `val` leaves the generated `equals`,
+     * `hashCode`, `copy` and `componentN` untouched, so no existing caller of this data class moves.
+     *
+     * Being `null` means "cull nothing", never "cull everything" -- see [globeLimbPlane] for why
+     * that direction is the safe one.
+     */
+    val limbPlane: GlobeLimbPlane? = globeLimbPlane(eyeGlobeFixed, radiusLogicalPixels)
+}
 
 /**
  * What a pixel is looking at on the globe: the inverse direction, and [physicalPixelGroundRay]'s
@@ -134,6 +150,35 @@ internal sealed interface GlobeRayResult {
     data class Hit(val point: MercatorGroundPoint, val t: Double) : GlobeRayResult
 }
 
+/**
+ * The east/north/up basis of one point on the sphere, as the columns of a rotation from that point's
+ * local frame into the globe-fixed one -- `+z` through the north pole, `+x` through `(0 N, 0 E)`.
+ *
+ * It exists as a function because **two** callers need it and neither may derive it twice:
+ * [resolveGlobeCamera] builds the camera's own anchor frame from it, and
+ * `internal.planning.resolveGlobePlacement` builds a map-anchored placement's frame from it. A
+ * second spelling of the same three lines is the shape of a defect that shows up as content facing
+ * the wrong way only when it is far from the camera.
+ *
+ * There is no trigonometry here: [unitSphereDirection] gives `up` directly from the Mercator
+ * coordinate, east is `normalize(polar x up)` written out, and north is `up x east`. The one
+ * degeneracy is the pole, where `cos(latitude)` is zero -- Mercator's own +/-85.0511 degree clip,
+ * which [validateMercatorCamera] and [validateMercatorMapPosition] both apply before anything
+ * reaches here, keeps it at or above 0.0862.
+ *
+ * The columns are `(east, north, up)`, matching [wgs84LocalFrame]'s [Wgs84LocalFrame.basisEastNorthUp]
+ * exactly. That agreement is not a coincidence and is worth stating: a geodetic latitude is *defined*
+ * by the ellipsoid normal, so WGS84's ENU **basis** is the sphere's ENU basis for the same
+ * `(latitude, longitude)` -- the eccentricity appears only in [Wgs84LocalFrame.ecefPosition], which
+ * nothing on the globe path reads. What differs between the two modes is where a point *is*, never
+ * which way is north.
+ */
+internal fun globeEastNorthUpBasis(mercatorX: Double, mercatorY: Double): DoubleMatrix3 {
+    val up = unitSphereDirection(mercatorX, mercatorY)
+    val east = DoubleVector3(-up.y, up.x, 0.0) * (1.0 / hypot(up.x, up.y))
+    return DoubleMatrix3.fromColumns(east, up.cross(east), up)
+}
+
 internal fun resolveGlobeCamera(
     camera: Camera,
     outputPixelSize: OutputPixelSize,
@@ -147,10 +192,11 @@ internal fun resolveGlobeCamera(
     if (anchorOutcome is SpatialOutcome.Failure) return anchorOutcome
     val mercatorAnchor = (anchorOutcome as SpatialOutcome.Success).value
 
-    val anchorUp = unitSphereDirection(mercatorAnchor.x, mercatorAnchor.y)
+    val anchorBasis = globeEastNorthUpBasis(mercatorAnchor.x, mercatorAnchor.y)
+    val anchorEast = anchorBasis.column(0)
+    val anchorNorth = anchorBasis.column(1)
+    val anchorUp = anchorBasis.column(2)
     val cosineLatitude = hypot(anchorUp.x, anchorUp.y)
-    val anchorEast = DoubleVector3(-anchorUp.y, anchorUp.x, 0.0) * (1.0 / cosineLatitude)
-    val anchorNorth = anchorUp.cross(anchorEast)
 
     val effectiveZoom = camera.zoom - log2(cosineLatitude)
     val worldSizeLogicalPixels = 512.0 * 2.0.pow(effectiveZoom)

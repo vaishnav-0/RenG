@@ -4,9 +4,9 @@ import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
 import com.rohittp.reng.internal.gl.ResolvedGlyphQuad
 import com.rohittp.reng.internal.gl.ResolvedLabelPaint
 import com.rohittp.reng.internal.projection.GeographicPosition
-import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
+import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import com.rohittp.reng.internal.projection.ScreenProjection
-import com.rohittp.reng.internal.projection.projectGeographicPosition
+import com.rohittp.reng.internal.projection.projectVisibleGeographicPosition
 import com.rohittp.rentile.LabelCandidate
 import com.rohittp.rentile.LabelCandidateBatch
 import com.rohittp.rentile.LabelGlyphAtlas
@@ -64,7 +64,7 @@ import kotlin.math.sin
  * than hidden.
  */
 internal fun placeLabels(
-    camera: ResolvedMercatorCamera,
+    camera: ResolvedFrameCamera,
     batch: LabelCandidateBatch,
     sprites: SpriteAtlasManifest? = null,
 ): List<PlacedLabel> {
@@ -319,7 +319,7 @@ private class LabelCollisionIndex(private val viewport: LabelScreenBox) {
  * Projects one point candidate's anchor, moves it by `text-translate`, and lays its label-local
  * quads out around the result, or returns `null` when the label has no place on this screen.
  *
- * `null` is never a frame failure. [projectGeographicPosition] is total precisely so that one
+ * `null` is never a frame failure. [projectVisibleGeographicPosition] is total precisely so that one
  * unprojectable anchor drops one label -- an anchor behind the camera, past the horizon, or outside
  * Mercator support has no pixel, and a label with no pixel is not a candidate for anything. The same
  * applies to the finiteness guard: engine-derived numbers cross the firewall, and a NaN corner would
@@ -327,7 +327,7 @@ private class LabelCollisionIndex(private val viewport: LabelScreenBox) {
  * label after it.
  */
 private fun layOutPointLabel(
-    camera: ResolvedMercatorCamera,
+    camera: ResolvedFrameCamera,
     atlas: LabelGlyphAtlas,
     candidate: LabelCandidate,
     candidateIndex: Int,
@@ -336,7 +336,7 @@ private fun layOutPointLabel(
 ): PlacedLabel? {
     if (!candidate.hasFinitePlacementInputs()) return null
 
-    val anchor = projectGeographicPosition(
+    val anchor = projectVisibleGeographicPosition(
         camera,
         GeographicPosition(
             latitude = candidate.latitude,
