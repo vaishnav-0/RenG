@@ -31,6 +31,28 @@ import kotlin.test.assertTrue
  * [LatitudePrecisionSpikeTest], which models a float32 GPU. In `Double` the tangent half-angle form
  * and the naive `2 * atan(exp psi) - PI / 2` agree to 2.8 nanometres, so no assertion in this file
  * can tell them apart, and none pretends to.
+ *
+ * **Measured against nine deliberate breakages of `GlobeProjection.kt`, rather than reviewed.** Each
+ * was applied on its own and the suite run; every one was caught, and five by exactly one case.
+ *
+ * | breakage | cases that failed |
+ * |---|---|
+ * | longitude wrap dropped | [mercatorWorldCopiesCollapseOntoOneSpherePoint], [theAntimeridianIsContinuous] |
+ * | altitude divided by `cos(latitude)` | [altitudeIsRadialAndUniformRatherThanMercatorsCosineDivided] |
+ * | `(sin phi, cos phi)` pair swapped | 4, all but the four altitude, radius, unit-length and domain cases |
+ * | `psi` sign flipped | [latitudeIncreasesStrictlyAsMercatorYDecreases] and 2 others |
+ * | longitude mirrored east/west | [theUnitSphereMatchesAnIndependentSphericalConstructionAcrossAnAsymmetricSweep] |
+ * | radius `worldSize / PI` | [theGlobeRadiusMakesTheEquatorAsLongAsTheMercatorWorld] |
+ * | denominator `t^2 + 2` | 4, including [theUnitSphereDirectionStaysUnitLength] |
+ * | altitude added in metres | [altitudeIsRadialAndUniformRatherThanMercatorsCosineDivided] |
+ * | domain guard removed | [anOutOfDomainMercatorYIsRejectedRatherThanReturningNaN] |
+ *
+ * Two negatives from that run are worth as much as the catches. [theUnitSphereDirectionStaysUnitLength]
+ * fired for the denominator alone and stayed green for the swapped pair, the flipped `psi` and the
+ * mirrored longitude, which is exactly what its own KDoc claims. And
+ * [theSymmetryPointsAreMeasuredSeparatelyAndProveLittle] stayed green for the mirrored longitude, the
+ * cosine-divided altitude and the wrong radius — it sits on the prime meridian, at the equator and at
+ * zero altitude, so it is blind to all three by construction.
  */
 class GlobeProjectionTest {
 
@@ -191,10 +213,12 @@ class GlobeProjectionTest {
      * Mercator's world copies collapse on a sphere: `CONTEXT.md` records that a camera at longitude
      * 400 sees exactly what one at longitude 40 sees.
      *
-     * This is the only case that can catch the wrap being dropped — the sweep's longitudes are all
-     * canonical, so `x - floor(x)` is the identity there. The far copy is carried to RenG's
-     * `+/-16384` limit, where `x - floor(x)` has spent fourteen bits of `Double`'s mantissa on the
-     * copy index; the residue is asserted rather than assumed.
+     * The sweep's longitudes are all canonical, so `x - floor(x)` is the identity there and the sweep
+     * is blind to the wrap being dropped; this is the only case that catches it *as a distance*.
+     * ([theAntimeridianIsContinuous] also fires, but only through its exact-equality assertion on the
+     * two spellings of `+/-180`, where the difference is the sign of a `1.2e-16` sine.) The far copy
+     * is carried to RenG's `+/-16384` limit, where `x - floor(x)` has spent fourteen bits of
+     * `Double`'s mantissa on the copy index; the residue is asserted rather than assumed.
      */
     @Test
     fun mercatorWorldCopiesCollapseOntoOneSpherePoint() {
