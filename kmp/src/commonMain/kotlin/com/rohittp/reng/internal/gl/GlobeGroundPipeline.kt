@@ -64,6 +64,7 @@ internal const val GLOBE_GROUND_VERTEX_SOURCE: String =
         "layout(location = 0) in vec2 rengGlobeGroundGrid;\n" +
         "uniform mat4 rengGlobeGroundUnitSphereToClip;\n" +
         "uniform vec4 rengGlobeGroundTileEdges;\n" +
+        "uniform vec2 rengGlobeGroundTileUvV;\n" +
         "out vec2 rengGroundUv;\n" +
         "void main() {\n" +
         "    float longitude = mix(rengGlobeGroundTileEdges.x, rengGlobeGroundTileEdges.y, " +
@@ -77,7 +78,8 @@ internal const val GLOBE_GROUND_VERTEX_SOURCE: String =
         "    float cosineLatitude = 2.0 * tangentHalfAngle / denominator;\n" +
         "    vec3 direction = vec3(cosineLatitude * cos(longitude), cosineLatitude * sin(longitude), " +
         "sineLatitude);\n" +
-        "    rengGroundUv = rengGlobeGroundGrid;\n" +
+        "    rengGroundUv = vec2(rengGlobeGroundGrid.x, mix(rengGlobeGroundTileUvV.x, " +
+        "rengGlobeGroundTileUvV.y, rengGlobeGroundGrid.y));\n" +
         "    gl_Position = rengGlobeGroundUnitSphereToClip * vec4(direction, 1.0);\n" +
         "}\n"
 
@@ -102,6 +104,7 @@ internal val GLOBE_GROUND_SHADER_PAIR: ShaderPair =
 internal const val GLOBE_GROUND_UNIT_SPHERE_TO_CLIP_UNIFORM_NAME: String =
     "rengGlobeGroundUnitSphereToClip"
 internal const val GLOBE_GROUND_TILE_EDGES_UNIFORM_NAME: String = "rengGlobeGroundTileEdges"
+internal const val GLOBE_GROUND_TILE_UV_V_UNIFORM_NAME: String = "rengGlobeGroundTileUvV"
 
 /**
  * One subdivided grid: `cellsPerSide^2` quads over the unit `(u, v)` square, indexed as triangles.
@@ -125,6 +128,7 @@ internal class GlobeGroundPipeline(
     val program: Int,
     val unitSphereToClipUniformLocation: Int,
     val tileEdgesUniformLocation: Int,
+    val tileUvVUniformLocation: Int,
     val textureUniformLocation: Int,
     /**
      * Every grid this pipeline has been asked for, keyed by [GlobeGroundGrid.cellsPerSide].
@@ -174,6 +178,10 @@ internal fun createGlobeGroundPipeline(
             tileEdgesUniformLocation = binding.getUniformLocation(
                 program,
                 GLOBE_GROUND_TILE_EDGES_UNIFORM_NAME,
+            ),
+            tileUvVUniformLocation = binding.getUniformLocation(
+                program,
+                GLOBE_GROUND_TILE_UV_V_UNIFORM_NAME,
             ),
             textureUniformLocation = binding.getUniformLocation(program, GROUND_TEXTURE_UNIFORM_NAME),
         ),
@@ -350,6 +358,46 @@ internal fun globeGroundTileEdges(lod: Int, tileY: Long, unwrappedX: Long): Floa
     )
 }
 
+/**
+ * The isometric latitude standing in for a pole, and why a finite number is the exact answer.
+ *
+ * A pole is `psi = infinity`, which no uniform can carry. But the shader's own identity closes the
+ * gap: it forms `t = exp(psi)` and then `sin(latitude) = (t^2 - 1) / (t^2 + 1)`. At `psi = 20`,
+ * `t^2` is `2.35 x 10^17`, so in `highp float` the `-1` and `+1` are both lost to rounding and the
+ * quotient is **exactly** `1.0` -- the pole, bit for bit, with no branch and no second formulation.
+ * The residual is `cos(latitude) = 2t / t^2 = 4.1 x 10^-9` radians, which is 2.6 centimetres on
+ * Earth. `exp(20)` is `4.9 x 10^8` and its square is nowhere near `float`'s ceiling, so nothing
+ * overflows; the southern cap evaluates `exp(-20)` instead and loses nothing at all.
+ */
+internal const val POLAR_CAP_ISOMETRIC_LATITUDE: Float = 20.0f
+
+/**
+ * The wedge that closes a pole, for a top- or bottom-row tile whose [tileEdges] these reuse.
+ *
+ * **Web Mercator stops at 85.0511 degrees**, so the cap above it has no tile and, on a globe, no
+ * pixels either -- a hole a flat map can never show because the region is not in frame at all.
+ * Measured before this existed: 783 pixels of the harness's clear colour enclosed by the sphere at
+ * zoom 2, a notch widening from 14 to 56 pixels across 24 rows.
+ *
+ * **The longitudes are the tile's own `Float`s, passed through untouched.** That is the whole reason
+ * this takes [tileEdges] rather than recomputing from `lod` and `unwrappedX`: a cap sharing an edge
+ * with its tile must share the *same* number, not an equal one, or the crack that
+ * [globeGroundTileEdges] documents at 5.09 logical pixels reappears along every cap seam. Adjacent
+ * caps meet for the same reason, since neighbouring tiles already agree on the longitude between
+ * them.
+ *
+ * North stays at the grid's `v = 0` end in both directions, so a cap winds exactly as a tile does
+ * and ADR 0038's far-hemisphere cull removes the far one with no special case.
+ */
+internal fun globeGroundPolarCapEdges(tileEdges: FloatArray, north: Boolean): FloatArray {
+    require(tileEdges.size == 4) { "a globe ground tile carries four edges" }
+    return if (north) {
+        floatArrayOf(tileEdges[0], tileEdges[1], POLAR_CAP_ISOMETRIC_LATITUDE, tileEdges[2])
+    } else {
+        floatArrayOf(tileEdges[0], tileEdges[1], tileEdges[3], -POLAR_CAP_ISOMETRIC_LATITUDE)
+    }
+}
+
 private fun mercatorXLongitudeRadians(mercatorX: Double): Double =
     PI * (2.0 * (mercatorX - floor(mercatorX)) - 1.0)
 
@@ -365,11 +413,27 @@ private fun mercatorXLongitudeRadians(mercatorX: Double): Double =
 internal class ResolvedGlobeGroundTile(
     val edges: FloatArray,
     val texture: Int,
+    /**
+     * Which rows of [texture] this quad samples, as `(v at the north edge, v at the south edge)`.
+     *
+     * `(0, 1)` for an ordinary tile, which is the whole texture and the only value that existed
+     * before polar caps. A cap wedge pins both to the same row -- `(0, 0)` at the north pole and
+     * `(1, 1)` at the south -- so the tile's own edge texels stretch over the cap. That is why the
+     * ground sampler's `GL_CLAMP_TO_EDGE` is load-bearing here rather than incidental: `v = 0` under
+     * linear filtering samples half a texel outside the texture, and `GL_REPEAT` would fetch the
+     * opposite pole's row.
+     */
+    val uvV: FloatArray = ORDINARY_TILE_UV_V,
 ) {
     init {
         require(edges.size == 4) { "a globe ground tile carries four edges" }
+        require(uvV.size == 2) { "a globe ground tile carries two texture v coordinates" }
     }
 }
+
+internal val ORDINARY_TILE_UV_V: FloatArray = floatArrayOf(0.0f, 1.0f)
+internal val NORTH_POLAR_CAP_UV_V: FloatArray = floatArrayOf(0.0f, 0.0f)
+internal val SOUTH_POLAR_CAP_UV_V: FloatArray = floatArrayOf(1.0f, 1.0f)
 
 /**
  * The one matrix the globe ground uploads: a **unit sphere direction** to clip space.
@@ -531,6 +595,9 @@ internal fun drawGlobeGround(
                 tile.edges[2],
                 tile.edges[3],
             )
+        }
+        if (pipeline.tileUvVUniformLocation >= 0) {
+            binding.uniform2f(pipeline.tileUvVUniformLocation, tile.uvV[0], tile.uvV[1])
         }
         binding.bindTexture(GL_TEXTURE_2D, tile.texture)
         binding.drawElements(GL_TRIANGLES, grid.indexCount, GL_UNSIGNED_SHORT, 0)

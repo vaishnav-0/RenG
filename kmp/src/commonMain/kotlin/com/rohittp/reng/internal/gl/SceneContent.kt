@@ -624,15 +624,37 @@ internal class SceneContent(
                 pipeline = requireNotNull(globeGroundPipeline) {
                     "a globe frame carrying ground tiles must be drawn with the globe ground pipeline"
                 },
-                tiles = scene.groundTiles.map { tile ->
-                    ResolvedGlobeGroundTile(
-                        edges = globeGroundTileEdges(
-                            lod = tile.instance.lod,
-                            tileY = tile.instance.tileY.toLong(),
-                            unwrappedX = tile.instance.unwrappedX,
-                        ),
-                        texture = tile.texture,
+                // A top- or bottom-row tile also paints the cap above or below it, because web
+                // Mercator ends at 85.0511 degrees and a sphere shows the hole that leaves. At lod 0
+                // one tile is both rows and draws both caps, which is why these are two independent
+                // conditions rather than a `when`.
+                tiles = scene.groundTiles.flatMap { tile ->
+                    val edges = globeGroundTileEdges(
+                        lod = tile.instance.lod,
+                        tileY = tile.instance.tileY.toLong(),
+                        unwrappedX = tile.instance.unwrappedX,
                     )
+                    buildList {
+                        add(ResolvedGlobeGroundTile(edges = edges, texture = tile.texture))
+                        if (tile.instance.tileY.toLong() == 0L) {
+                            add(
+                                ResolvedGlobeGroundTile(
+                                    edges = globeGroundPolarCapEdges(edges, north = true),
+                                    texture = tile.texture,
+                                    uvV = NORTH_POLAR_CAP_UV_V,
+                                ),
+                            )
+                        }
+                        if (tile.instance.tileY.toLong() == (1L shl tile.instance.lod) - 1L) {
+                            add(
+                                ResolvedGlobeGroundTile(
+                                    edges = globeGroundPolarCapEdges(edges, north = false),
+                                    texture = tile.texture,
+                                    uvV = SOUTH_POLAR_CAP_UV_V,
+                                ),
+                            )
+                        }
+                    }
                 },
                 unitSphereToClip = composeGlobeGroundUnitSphereToClip(camera),
                 cellsPerTileSide = globeGroundCellsPerTileSide(

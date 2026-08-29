@@ -625,4 +625,81 @@ class GlobeGroundPipelineTest {
         const val TILTED_LONGITUDE: Double = 722.3522
         val OUTPUT: OutputPixelSize = OutputPixelSize(width = 960, height = 540)
     }
+
+    /**
+     * The cap reuses its tile's longitude `Float`s **identically**, not equally.
+     *
+     * `globeGroundTileEdges`' own KDoc measures what a recomputed-but-equal longitude costs: up to
+     * `2.384e-7` radians of disagreement at `u = 1`, which is 5.09 logical pixels of crack at zoom
+     * 18. A cap sharing an edge with its tile has exactly that exposure along the whole seam, so
+     * this asserts bit equality rather than approximate equality.
+     */
+    @Test
+    fun polarCapsShareTheirTilesLongitudeBitsExactly() {
+        val tile = globeGroundTileEdges(lod = 3, tileY = 0, unwrappedX = 5)
+        val north = globeGroundPolarCapEdges(tile, north = true)
+        val south = globeGroundPolarCapEdges(tile, north = false)
+        assertEquals(tile[0], north[0])
+        assertEquals(tile[1], north[1])
+        assertEquals(tile[0], south[0])
+        assertEquals(tile[1], south[1])
+    }
+
+    /**
+     * North stays at the grid's `v = 0` end in both caps, which is what keeps a cap winding exactly
+     * as a tile does so ADR 0038's cull removes the far one with no special case.
+     *
+     * The north cap therefore runs pole -> tile edge and the south runs tile edge -> pole, and each
+     * meets its tile on the shared isometric latitude rather than near it.
+     */
+    @Test
+    fun polarCapsRunNorthToSouthAndMeetTheirTileExactly() {
+        val tile = globeGroundTileEdges(lod = 2, tileY = 0, unwrappedX = 1)
+        val north = globeGroundPolarCapEdges(tile, north = true)
+        assertEquals(POLAR_CAP_ISOMETRIC_LATITUDE, north[2])
+        assertEquals(tile[2], north[3])
+        assertTrue(north[2] > north[3], "a north cap descends from the pole to its tile")
+
+        val bottom = globeGroundTileEdges(lod = 2, tileY = 3, unwrappedX = 1)
+        val south = globeGroundPolarCapEdges(bottom, north = false)
+        assertEquals(bottom[3], south[2])
+        assertEquals(-POLAR_CAP_ISOMETRIC_LATITUDE, south[3])
+        assertTrue(south[2] > south[3], "a south cap descends from its tile to the pole")
+    }
+
+    /**
+     * The cap's isometric latitude is the pole *in the arithmetic the shader actually performs*.
+     *
+     * The shader forms `t = exp(psi)` and `sin(latitude) = (t^2 - 1) / (t^2 + 1)`. This reproduces
+     * that in `Float`, because the claim is about rounding rather than about mathematics: `t^2` is
+     * large enough that the `-1` and `+1` vanish and the quotient is exactly `1`. Asserting it in
+     * `Double` would prove nothing about the shader.
+     */
+    @Test
+    fun theCapsIsometricLatitudeRoundsToThePoleInFloat() {
+        val tangentHalfAngle = exp(POLAR_CAP_ISOMETRIC_LATITUDE)
+        val tangentSquared = tangentHalfAngle * tangentHalfAngle
+        val sineLatitude = (tangentSquared - 1.0f) / (tangentSquared + 1.0f)
+        val cosineLatitude = 2.0f * tangentHalfAngle / (tangentSquared + 1.0f)
+        assertEquals(1.0f, sineLatitude, "the cap's north edge is the pole in float")
+        assertTrue(
+            cosineLatitude < 1.0e-8f,
+            "the cap's residual off-axis term is $cosineLatitude, which must be a rounding artefact",
+        )
+        assertTrue(tangentSquared.isFinite(), "exp(psi)^2 must not overflow float")
+    }
+
+    /** An ordinary tile samples its whole texture; a cap pins both ends to the row it stretches. */
+    @Test
+    fun onlyACapPinsItsTextureRow() {
+        assertEquals(listOf(0.0f, 1.0f), ORDINARY_TILE_UV_V.toList())
+        assertEquals(listOf(0.0f, 0.0f), NORTH_POLAR_CAP_UV_V.toList())
+        assertEquals(listOf(1.0f, 1.0f), SOUTH_POLAR_CAP_UV_V.toList())
+        assertEquals(
+            ORDINARY_TILE_UV_V.toList(),
+            ResolvedGlobeGroundTile(edges = floatArrayOf(0f, 1f, 1f, 0f), texture = 1).uvV.toList(),
+            "a tile built without a uv range must sample exactly what it did before caps existed",
+        )
+    }
+
 }
