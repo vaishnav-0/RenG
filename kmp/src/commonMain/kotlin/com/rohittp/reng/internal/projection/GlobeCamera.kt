@@ -83,7 +83,7 @@ import kotlin.math.sqrt
  * **Camera** entry, which this must not contradict.
  */
 internal data class ResolvedGlobeCamera(
-    val outputPixelSize: OutputPixelSize,
+    override val outputPixelSize: OutputPixelSize,
     val mercatorAnchor: MercatorPosition,
     val geographicGroundAnchor: GeographicPosition,
     val effectiveZoom: Double,
@@ -92,15 +92,15 @@ internal data class ResolvedGlobeCamera(
     val anchorEast: DoubleVector3,
     val anchorNorth: DoubleVector3,
     val anchorUp: DoubleVector3,
-    val right: DoubleVector3,
-    val cameraUp: DoubleVector3,
-    val cameraBack: DoubleVector3,
+    override val right: DoubleVector3,
+    override val cameraUp: DoubleVector3,
+    override val cameraBack: DoubleVector3,
     val cameraDistanceLogicalPixels: Double,
     val globeFixedToCameraRelative: DoubleMatrix4,
-    val viewMatrix: DoubleMatrix4,
-    val projectionMatrix: DoubleMatrix4,
+    override val viewMatrix: DoubleMatrix4,
+    override val projectionMatrix: DoubleMatrix4,
     val eyeGlobeFixed: DoubleVector3,
-) {
+) : ResolvedFrameCamera {
     /**
      * The plane through this camera's horizon circle, or `null` when the globe hides nothing from
      * it -- [globeLimbPlane] applied to [eyeGlobeFixed] and [radiusLogicalPixels].

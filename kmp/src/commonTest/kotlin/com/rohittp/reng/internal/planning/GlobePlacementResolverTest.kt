@@ -136,9 +136,9 @@ class GlobePlacementResolverTest {
      * The scale trap: **map scale on a sphere does not depend on the placement's latitude.**
      *
      * `PlacementResolver.kt` divides by `cos(latitude)` because Mercator's own metre shrinks with
-     * latitude. Copying it would make a map-scaled model 2.9 times too large at latitude 70. The two
-     * fixture latitudes straddle the camera's so that neither sits at ADR 0037's fixed point, where
-     * the latitude-matched zoom cancels the bug exactly.
+     * latitude. Copying it would make a map-scaled model 2.9 times too large at latitude 70 and 0.4
+     * per cent too large at latitude 5, and nothing at all at the equator — which is where the defect
+     * has its only fixed point and therefore the one latitude neither fixture uses.
      */
     @Test
     fun mapScaleIsLatitudeIndependentAndCarriesNoMercatorCosine() {

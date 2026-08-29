@@ -2,7 +2,7 @@ package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.internal.math.DoubleMatrix3
 import com.rohittp.reng.internal.math.DoubleVector3
-import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
+import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -70,13 +70,25 @@ internal const val SCENE_LIGHT_DIFFUSE: Float = 0.65f
  * `rengModelLightDirection`.
  *
  * **This is the whole of the world-anchoring mechanism (ADR 0026).** The light vector itself never
- * changes; the basis does. [ResolvedMercatorCamera.right], [ResolvedMercatorCamera.cameraUp] and
- * [ResolvedMercatorCamera.cameraBack] are expressed in the camera anchor's east/north/up frame — the
+ * changes; the basis does. [ResolvedFrameCamera.right], [ResolvedFrameCamera.cameraUp] and
+ * [ResolvedFrameCamera.cameraBack] are expressed in the camera anchor's east/north/up frame — the
  * same three rows `internal.planning.resolvePlacement` assembles for a map-anchored rotation — so
  * multiplying a world-ENU direction by that basis converts it to camera space. As the camera orbits,
  * the basis rotates and the camera-space light rotates with it, which is exactly what keeps the lit
  * side of a model facing the same compass direction. A camera-anchored light would instead be a
  * constant here and would make a model's shading swim as the camera moves around it.
+ *
+ * **It takes a [ResolvedFrameCamera] rather than a Mercator one, and that is a statement rather than
+ * a convenience.** Those three vectors are the mode-independent half of a resolved camera, so this
+ * expression is unchanged on a globe — but what it *means* there is worth saying out loud, because
+ * "world-anchored" reads differently on a sphere. The anchor frame is the camera's own ground
+ * anchor's east/north/up, so the light is north-west **at whatever the camera is looking at**, not
+ * fixed in globe-fixed space. That is the cartographic reading rather than the astronomical one, and
+ * it is the right one here: [SCENE_LIGHT_AZIMUTH_DEGREES] is a *compass* bearing, compass bearings
+ * are inherently local, and ADR 0026 took the number from `hillshade-illumination-direction` so that
+ * model shading and terrain hillshading would agree — hillshading being computed per tile against
+ * local north. A globe-fixed light would instead leave one limb of the planet unlit and turn RenG's
+ * one light into a time of day nobody asked for.
  *
  * A model's own placement rotation is deliberately **not** applied: the light is anchored to the
  * world, not to the object, so turning an object turns which of its faces are lit.
@@ -84,7 +96,7 @@ internal const val SCENE_LIGHT_DIFFUSE: Float = 0.65f
  * The basis is orthonormal, so the result is still a unit vector and the shader normalizes only its
  * interpolated normal.
  */
-internal fun sceneLightDirectionCameraSpace(camera: ResolvedMercatorCamera): FloatArray {
+internal fun sceneLightDirectionCameraSpace(camera: ResolvedFrameCamera): FloatArray {
     val viewBasis = DoubleMatrix3.fromRows(
         listOf(
             listOf(camera.right.x, camera.right.y, camera.right.z),

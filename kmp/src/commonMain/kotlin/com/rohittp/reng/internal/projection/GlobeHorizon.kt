@@ -129,3 +129,26 @@ internal fun isBeyondGlobeHorizon(
     val plane = globeLimbPlane(cameraPositionFromGlobeCentre, radiusLogicalPixels) ?: return false
     return plane.isBeyondHorizon(globeFixedPosition)
 }
+
+/**
+ * Whether the globe hides [position] from [camera], for a caller that holds a geographic position
+ * rather than a globe-fixed one.
+ *
+ * The plane comes from [ResolvedGlobeCamera.limbPlane], derived once when the camera was resolved,
+ * so this costs one [projectGlobe] and a dot product per call and no square root at all.
+ *
+ * It re-projects rather than taking a position the caller has already projected, deliberately. The
+ * two callers that need it — `internal.planning.resolveGlobePlacement`, which holds the globe-fixed
+ * point already and therefore does **not** use this, and [projectVisibleGeographicPosition], which
+ * holds only a [ScreenProjection] — have nothing in common to hand over, and a variant taking a
+ * screen pixel could not answer the question at all: an antipodal position projects to a perfectly
+ * good pixel in the middle of the frame.
+ *
+ * [position] is expected to have passed [validateMercatorMapPosition] already, exactly as
+ * [projectGlobe]'s geographic overload requires.
+ */
+internal fun isBeyondGlobeHorizon(
+    camera: ResolvedGlobeCamera,
+    position: GeographicPosition,
+): Boolean =
+    camera.limbPlane?.isBeyondHorizon(projectGlobe(position, camera.radiusLogicalPixels)) ?: false

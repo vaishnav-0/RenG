@@ -13,17 +13,17 @@ import kotlin.math.sqrt
 internal data class MercatorGroundPoint(val x: Double, val y: Double)
 
 internal data class ResolvedMercatorCamera(
-    val outputPixelSize: OutputPixelSize,
+    override val outputPixelSize: OutputPixelSize,
     val mercatorAnchor: MercatorPosition,
     val worldSizeLogicalPixels: Double,
-    val right: DoubleVector3,
-    val cameraUp: DoubleVector3,
-    val cameraBack: DoubleVector3,
+    override val right: DoubleVector3,
+    override val cameraUp: DoubleVector3,
+    override val cameraBack: DoubleVector3,
     val cameraDistanceLogicalPixels: Double,
-    val viewMatrix: DoubleMatrix4,
-    val projectionMatrix: DoubleMatrix4,
+    override val viewMatrix: DoubleMatrix4,
+    override val projectionMatrix: DoubleMatrix4,
     val geographicGroundAnchor: GeographicPosition,
-)
+) : ResolvedFrameCamera
 
 /**
  * A camera's orientation in the local east/north/up frame of the thing it is anchored to: `x` east,
