@@ -37,6 +37,8 @@ import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import com.rohittp.reng.internal.projection.resolveMercatorCamera
 import kotlin.test.Test
+import com.rohittp.reng.internal.terrain.DemEncoding
+import com.rohittp.reng.internal.terrain.DemTileWindow
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -1138,6 +1140,115 @@ class SceneContentTest {
 
         val expected = composeGroundModelViewProjection(camera, resolveBasemapTileQuad(tile.instance, camera))
         assertContentEquals(expected, requireNotNull(binding.uniformMatrix4fvValues[3]))
+    }
+
+    /**
+     * **One granularity for the whole frame, and this is where the two claims on it meet.**
+     *
+     * Terrain wants the ground fine enough to follow the DEM; the globe wants it fine enough not to
+     * facet the limb. Each is a *floor* on what its own subject needs, so they reconcile by `max` —
+     * a `min` would satisfy neither, and preferring one would make its correctness depend on the
+     * other's presence. Two tiles subdivided differently leave a sliver of background between them,
+     * which is MapLibre's most expensive globe defect and the reason the rule is per frame.
+     *
+     * The mercator arm asserts terrain's claim reaches the grid at all: before this task
+     * `SceneContent` passed nothing and `drawGround` defaulted to a single cell, so a granularity
+     * rule that ran perfectly would still have drawn a four-vertex quad.
+     */
+    @Test
+    fun theFrameDrawsItsWholeGroundAtOneGranularityReconcilingCurvatureAndTerrain() {
+        val terrain = SceneTerrain(
+            decode = demDecodeCoefficients(DemEncoding.MAPBOX),
+            interiorSizePx = 256,
+            exaggeration = 2.0,
+            cellsPerTileSide = 8,
+        )
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = 303)),
+            terrain = terrain,
+        )
+
+        val mercatorBinding = RecordingGlBinding().withNoDeclaredNames()
+        val mercatorPipeline = newGroundPipeline(mercatorBinding)
+        SceneContent(topDownCamera(), scene, newStickerPipeline(), mercatorPipeline).draw(mercatorBinding)
+        assertEquals(
+            setOf(8),
+            mercatorPipeline.grids.keys,
+            "mercator has no curvature claim, so terrain's is the frame's granularity",
+        )
+
+        val globeBinding = RecordingGlBinding().withNoDeclaredNames()
+        val globePipeline = newGlobeGroundPipeline(globeBinding)
+        val camera = globeCamera()
+        SceneContent(
+            camera = camera,
+            scene = scene,
+            stickerPipeline = newStickerPipeline(),
+            groundPipeline = newGroundPipeline(),
+            globeGroundPipeline = globePipeline,
+        ).draw(globeBinding)
+        val curvature = globeGroundCellsPerTileSide(camera, scene.groundTiles.first().instance.lod)
+        assertEquals(
+            setOf(maxOf(curvature, 8)),
+            globePipeline.grids.keys,
+            "the globe takes the larger of its curvature claim ($curvature) and terrain's (8)",
+        )
+    }
+
+    /**
+     * A terrain frame's per-tile DEM reaches the ground pass, and a frame without one leaves the DEM
+     * uniforms alone.
+     *
+     * The narrowing from `DemTileWindow`'s exact `Double` bounds to the shader's four `Float`s
+     * happens in this layer and nowhere else, which is why the *values* are asserted rather than the
+     * fact of an upload: a transposed window — `u` and `v` swapped — reads a real DEM at a plausible
+     * wrong place, and no assertion about a call having happened can see it.
+     */
+    @Test
+    fun aTerrainFramesPerTileWindowReachesTheGroundPassNarrowedOnce() {
+        val binding = RecordingGlBinding().withDeclaredNames(
+            GROUND_DEM_WINDOW_UNIFORM_NAME to 30,
+            GROUND_DEM_GRID_UNIFORM_NAME to 31,
+        )
+        val pipeline = newGroundPipeline(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            groundTiles = listOf(
+                SceneGroundTile(
+                    instance = BasemapTileInstance(
+                        lod = 4, tileY = 8, unwrappedX = 8L, instanceCopy = 0, canonicalX = 8,
+                    ),
+                    texture = 303,
+                    // The south-west quarter of a source tile two zoom levels coarser: no bound is 0
+                    // or 1, and no two are equal, so a dropped, doubled or transposed component shows.
+                    elevation = SceneTileDem(
+                        demTexture = 77,
+                        window = DemTileWindow(childScale = 4, childX = 1, childY = 2),
+                    ),
+                ),
+            ),
+            terrain = SceneTerrain(
+                decode = demDecodeCoefficients(DemEncoding.MAPBOX),
+                interiorSizePx = 256,
+                exaggeration = 2.0,
+                cellsPerTileSide = 4,
+            ),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, newStickerPipeline(), pipeline).draw(binding)
+
+        assertTrue(
+            binding.log.contains("uniform4f(30,0.25,0.5,0.5,0.75)"),
+            "(uWest, uEast, vNorth, vSouth) of the tile's own quarter of its source DEM: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform2f(31,256.0,2.0)"),
+            "the source's interior size and the style's exaggeration: ${binding.log}",
+        )
     }
 
     // --- the precision path: SceneContent must not be the layer that discards it ---------------

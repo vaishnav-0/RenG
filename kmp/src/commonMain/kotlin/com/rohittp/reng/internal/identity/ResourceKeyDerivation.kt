@@ -313,6 +313,46 @@ internal class ResourceKeyDeriver(
         )
     }
 
+    /**
+     * The identity of one **padded DEM texture**: the `(N+2)` square RGBA8 a ground tile samples its
+     * elevation from, assembled by `padDemTexture` out of a centre tile and its eight neighbours.
+     *
+     * **[paddedContentKey] must be `PaddedDemTexture.contentKey` and must not be the centre tile's
+     * own digest, and this is the one place that can enforce it by construction.** A texture keyed
+     * on the centre alone is stale the moment an absent neighbour arrives: the centre's bytes did
+     * not change, so the second frame hits the resident texture and draws the *replicated* ring --
+     * a crack at that edge in a frame that had everything it needed to close it, for as long as the
+     * texture stays resident. That property's own KDoc walks through the two frames; this signature
+     * is what makes the correct input the convenient one.
+     *
+     * **No tile coordinate and no encoding, deliberately.** Two centres with identical bytes and
+     * identical neighbour bytes assemble byte-identical textures and should share one upload; a
+     * coordinate would split them for no gain, and the encoding decides what a triple *means* in the
+     * shader without changing a texel here.
+     *
+     * `EXTERNAL`/[ResourceClass.BASEMAP_DEM_TILE] rather than a kind of its own, on [glyphAtlas]'s
+     * reasoning: [ResourceKind] is public API and this is the GPU residency of exactly that class of
+     * bytes. There is no [RawResourceKey] -- Rentile owns the DEM fetch and the Store record.
+     */
+    internal fun paddedDemTexture(paddedContentKey: String): DerivedResourceKey {
+        val identity = derive(
+            CanonicalBinary.root(CanonicalRootKind.DEM_TEXTURE) {
+                field(1, CanonicalBinary.u16(ResourceKind.EXTERNAL.wireValue))
+                field(2, CanonicalBinary.u16(ResourceClass.BASEMAP_DEM_TILE.wireValue))
+                field(3, CanonicalBinary.exactUtf8(paddedContentKey))
+            },
+        )
+        return DerivedResourceKey(
+            key = ResourceKey(
+                kind = ResourceKind.EXTERNAL,
+                stableId = identity.digest.lowercaseHex,
+                resourceClass = ResourceClass.BASEMAP_DEM_TILE,
+            ),
+            rawKey = null,
+            identity = identity,
+        )
+    }
+
     private fun derive(canonicalBytes: CanonicalBytes): HashedCanonicalBytes = HashedCanonicalBytes(
         digest = sha256.digest(canonicalBytes),
         canonicalBytes = canonicalBytes,

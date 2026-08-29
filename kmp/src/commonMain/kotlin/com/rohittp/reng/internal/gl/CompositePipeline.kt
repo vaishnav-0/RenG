@@ -20,6 +20,22 @@ internal enum class InternalPipelineRole(internal val wireValue: Int) {
     LABEL(5),
     ICON(6),
     GLOBE_GROUND(7),
+
+    /**
+     * The Mercator ground's displacing program, a second program rather than a mode of the first.
+     *
+     * **A frame with no terrain must draw the pixels `0.3.0` drew, and the cheapest way to promise
+     * that is to run the same program.** Folding displacement into [GROUND] and disabling it with a
+     * zero uniform would make every flat frame in three shipped releases depend on a driver
+     * evaluating `0.0 * scale` to exactly zero and on an unbound vertex sampler answering
+     * predictably. Two programs make the flat path byte-identical by construction, and reduce the
+     * cycle's strongest negative — a flat DEM rendering as terrain-off does — from an argument about
+     * floating point to a comparison between two real draws.
+     */
+    TERRAIN_GROUND(8),
+
+    /** The globe ground's displacing program, on [TERRAIN_GROUND]'s reasoning exactly. */
+    TERRAIN_GLOBE_GROUND(9),
 }
 
 /**

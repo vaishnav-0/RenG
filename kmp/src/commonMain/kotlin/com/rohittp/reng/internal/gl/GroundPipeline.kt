@@ -54,6 +54,91 @@ internal val GROUND_SHADER_PAIR: ShaderPair =
 
 internal const val GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME: String = "rengGroundModelViewProjection"
 internal const val GROUND_TEXTURE_UNIFORM_NAME: String = "rengGroundTexture"
+internal const val GROUND_MERCATOR_Y_UNIFORM_NAME: String = "rengGroundMercatorY"
+internal const val GROUND_ELEVATION_SCALE_UNIFORM_NAME: String = "rengGroundElevationScale"
+
+/**
+ * The Mercator ground's displacing vertex stage: [GROUND_VERTEX_SOURCE] with
+ * [GROUND_ELEVATION_SOURCE] composed in and one term added to the position.
+ *
+ * **Mercator displaces along the surface normal, which in the tile's own map axes is `+z`.** The
+ * tile's model matrix is `Translate(centre) * Scale(side, side, 1)` ([composeGroundModelViewProjection]),
+ * so `x` and `y` are scaled from the unit square into logical pixels and **`z` passes through with a
+ * scale of exactly one**. The displacement therefore has to arrive already in logical pixels, and
+ * everything below exists to convert metres into them.
+ *
+ * ## Metres to logical pixels, and why the latitude term is per vertex
+ *
+ * RenG stays in logical pixels, never metres, and Mercator's own conversion is already written down
+ * twice: `projectMercator` computes `z = altitudeMetres / (C * cos(latitude))` in world units and
+ * `PlacementResolver` multiplies by `worldSizeLogicalPixels`. This is that same expression, split so
+ * that the part which varies across a tile is evaluated per vertex:
+ *
+ * ```
+ * logicalPixels = metres * (worldSize / C) * (1 / cos(latitude))
+ *               = metres * rengGroundElevationScale * cosh(PI * (1 - 2 * mercatorY))
+ * ```
+ *
+ * The identity is exact rather than an approximation. Web Mercator defines
+ * `asinh(tan(latitude)) = PI * (1 - 2y)`, so `tan(latitude) = sinh(PI * (1 - 2y))` and
+ * `1 / cos(latitude) = sqrt(1 + tan^2) = cosh(PI * (1 - 2y))`. At the Mercator clip that is
+ * `cosh(PI) = 11.592`, which is the distortion at 85.0511 degrees to six figures.
+ *
+ * **Per vertex rather than per tile, and that is a seam decision rather than an accuracy one.** A
+ * single `1 / cos(latitude)` per tile — the tile's centre, say — would be cheaper and would scale
+ * one DEM height by two different constants on the two sides of every east-west tile boundary. The
+ * heights already agree there, because the padded ring makes both sides read the same texel; the
+ * *drawn* ground would still step, in exactly the places the ring exists to make continuous. Two
+ * tiles sharing a line of latitude are handed the identical `mercatorY` endpoint and `mix` returns
+ * its endpoints exactly, so the two evaluate `cosh` on the identical argument instead.
+ *
+ * ## What is deliberately not here
+ *
+ * No depth write: ADR 0039 makes the ground's depth write conditional on the frame being displaced,
+ * and that is task 9's, not this shader's. No shading: ADR 0026 leaves the ground unlit and terrain
+ * shading is task 11's opt-in. The UV, the winding and the position of an undisplaced vertex are
+ * [GROUND_VERTEX_SOURCE]'s, character for character.
+ */
+internal const val TERRAIN_GROUND_VERTEX_SOURCE: String =
+    "#version 300 es\n" +
+        "precision highp float;\n" +
+        "layout(location = 0) in vec2 rengGroundGrid;\n" +
+        "uniform mat4 rengGroundModelViewProjection;\n" +
+        "uniform vec2 rengGroundMercatorY;\n" +
+        "uniform float rengGroundElevationScale;\n" +
+        GROUND_ELEVATION_SOURCE +
+        "out vec2 rengGroundUv;\n" +
+        "void main() {\n" +
+        "    float mercatorY = mix(rengGroundMercatorY.x, rengGroundMercatorY.y, rengGroundGrid.y);\n" +
+        "    float up = rengGroundElevationMetres(rengGroundGrid) * rengGroundElevationScale *\n" +
+        "        cosh(3.141592653589793 * (1.0 - 2.0 * mercatorY));\n" +
+        "    vec2 position = vec2(rengGroundGrid.x - 0.5, 0.5 - rengGroundGrid.y);\n" +
+        "    rengGroundUv = rengGroundGrid;\n" +
+        "    gl_Position = rengGroundModelViewProjection * vec4(position, up, 1.0);\n" +
+        "}\n"
+
+internal val TERRAIN_GROUND_SHADER_PAIR: ShaderPair =
+    ShaderPair(vertexSource = TERRAIN_GROUND_VERTEX_SOURCE, fragmentSource = GROUND_FRAGMENT_SOURCE)
+
+/**
+ * The Mercator ground's displacing program and every uniform location it needs.
+ *
+ * Compiled beside the flat program rather than on the first terrain frame, unlike
+ * [GlobeGroundPipeline], and the asymmetry is deliberate: a globe pipeline is a whole second
+ * pipeline object a Mercator renderer must never pay for, while this is one more program inside a
+ * pipeline that already exists. Lazily compiling it would put a `var` on the draw path and a
+ * `Failed` arm in a function that currently cannot fail, to save one link on the 28 of 34 corpus
+ * styles that declare no terrain.
+ */
+internal class TerrainGroundProgram(
+    val key: ResourceKey,
+    val program: Int,
+    val modelViewProjectionUniformLocation: Int,
+    val textureUniformLocation: Int,
+    val mercatorYUniformLocation: Int,
+    val elevationScaleUniformLocation: Int,
+    val elevation: GroundElevationUniformLocations,
+)
 
 /**
  * RenG's Mercator ground pipeline: one program and one [GroundGrid] per granularity, drawn once per
@@ -81,6 +166,11 @@ internal class GroundPipeline(
     val program: Int,
     val modelViewProjectionUniformLocation: Int,
     val textureUniformLocation: Int,
+    /**
+     * The displacing program this pipeline draws a tile with a DEM through — see
+     * [TerrainGroundProgram] for why it is compiled here rather than on first use.
+     */
+    val terrain: TerrainGroundProgram,
     /**
      * Every grid this pipeline has been asked for, keyed by [GroundGrid.cellsPerSide].
      *
@@ -117,6 +207,16 @@ internal fun createGroundPipeline(
         is GlProgramResult.Failed -> return GroundPipelineResult.Failed(result.failure)
     }
 
+    val terrainKey = deriver.internalPipeline(InternalPipelineRole.TERRAIN_GROUND, TERRAIN_GROUND_SHADER_PAIR).key
+    val terrainVertexPlan = scanShaderProfile(TERRAIN_GROUND_VERTEX_SOURCE)
+        ?: return GroundPipelineResult.Failed(glOperationFailure(PipelineStage.GPU_RESOURCE, terrainKey))
+    val terrainProgram = when (
+        val result = cache.getOrCompile(binding, dialect, terrainKey, terrainVertexPlan, fragmentPlan)
+    ) {
+        is GlProgramResult.Linked -> result.program
+        is GlProgramResult.Failed -> return GroundPipelineResult.Failed(result.failure)
+    }
+
     // No vertex array and no buffer here, which is the one shape change Cycle E-terrain makes to
     // setup: the pipeline's geometry is now a [GroundGrid] per granularity, and which granularities
     // a session reaches is a camera question that setup cannot answer. [groundGrid] builds them on
@@ -130,11 +230,32 @@ internal fun createGroundPipeline(
                 GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME,
             ),
             textureUniformLocation = binding.getUniformLocation(program, GROUND_TEXTURE_UNIFORM_NAME),
+            terrain = TerrainGroundProgram(
+                key = terrainKey,
+                program = terrainProgram,
+                modelViewProjectionUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME,
+                ),
+                textureUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GROUND_TEXTURE_UNIFORM_NAME,
+                ),
+                mercatorYUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GROUND_MERCATOR_Y_UNIFORM_NAME,
+                ),
+                elevationScaleUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GROUND_ELEVATION_SCALE_UNIFORM_NAME,
+                ),
+                elevation = resolveGroundElevationUniforms(binding, terrainProgram),
+            ),
         ),
     )
 }
 
-/** Deletes the program and **every** cached grid, on [deleteGroundGrids]' terms. */
+/** Deletes **both** programs and **every** cached grid, on [deleteGroundGrids]' terms. */
 internal fun deleteGroundPipeline(
     binding: GlBinding,
     cache: GlProgramCache,
@@ -142,16 +263,62 @@ internal fun deleteGroundPipeline(
 ) {
     deleteGroundGrids(binding, pipeline.grids)
     cache.remove(pipeline.key)?.let { binding.deleteProgram(it) }
+    cache.remove(pipeline.terrain.key)?.let { binding.deleteProgram(it) }
 }
 
 /**
  * One ground tile instance ready to draw: its already-composed model-view-projection matrix
- * (column-major, matching [GlBinding.uniformMatrix4fv]) and its already-uploaded GL texture name.
+ * (column-major, matching [GlBinding.uniformMatrix4fv]), its already-uploaded GL texture name, and
+ * — when this frame has terrain and this tile has a DEM — what to displace it by.
+ *
+ * [elevation] is `null` for every tile of every frame whose style declares no `terrain` block, and
+ * also for a tile inside a terrain frame that Rentile returned no DEM for: ADR 0041 makes that tile
+ * draw flat rather than failing the frame, so the two cases produce the same drawn tile and are
+ * distinguished only by the diagnostic.
  */
 internal class ResolvedGroundTile(
     val modelViewProjection: FloatArray,
     val texture: Int,
+    val elevation: MercatorGroundTileDem? = null,
 )
+
+/**
+ * One Mercator ground tile's DEM: the padded texture and window every projection needs, plus the
+ * tile's own Mercator `y` extent, which only Mercator does.
+ *
+ * The two travel together rather than as two fields with a default, because
+ * [TERRAIN_GROUND_VERTEX_SOURCE]'s latitude term is meaningless without the extent and a plausible
+ * default for it — the whole world, say — would draw a tile's terrain at up to 11.6x the right
+ * height with nothing to notice it.
+ */
+/**
+ * One basemap tile's Mercator `y` extent as `(north, south)`, which is what
+ * [TERRAIN_GROUND_VERTEX_SOURCE]'s latitude term interpolates between.
+ *
+ * **Two vertically adjacent tiles are handed the identical `Float` for the edge they share**, by
+ * exactly the mechanism [globeGroundTileEdges] documents: `(tileY + 1) / 2^lod` of one and
+ * `tileY / 2^lod` of the next are the same `Double`, so they narrow to the same `Float`, and `mix`
+ * returns its endpoints exactly. Both sides therefore evaluate `cosh` on the same argument and scale
+ * the same DEM height by the same number, which is what keeps the seam closed in the drawn ground as
+ * well as in the sampled one.
+ */
+internal fun mercatorTileYEdges(lod: Int, tileY: Int): FloatArray {
+    require(lod >= 0) { "a basemap tile's lod is never negative" }
+    val dimension = (1L shl lod).toDouble()
+    return floatArrayOf(
+        (tileY.toDouble() / dimension).toFloat(),
+        ((tileY.toDouble() + 1.0) / dimension).toFloat(),
+    )
+}
+
+internal class MercatorGroundTileDem(val dem: GroundTileDem, mercatorY: FloatArray) {
+    /** `(mercator y at the tile's north edge, mercator y at its south edge)`, both in `[0, 1]`. */
+    val mercatorY: FloatArray = mercatorY.copyOf()
+
+    init {
+        require(mercatorY.size == 2) { "a ground tile spans two mercator y bounds" }
+    }
+}
 
 /**
  * Draws [tiles] as the frame's ground, in the order given.
@@ -190,46 +357,93 @@ internal class ResolvedGroundTile(
  * own KDoc already gave for taking no mode: a parameter whose only legal value is one constant is a
  * mode that can be got wrong rather than a decision.
  *
- * **[cellsPerTileSide] defaults to 1, and at 1 this draws exactly what the four-vertex quad drew.**
- * The default is not a placeholder for a missing decision, it is the honest state of the seam: this
- * task subdivides the ground and displaces nothing, so no caller yet has a reason to ask for more
- * than one cell, and `SceneContent` passes nothing. A granularity derived from elevation error
- * arrives with displacement, alongside the globe's own curvature-derived
- * [globeGroundCellsPerTileSide], and both must then yield **one granularity for the whole frame** —
- * two tiles sharing an edge at different granularities is the crack the globe's KDoc already
- * records. Until then the equivalence is the contract: same outline, same UVs, same pixels.
+ * **[cellsPerTileSide] defaults to 1, and at 1 an undisplaced tile draws exactly what the
+ * four-vertex quad drew.** The frame's one granularity is now the caller's answer rather than a
+ * placeholder: `SceneContent` reconciles the globe's curvature claim with terrain's own through
+ * `groundCellsPerTileSide`, because **two tiles sharing an edge at different granularities is the
+ * crack the globe's KDoc already records**. The default survives for the frames that need nothing
+ * else — no terrain and no sphere — where the equivalence remains the contract: same outline, same
+ * UVs, same pixels.
+ *
+ * **[elevation] is the frame's, and each tile decides for itself whether it uses it.** A frame with
+ * no terrain passes `null` and every tile draws through [GroundPipeline.program], which is the
+ * program three releases shipped; a terrain frame passes the decode and the metre scale, and each
+ * tile with a [ResolvedGroundTile.elevation] draws through [GroundPipeline.terrain] instead. **The
+ * two are interleaved in [tiles] order rather than partitioned**, because ADR 0041 lets a single
+ * absent DEM make one tile flat among displaced neighbours, and reordering the ground to group the
+ * programs would change which of two overlapping alpha edges is composited last — a pixel
+ * difference bought for a `useProgram` this pass issues at most a few dozen times.
  */
 internal fun drawGround(
     binding: GlBinding,
     pipeline: GroundPipeline,
     tiles: List<ResolvedGroundTile>,
     cellsPerTileSide: Int = 1,
+    elevation: MercatorGroundElevationFrame? = null,
 ) {
     if (tiles.isEmpty()) return
 
     val grid = groundGrid(binding, pipeline.grids, cellsPerTileSide)
-    binding.useProgram(pipeline.program)
     binding.bindVertexArray(grid.vertexArray)
     binding.enable(GL_BLEND)
     binding.blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD)
     binding.blendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
-    binding.activeTexture(GL_TEXTURE0)
-    if (pipeline.textureUniformLocation >= 0) {
-        binding.uniform1i(pipeline.textureUniformLocation, 0)
-    }
     binding.enable(GL_DEPTH_TEST)
     binding.depthMask(false)
     binding.disable(GL_CULL_FACE)
 
+    // Which program was made current last, so a run of tiles on one side of the terrain/flat split
+    // costs one `useProgram` rather than one per tile. `null` until the first tile, because either
+    // program may be the first: a frame whose only coverage gap is its first tile starts flat.
+    var displacing: Boolean? = null
     tiles.forEach { tile ->
-        if (pipeline.modelViewProjectionUniformLocation >= 0) {
-            binding.uniformMatrix4fv(
-                pipeline.modelViewProjectionUniformLocation,
-                1,
-                false,
-                tile.modelViewProjection,
-            )
+        val tileElevation = if (elevation == null) null else tile.elevation
+        val wantsDisplacement = tileElevation != null
+        if (displacing != wantsDisplacement) {
+            displacing = wantsDisplacement
+            if (wantsDisplacement) {
+                binding.useProgram(pipeline.terrain.program)
+                if (pipeline.terrain.textureUniformLocation >= 0) {
+                    binding.uniform1i(pipeline.terrain.textureUniformLocation, 0)
+                }
+                if (pipeline.terrain.elevationScaleUniformLocation >= 0) {
+                    binding.uniform1f(
+                        pipeline.terrain.elevationScaleUniformLocation,
+                        requireNotNull(elevation).equatorialLogicalPixelsPerMetre,
+                    )
+                }
+                bindGroundElevationFrame(
+                    binding,
+                    pipeline.terrain.elevation,
+                    requireNotNull(elevation).dem,
+                )
+            } else {
+                binding.useProgram(pipeline.program)
+                if (pipeline.textureUniformLocation >= 0) {
+                    binding.uniform1i(pipeline.textureUniformLocation, 0)
+                }
+            }
         }
+
+        val matrixLocation = if (wantsDisplacement) {
+            pipeline.terrain.modelViewProjectionUniformLocation
+        } else {
+            pipeline.modelViewProjectionUniformLocation
+        }
+        if (matrixLocation >= 0) {
+            binding.uniformMatrix4fv(matrixLocation, 1, false, tile.modelViewProjection)
+        }
+        if (tileElevation != null) {
+            if (pipeline.terrain.mercatorYUniformLocation >= 0) {
+                binding.uniform2f(
+                    pipeline.terrain.mercatorYUniformLocation,
+                    tileElevation.mercatorY[0],
+                    tileElevation.mercatorY[1],
+                )
+            }
+            bindGroundElevationTile(binding, pipeline.terrain.elevation, tileElevation.dem)
+        }
+        binding.activeTexture(GL_TEXTURE0)
         binding.bindTexture(GL_TEXTURE_2D, tile.texture)
         binding.drawElements(GL_TRIANGLES, grid.indexCount, GL_UNSIGNED_SHORT, 0)
     }

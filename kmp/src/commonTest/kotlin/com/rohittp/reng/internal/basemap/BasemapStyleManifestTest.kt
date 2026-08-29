@@ -408,6 +408,66 @@ class BasemapStyleManifestTest {
         )
     }
 
+    /**
+     * `terrain.exaggeration` is **RenG's alone**: Rentile's `compileTerrainSource` reads `source` and
+     * nothing else, so the multiplier reaches a pixel only through RenG's own displacement.
+     *
+     * The declared case asserts **3**, not 1. All six corpus styles declare 1, which is the exact
+     * value at which a parsed exaggeration and an ignored one produce the same manifest and the same
+     * frame — a fixture at 1 would pass against a reader that returned the default unconditionally.
+     *
+     * The refusal follows `CONTEXT.md`'s house rule that an out-of-domain value fails rather than
+     * clamping or wrapping. **The range is deliberately not constrained**: a negative multiplier is a
+     * legal, if strange, request, and ADR 0037 has just reaffirmed that no tuned constant ships.
+     *
+     * There is no non-finite case because there is no non-finite *document*: the JSON reader refuses
+     * `1e400` itself with `JsonReject.NON_FINITE_NUMBER`, so the style is rejected before terrain is
+     * read at all — asserted below so that a reader which later admitted infinities would be caught
+     * here rather than displacing a ground by one.
+     */
+    @Test
+    fun readsTerrainExaggerationAndRefusesOnlyANonFiniteOrNonNumericOne() {
+        assertEquals(
+            3.5,
+            manifestOf(
+                """{"version":8,"terrain":{"source":"dem","exaggeration":3.5},"sources":{},"layers":[]}""",
+            ).terrainExaggeration,
+        )
+        assertEquals(
+            2.0,
+            manifestOf(
+                """{"version":8,"terrain":{"source":"dem","exaggeration":2},"sources":{},"layers":[]}""",
+            ).terrainExaggeration,
+            "an integer token is a number too",
+        )
+        assertEquals(
+            -1.5,
+            manifestOf(
+                """{"version":8,"terrain":{"source":"dem","exaggeration":-1.5},"sources":{},"layers":[]}""",
+            ).terrainExaggeration,
+            "unclamped: any finite multiple is a legal request",
+        )
+        assertEquals(
+            1.0,
+            manifestOf("""{"version":8,"terrain":{"source":"dem"},"sources":{},"layers":[]}""")
+                .terrainExaggeration,
+            "the style specification's own default",
+        )
+        assertEquals(
+            1.0,
+            manifestOf("""{"version":8,"sources":{},"layers":[]}""").terrainExaggeration,
+            "a style with no terrain block never reads it, and 1.0 is the inert value",
+        )
+        assertRejected(
+            BasemapStyleReject.TERRAIN_EXAGGERATION_NOT_NUMBER,
+            """{"version":8,"terrain":{"source":"dem","exaggeration":"lots"},"sources":{},"layers":[]}""",
+        )
+        assertRejected(
+            BasemapStyleReject.STYLE_JSON_MALFORMED,
+            """{"version":8,"terrain":{"source":"dem","exaggeration":1e400},"sources":{},"layers":[]}""",
+        )
+    }
+
     @Test
     fun leavesAnArrayFormOrUnresolvableSpriteWithNoRoutesRatherThanFailing() {
         val arrayForm = manifestOf("""{"version":8,"sprite":[{"id":"a","url":"https://s.example/a"}],"sources":{}}""")

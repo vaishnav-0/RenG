@@ -143,6 +143,24 @@ internal enum class BasemapStyleReject(val kind: StyleFailureKind) {
     /** Not a divergence: `StyleCompiler.compileTerrainSource` (`:474-495`) throws on both of these. */
     TERRAIN_NOT_OBJECT(StyleFailureKind.PARSE),
     TERRAIN_SOURCE_NOT_STRING(StyleFailureKind.PARSE),
+
+    /**
+     * **A divergence, and a deliberate one.** Rentile ignores `terrain.exaggeration` entirely, so
+     * RenG parses and owns it (design section 10) and is therefore the only party that can refuse a
+     * bad one. `CONTEXT.md`'s house rule is that an out-of-domain value **fails rather than clamps
+     * or wraps**: a style asking to exaggerate terrain by `"lots"` has asked for a picture with no
+     * definition, and silently substituting `1` would draw a flat-looking map the author never
+     * requested.
+     *
+     * **No finiteness check accompanies this, and its absence is deliberate rather than an
+     * oversight.** [com.rohittp.reng.internal.json.parseJson] rejects a non-finite number token
+     * outright (`JsonReader.kt:244`, `JsonReject.NON_FINITE_NUMBER`), so a `JsonValue.Real` reaching
+     * here is finite by construction and a guard would be code no document could execute.
+     *
+     * The *range* is not constrained. Any finite multiple is a legal answer, negative included --
+     * ADR 0037 reaffirmed that no tuned constant ships, and any bound here would be one.
+     */
+    TERRAIN_EXAGGERATION_NOT_NUMBER(StyleFailureKind.PARSE),
 }
 
 /**
@@ -296,6 +314,14 @@ internal class BasemapStyleManifest(
     underivableSources: List<UnderivableBasemapSource>,
     /** `root["terrain"]["source"]`, or `null` when the style declares no terrain. */
     val terrainSourceId: String?,
+    /**
+     * `root["terrain"]["exaggeration"]`, or the specification's default of `1.0`.
+     *
+     * RenG's own, because Rentile ignores the property: `compileTerrainSource` reads `source` and
+     * nothing else, so nothing in the engine's descriptor carries it and the displacement RenG
+     * performs is the only place it can be honoured.
+     */
+    val terrainExaggeration: Double,
 ) {
     private val sourceSnapshot: List<BasemapStyleSource> = freshListCopy(sources)
     private val tileJsonSourceSnapshot: List<BasemapTileJsonSource> = freshListCopy(tileJsonSources)
@@ -557,6 +583,7 @@ internal fun completeBasemapStyleManifest(
         tileJsonSources = emptyList(),
         underivableSources = underivable,
         terrainSourceId = manifest.terrainSourceId,
+        terrainExaggeration = manifest.terrainExaggeration,
     )
 }
 
@@ -759,6 +786,7 @@ private fun readStyleManifest(styleBytes: ByteArray, baseUri: String): BasemapSt
         tileJsonSources = declaredSources.tileJsonBacked,
         underivableSources = declaredSources.underivable,
         terrainSourceId = readTerrainSourceId(root),
+        terrainExaggeration = readTerrainExaggeration(root),
     )
 }
 
@@ -1062,6 +1090,28 @@ private fun readTerrainSourceId(root: JsonValue.Obj): String? {
     return (terrain.members["source"] as? JsonValue.Text)?.value
         ?: rejectStyle(BasemapStyleReject.TERRAIN_SOURCE_NOT_STRING)
 }
+
+/**
+ * `root["terrain"]["exaggeration"]`, defaulting to the style specification's own `1.0` when the
+ * member is absent -- and to `1.0` for a style with no `terrain` block at all, where the value is
+ * never read.
+ *
+ * All six corpus styles that declare terrain declare exactly `1`, which is the reason this is worth
+ * a KDoc: `1` is the value at which an honoured exaggeration and an ignored one draw the same
+ * picture, so nothing in the corpus can tell the two apart and no test may assert at it.
+ */
+private fun readTerrainExaggeration(root: JsonValue.Obj): Double {
+    val terrain = root.members["terrain"] as? JsonValue.Obj ?: return DEFAULT_TERRAIN_EXAGGERATION
+    val declared = terrain.members["exaggeration"] ?: return DEFAULT_TERRAIN_EXAGGERATION
+    return when (declared) {
+        is JsonValue.Integer -> declared.value.toDouble()
+        is JsonValue.Real -> declared.value
+        else -> rejectStyle(BasemapStyleReject.TERRAIN_EXAGGERATION_NOT_NUMBER)
+    }
+}
+
+/** The style specification's own default, which is what a `terrain` block with no member means. */
+private const val DEFAULT_TERRAIN_EXAGGERATION: Double = 1.0
 
 private fun tileResourceClassOf(kind: BasemapSourceKind): ResourceClass? = when (kind) {
     BasemapSourceKind.VECTOR -> ResourceClass.BASEMAP_VECTOR_TILE

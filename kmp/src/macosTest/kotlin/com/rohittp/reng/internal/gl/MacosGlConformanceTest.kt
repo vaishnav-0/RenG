@@ -12,7 +12,9 @@ import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
 import com.rohittp.reng.runGroundCullReadbackSuite
+import com.rohittp.reng.runGroundDisplacementReadback
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runVertexTextureFetchProbeSuite
@@ -235,6 +237,34 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
                 binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
                 runGroundCullReadbackSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * Cycle E-terrain task 8's gate, on both Apple rasterisers: does a DEM move the ground by the
+     * right number of pixels, and does a DEM with no relief leave it exactly alone.
+     *
+     * Run on the software rasteriser as well as the GPU because the assertions are integer pixel
+     * *differences* between two frames of the same fixture, which is the shape that survives a
+     * different fill rule — and because `0.3.0`'s failed publication is the standing reminder that a
+     * developer's whole macOS signal otherwise comes from one driver. See
+     * `runGroundDisplacementReadback` for what each of its five cases discriminates.
+     */
+    @Test fun theGroundDisplacementReadbackPassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG ground displacement readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, DISPLACEMENT_READBACK_PIXELS, DISPLACEMENT_READBACK_PIXELS)
+                binding.scissor(0, 0, DISPLACEMENT_READBACK_PIXELS, DISPLACEMENT_READBACK_PIXELS)
+                runGroundDisplacementReadback(binding, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }

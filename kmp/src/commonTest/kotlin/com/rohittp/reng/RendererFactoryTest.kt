@@ -313,13 +313,14 @@ class RendererFactoryTest {
      * internal pipeline without deleting it fails here rather than leaking silently on a consumer's
      * context.
      *
-     * **The vertex-array count is one short of the program count, and that is Cycle E-terrain's
-     * doing.** Four of the five internal pipelines still allocate a vertex array at setup; the ground
-     * allocates none, because its geometry became a `GroundGrid` per granularity built on the draw
-     * path (four vertices cannot be displaced by terrain, and which granularity a frame needs follows
-     * the camera). This renderer draws no ground tile before it closes, so no grid is ever built and
-     * none is deleted. `GroundPipelineTest.deletionRemovesEveryCachedGridAndTheProgram` is where the
-     * ground's own deletion is counted, over grids that exist.
+     * **The vertex-array count is two short of the program count, and both shortfalls are Cycle
+     * E-terrain's doing.** Four of the six programs belong to pipelines that still allocate a vertex
+     * array at setup. The ground's two allocate none, because the ground's geometry became a
+     * `GroundGrid` per granularity built on the draw path — four vertices cannot be displaced by
+     * terrain, and which granularity a frame needs follows the camera. This renderer draws no ground
+     * tile before it closes, so no grid is ever built and none is deleted;
+     * `GroundPipelineTest.deletionRemovesEveryCachedGridAndTheProgram` is where the ground's own
+     * deletion is counted, over grids that exist.
      */
     @Test
     fun closeDeletesEveryProgramTheRendererCompiledForItself() = runTest {
@@ -330,7 +331,8 @@ class RendererFactoryTest {
         assertEquals(
             INTERNAL_PIPELINE_PROGRAMS,
             created,
-            "setup compiles the composite, sticker, ground, label and icon programs: ${binding.log}",
+            "setup compiles the composite, sticker, ground, displaced ground, label and icon " +
+                "programs: ${binding.log}",
         )
 
         renderer.close()
@@ -341,7 +343,7 @@ class RendererFactoryTest {
             "close() must delete every program it compiled, or one leaks on the consumer's context",
         )
         assertEquals(
-            INTERNAL_PIPELINE_PROGRAMS - 1,
+            INTERNAL_PIPELINE_PROGRAMS - 2,
             binding.log.count { it.startsWith("deleteVertexArrays") },
             "every internal pipeline that allocated a vertex array must have it deleted by close()",
         )
@@ -1316,4 +1318,12 @@ private fun bin(write: BinWriter.() -> Unit): ByteArray = BinWriter().apply(writ
  * a sprite atlas carries coverage where a glyph atlas carries a distance field, so one program
  * cannot read both.
  */
-private const val INTERNAL_PIPELINE_PROGRAMS: Int = 5
+/**
+ * The composite, sticker, ground, label and icon programs — **plus the ground's displacing twin**,
+ * which Cycle E-terrain compiles beside the flat one so that a frame with no terrain runs the exact
+ * program three releases shipped rather than a displacing one disabled by a zero uniform.
+ *
+ * The globe ground's two are not here: that pipeline is compiled on the first globe frame that
+ * carries ground, and this renderer draws none.
+ */
+private const val INTERNAL_PIPELINE_PROGRAMS: Int = 6

@@ -10,6 +10,7 @@ import com.rohittp.reng.internal.projection.globeRadiusLogicalPixels
 import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import com.rohittp.reng.internal.projection.unitSphereDirection
 import com.rohittp.reng.internal.shader.scanShaderProfile
+import com.rohittp.reng.internal.terrain.DemEncoding
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.exp
@@ -393,9 +394,11 @@ class GlobeGroundPipelineTest {
 
         assertEquals(2, binding.log.count { it.startsWith("deleteVertexArrays") })
         assertEquals(2, binding.log.count { it.startsWith("deleteBuffers(2") }, "vertex and index")
-        assertEquals(1, binding.log.count { it.startsWith("deleteProgram") })
+        // Two, not one: the displacing program is compiled beside the flat one (Cycle E-terrain).
+        assertEquals(2, binding.log.count { it.startsWith("deleteProgram") })
         assertTrue(pipeline.grids.isEmpty())
         assertNull(cache.program(pipeline.key))
+        assertNull(cache.program(pipeline.terrain.key))
     }
 
     /**
@@ -598,6 +601,90 @@ class GlobeGroundPipelineTest {
         return (outcome as SpatialOutcome.Success<ResolvedGlobeCamera>).value
     }
 
+    /**
+     * The globe's half of Cycle E-terrain task 8: a tile with a DEM draws through the displacing
+     * program, the frame's one matrix is re-uploaded for it, and the **radial** metre scale arrives.
+     *
+     * `radialMultiplePerMetre` is `globeMetresToLogicalPixels(R) / R` — no `1 / cos(latitude)`. The
+     * value asserted below is deliberately not 1 and not the Mercator one, because a sphere that
+     * copied Mercator's conversion agrees exactly at the equator and is 2x wrong at latitude 60,
+     * which is the mistake `globeMetresToLogicalPixels`' own KDoc records.
+     */
+    @Test fun aGlobeTileWithADemDrawsThroughTheDisplacingProgramWithItsRadialScale() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        val matrix = FloatArray(16) { it.toFloat() }
+        binding.log.clear()
+
+        drawGlobeGround(
+            binding = binding,
+            pipeline = pipeline,
+            tiles = listOf(
+                ResolvedGlobeGroundTile(
+                    edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = 1L),
+                    texture = 4,
+                    elevation = GroundTileDem(demTexture = 44, window = floatArrayOf(0f, 1f, 0f, 1f)),
+                ),
+                ResolvedGlobeGroundTile(
+                    edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = 2L),
+                    texture = 5,
+                ),
+            ),
+            unitSphereToClip = matrix,
+            cellsPerTileSide = 8,
+            elevation = GlobeGroundElevationFrame(
+                dem = GroundDemUniforms(
+                    decode = demDecodeCoefficients(DemEncoding.TERRARIUM),
+                    interiorSizePx = 512,
+                    exaggeration = 3.0f,
+                ),
+                radialMultiplePerMetre = 0.5f,
+            ),
+        )
+
+        assertEquals(
+            listOf("useProgram(${pipeline.terrain.program})", "useProgram(${pipeline.program})"),
+            binding.log.filter { it.startsWith("useProgram") },
+            "the displaced tile and the coverage gap beside it interleave in tile order",
+        )
+        assertEquals(
+            2,
+            binding.log.count { it.startsWith("uniformMatrix4fv(3,") },
+            "the frame's one matrix is uploaded once per program, because a uniform belongs to the " +
+                "program that was current when it was set: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform1f($RADIAL_PER_METRE_LOCATION,0.5)"),
+            "the radial metre scale reaches the shader: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform2f($GLOBE_DEM_GRID_LOCATION,512.0,3.0)"),
+            "the interior size and the exaggeration reach the shader: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform4f($GLOBE_DEM_DECODE_LOCATION,65280.0,255.0,0.99609375,-32768.0)"),
+            "the Terrarium decode reaches the shader: ${binding.log}",
+        )
+        val demUnit = binding.log.indexOfFirst { it == "activeTexture(${hex(GL_TEXTURE0 + 1)})" }
+        assertTrue(demUnit >= 0, "the DEM binds to its own texture unit: ${binding.log}")
+        assertEquals("bindTexture(${hex(GL_TEXTURE_2D)},44)", binding.log[demUnit + 1])
+    }
+
+    /** A globe frame with no terrain never reaches the displacing program. */
+    @Test fun aGlobeFrameWithNoTerrainDrawsEntirelyThroughTheFlatProgram() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGlobeGround(binding, pipeline, tiles(2), FloatArray(16), cellsPerTileSide = 4)
+
+        assertTrue(binding.log.contains("useProgram(${pipeline.program})"))
+        assertFalse(
+            binding.log.contains("useProgram(${pipeline.terrain.program})"),
+            "nothing may reach the displacing program without a DEM: ${binding.log}",
+        )
+    }
+
     private fun tiles(count: Int): List<ResolvedGlobeGroundTile> = List(count) { index ->
         ResolvedGlobeGroundTile(
             edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = index.toLong()),
@@ -616,6 +703,11 @@ class GlobeGroundPipelineTest {
         GLOBE_GROUND_TILE_EDGES_UNIFORM_NAME to 5,
         GROUND_TEXTURE_UNIFORM_NAME to 7,
         GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME to 9,
+        GLOBE_GROUND_RADIAL_PER_METRE_UNIFORM_NAME to RADIAL_PER_METRE_LOCATION,
+        GROUND_DEM_SAMPLER_UNIFORM_NAME to 21,
+        GROUND_DEM_WINDOW_UNIFORM_NAME to 22,
+        GROUND_DEM_DECODE_UNIFORM_NAME to GLOBE_DEM_DECODE_LOCATION,
+        GROUND_DEM_GRID_UNIFORM_NAME to GLOBE_DEM_GRID_LOCATION,
     )
 
     private fun hex(value: Int): String = "0x${value.toString(16).uppercase()}"
@@ -624,6 +716,9 @@ class GlobeGroundPipelineTest {
         const val TILTED_LATITUDE: Double = 48.8566
         const val TILTED_LONGITUDE: Double = 722.3522
         val OUTPUT: OutputPixelSize = OutputPixelSize(width = 960, height = 540)
+        const val RADIAL_PER_METRE_LOCATION: Int = 20
+        const val GLOBE_DEM_DECODE_LOCATION: Int = 23
+        const val GLOBE_DEM_GRID_LOCATION: Int = 24
     }
 
     /**

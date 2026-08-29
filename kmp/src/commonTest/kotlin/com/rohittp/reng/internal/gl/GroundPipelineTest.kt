@@ -1,6 +1,7 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.internal.shader.scanShaderProfile
+import com.rohittp.reng.internal.terrain.DemEncoding
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -101,9 +102,13 @@ class GroundPipelineTest {
 
         assertEquals(2, binding.log.count { it.startsWith("deleteVertexArrays") })
         assertEquals(2, binding.log.count { it.startsWith("deleteBuffers(2") }, "vertex and index")
-        assertEquals(1, binding.log.count { it.startsWith("deleteProgram") })
+        // Two, not one: Cycle E-terrain compiles the displacing program beside the flat one, and a
+        // pipeline that deleted only the program it drew last frame would leak the other for the
+        // renderer's whole life.
+        assertEquals(2, binding.log.count { it.startsWith("deleteProgram") })
         assertTrue(pipeline.grids.isEmpty())
         assertNull(cache.program(pipeline.key))
+        assertNull(cache.program(pipeline.terrain.key))
     }
 
     /**
@@ -258,6 +263,170 @@ class GroundPipelineTest {
         )
     }
 
+    /**
+     * A frame with no terrain must never reach the displacing program — which is the whole reason
+     * there are two of them. Three shipped releases drew through [GroundPipeline.program], and this
+     * is the assertion that keeps them drawing through it rather than through a displacing program
+     * disabled by a zero uniform.
+     */
+    @Test fun aFrameWithNoTerrainDrawsEntirelyThroughTheFlatProgram() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGround(binding, pipeline, listOf(resolvedTile(), resolvedTile(2)), cellsPerTileSide = 4)
+
+        assertTrue(
+            binding.log.contains("useProgram(${pipeline.program})"),
+            "a frame with no terrain draws through the program 0.3.0 shipped: ${binding.log}",
+        )
+        assertFalse(
+            binding.log.contains("useProgram(${pipeline.terrain.program})"),
+            "nothing may reach the displacing program without a DEM: ${binding.log}",
+        )
+        assertFalse(
+            binding.log.any { it.startsWith("uniform4f($DEM_WINDOW_LOCATION") },
+            "no DEM window is uploaded by a frame with no terrain: ${binding.log}",
+        )
+        assertFalse(
+            binding.log.any { it == "activeTexture(${hex(GL_TEXTURE0 + 1)})" },
+            "the DEM texture unit is untouched by a frame with no terrain: ${binding.log}",
+        )
+    }
+
+    /**
+     * A tile with a DEM draws through the displacing program, and every uniform that program needs
+     * arrives: the decode, the interior size and exaggeration, the metre scale, the tile's own window
+     * and Mercator extent, and the DEM bound to its own texture unit.
+     *
+     * **Asserted on the values rather than on the calls**, because a uniform uploaded with the wrong
+     * argument is exactly as invisible as one not uploaded at all — and because the exaggeration is
+     * **2** here, the value at which an honoured multiplier and a dropped one stop agreeing.
+     */
+    @Test fun aTileWithADemDrawsThroughTheDisplacingProgramWithEveryUniformItNeeds() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGround(
+            binding = binding,
+            pipeline = pipeline,
+            tiles = listOf(demTile(texture = 11, demTexture = 22)),
+            cellsPerTileSide = 8,
+            elevation = elevationFrame(exaggeration = 2.0f),
+        )
+
+        assertTrue(
+            binding.log.contains("useProgram(${pipeline.terrain.program})"),
+            "a tile with a DEM draws through the displacing program: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform4f($DEM_DECODE_LOCATION,1671168.0,6528.0,25.5,-10000.0)"),
+            "the Mapbox decode reaches the shader: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform2f($DEM_GRID_LOCATION,256.0,2.0)"),
+            "the interior size and the exaggeration reach the shader: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform1f($ELEVATION_SCALE_LOCATION,0.25)"),
+            "the equatorial metre scale reaches the shader: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform4f($DEM_WINDOW_LOCATION,0.25,0.5,0.5,0.75)"),
+            "the tile's own window into its source DEM reaches the shader: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform2f($MERCATOR_Y_LOCATION,0.5,0.53125)"),
+            "the tile's own mercator extent reaches the latitude term: ${binding.log}",
+        )
+        val demUnit = binding.log.indexOfFirst { it == "activeTexture(${hex(GL_TEXTURE0 + 1)})" }
+        assertTrue(demUnit >= 0, "the DEM binds to its own texture unit: ${binding.log}")
+        assertEquals(
+            "bindTexture(${hex(GL_TEXTURE_2D)},22)",
+            binding.log[demUnit + 1],
+            "the DEM is what binds to that unit: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.contains("uniform1i($DEM_SAMPLER_LOCATION,1)"),
+            "the sampler names the unit the DEM was bound to: ${binding.log}",
+        )
+    }
+
+    /**
+     * ADR 0041's coverage gap, in the draw: one tile without a DEM among tiles with one draws flat,
+     * **in place**, without reordering the ground around it.
+     *
+     * Partitioning the tiles by program would have been cheaper in `useProgram` calls and would
+     * change which of two overlapping alpha edges composites last. [drawGround]'s order is a
+     * contract — it is the whole of the map regime's rule inside the ground pass — so the programs
+     * interleave instead.
+     */
+    @Test fun aCoverageGapDrawsFlatInPlaceRatherThanReorderingTheGround() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGround(
+            binding = binding,
+            pipeline = pipeline,
+            tiles = listOf(
+                demTile(texture = 11, demTexture = 22),
+                resolvedTile(texture = 12),
+                demTile(texture = 13, demTexture = 22),
+            ),
+            cellsPerTileSide = 8,
+            elevation = elevationFrame(),
+        )
+
+        val programs = binding.log.filter { it.startsWith("useProgram") }
+        assertEquals(
+            listOf(
+                "useProgram(${pipeline.terrain.program})",
+                "useProgram(${pipeline.program})",
+                "useProgram(${pipeline.terrain.program})",
+            ),
+            programs,
+            "the two programs interleave in tile order rather than partitioning the ground",
+        )
+        val colourTextures = listOf(11, 12, 13).map { "bindTexture(${hex(GL_TEXTURE_2D)},$it)" }
+        val binds = binding.log.filter { it in colourTextures }
+        assertEquals(
+            listOf(
+                "bindTexture(${hex(GL_TEXTURE_2D)},11)",
+                "bindTexture(${hex(GL_TEXTURE_2D)},12)",
+                "bindTexture(${hex(GL_TEXTURE_2D)},13)",
+            ),
+            binds,
+            "the frame's ground order is unchanged by the gap: ${binding.log}",
+        )
+        assertEquals(3, binding.log.count { it.startsWith("drawElements") }, "every tile still draws")
+    }
+
+    private fun demTile(texture: Int, demTexture: Int): ResolvedGroundTile = ResolvedGroundTile(
+        modelViewProjection = FloatArray(16),
+        texture = texture,
+        elevation = MercatorGroundTileDem(
+            dem = GroundTileDem(
+                demTexture = demTexture,
+                // A quarter of the source tile: not the whole of it, and not centred, so a window
+                // dropped or transposed on the way to the shader is visible in the uploaded values.
+                window = floatArrayOf(0.25f, 0.5f, 0.5f, 0.75f),
+            ),
+            mercatorY = mercatorTileYEdges(lod = 5, tileY = 16),
+        ),
+    )
+
+    private fun elevationFrame(exaggeration: Float = 1.0f): MercatorGroundElevationFrame =
+        MercatorGroundElevationFrame(
+            dem = GroundDemUniforms(
+                decode = demDecodeCoefficients(DemEncoding.MAPBOX),
+                interiorSizePx = 256,
+                exaggeration = exaggeration,
+            ),
+            equatorialLogicalPixelsPerMetre = 0.25f,
+        )
+
     private fun createdPipeline(binding: RecordingGlBinding): GroundPipeline =
         (createGroundPipeline(binding, ShaderDialect.GLES, GlProgramCache()) as GroundPipelineResult.Created)
             .pipeline
@@ -268,6 +437,12 @@ class GroundPipelineTest {
     private fun newBinding(): RecordingGlBinding = RecordingGlBinding().withDeclaredNames(
         GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME to MODEL_VIEW_PROJECTION_LOCATION,
         GROUND_TEXTURE_UNIFORM_NAME to TEXTURE_LOCATION,
+        GROUND_MERCATOR_Y_UNIFORM_NAME to MERCATOR_Y_LOCATION,
+        GROUND_ELEVATION_SCALE_UNIFORM_NAME to ELEVATION_SCALE_LOCATION,
+        GROUND_DEM_SAMPLER_UNIFORM_NAME to DEM_SAMPLER_LOCATION,
+        GROUND_DEM_WINDOW_UNIFORM_NAME to DEM_WINDOW_LOCATION,
+        GROUND_DEM_DECODE_UNIFORM_NAME to DEM_DECODE_LOCATION,
+        GROUND_DEM_GRID_UNIFORM_NAME to DEM_GRID_LOCATION,
     )
 
     private fun hex(value: Int): String = "0x${value.toString(16).uppercase()}"
@@ -275,5 +450,11 @@ class GroundPipelineTest {
     private companion object {
         const val MODEL_VIEW_PROJECTION_LOCATION: Int = 3
         const val TEXTURE_LOCATION: Int = 7
+        const val MERCATOR_Y_LOCATION: Int = 11
+        const val ELEVATION_SCALE_LOCATION: Int = 12
+        const val DEM_SAMPLER_LOCATION: Int = 13
+        const val DEM_WINDOW_LOCATION: Int = 14
+        const val DEM_DECODE_LOCATION: Int = 15
+        const val DEM_GRID_LOCATION: Int = 16
     }
 }

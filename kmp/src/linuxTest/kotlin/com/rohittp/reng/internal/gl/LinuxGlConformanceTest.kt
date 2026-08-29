@@ -6,7 +6,9 @@ import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
 import com.rohittp.reng.LATITUDE_PROBE_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
 import com.rohittp.reng.runGroundCullReadbackSuite
+import com.rohittp.reng.runGroundDisplacementReadback
 import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
@@ -104,6 +106,27 @@ class LinuxGlConformanceTest {
             binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             runGroundCullReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle E-terrain task 8's gate on llvmpipe: does a DEM move the ground by the right number of
+     * pixels, and does a DEM with no relief leave it exactly alone. `runGroundDisplacementReadback`
+     * says what each of its five cases discriminates.
+     */
+    @Test fun theGroundDisplacementReadbackPassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, DISPLACEMENT_READBACK_PIXELS, DISPLACEMENT_READBACK_PIXELS)
+            binding.scissor(0, 0, DISPLACEMENT_READBACK_PIXELS, DISPLACEMENT_READBACK_PIXELS)
+            runGroundDisplacementReadback(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

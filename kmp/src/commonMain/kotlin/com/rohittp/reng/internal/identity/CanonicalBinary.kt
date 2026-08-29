@@ -34,6 +34,18 @@ internal enum class CanonicalRootKind(internal val wireByte: Int) {
      * rather than by an engine-supplied content key, because a sprite pair has none.
      */
     SPRITE_ATLAS(11),
+
+    /**
+     * One **padded** DEM texture, identified by the content of all nine tiles it is assembled from.
+     *
+     * Named here rather than derived from a locator for [GLYPH_ATLAS]'s reason and one more of its
+     * own: a padded DEM is assembled by RenG out of tiles the firewall fetched, so it has no url,
+     * and it is not the identity of any *one* of those tiles either. `PaddedDemTexture.contentKey`
+     * carries the centre's engine digest and all eight neighbours', each replaced by the reason it
+     * was filled where one was, which is the only description that stays true when an absent
+     * neighbour arrives in a later frame.
+     */
+    DEM_TEXTURE(12),
 }
 
 internal class CanonicalFieldWriter internal constructor() {

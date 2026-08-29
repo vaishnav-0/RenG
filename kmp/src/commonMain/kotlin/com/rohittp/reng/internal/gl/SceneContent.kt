@@ -24,6 +24,10 @@ import com.rohittp.reng.internal.planning.resolvePlacement
 import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
+import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
+import com.rohittp.reng.internal.projection.globeMetresToLogicalPixels
+import com.rohittp.reng.internal.terrain.DemTileWindow
+import com.rohittp.reng.internal.terrain.groundCellsPerTileSide
 import com.rohittp.reng.internal.renGFailure
 
 /**
@@ -98,7 +102,57 @@ internal class SceneGeometry(
 internal class SceneGroundTile(
     val instance: BasemapTileInstance,
     val texture: Int,
+    /**
+     * This tile's own padded DEM texture and the sub-rectangle of it this tile occupies, or `null`
+     * when the frame declares no terrain or Rentile returned no DEM for this canonical tile.
+     *
+     * **`null` is a picture rather than an error** (ADR 0041): the tile draws the flat ground RenG
+     * has drawn since `0.3.0`, one diagnostic per frame names how many tiles did so, and the frame
+     * still renders. N world copies of one canonical tile share one entry here exactly as they share
+     * one [texture], because a DEM is acquired per canonical tile.
+     *
+     * [com.rohittp.reng.internal.terrain.DemTileWindow] rather than four floats, because the
+     * rectangle is exact in `Double` — a power-of-two `childScale` with integer offsets — and the
+     * two sides of a shared edge are bit-identical only while it stays that way. The narrowing to
+     * `Float` happens once, in [drawGroundPhase], at the same place every other narrowing in this
+     * file happens.
+     */
+    val elevation: SceneTileDem? = null,
 )
+
+/** One ground tile's DEM: the uploaded padded texture, and which part of it this tile reads. */
+internal class SceneTileDem(val demTexture: Int, val window: DemTileWindow)
+
+/**
+ * What a frame's terrain is, once acquisition, decode, padding and upload have all happened: how to
+ * read a texel, how big the source DEM is, how far to exaggerate it, and how finely terrain alone
+ * would like the ground subdivided.
+ *
+ * **[cellsPerTileSide] is terrain's *claim*, not the frame's answer.** [drawGroundPhase] reconciles
+ * it with the globe's curvature claim through
+ * [com.rohittp.reng.internal.terrain.groundCellsPerTileSide], because a frame draws its whole ground
+ * at one granularity or a sliver of background shows between two tiles that disagree. Carrying the
+ * claim rather than the answer is what keeps that reconciliation in one place.
+ *
+ * Non-null exactly when the frame's style declared a `terrain` block RenG agreed with, including
+ * when every one of its tiles turned out to have no DEM: the decode and the exaggeration are
+ * properties of the source rather than of the coverage.
+ */
+internal class SceneTerrain(
+    decode: FloatArray,
+    val interiorSizePx: Int,
+    val exaggeration: Double,
+    val cellsPerTileSide: Int,
+) {
+    /** [com.rohittp.reng.internal.gl.demDecodeCoefficients] for the source's own encoding. */
+    val decode: FloatArray = decode.copyOf()
+
+    init {
+        require(decode.size == 4) { "a DEM decode carries three weights and an offset" }
+        require(interiorSizePx > 0) { "a DEM tile has a positive interior" }
+        require(cellsPerTileSide >= 1) { "a ground grid has at least one cell a side" }
+    }
+}
 
 /**
  * One model still carrying its raw, unresolved [Placement], plus everything the layer above already
@@ -195,6 +249,11 @@ internal class Scene(
     val stickers: List<SceneSticker> = emptyList(),
     val geometries: List<SceneGeometry> = emptyList(),
     val groundTiles: List<SceneGroundTile> = emptyList(),
+    /**
+     * This frame's terrain, or `null` when its style declared none — which is 28 of the corpus's 34
+     * styles and every frame of three published releases.
+     */
+    val terrain: SceneTerrain? = null,
     val models: List<SceneModel> = emptyList(),
     val labels: List<LabelBatch> = emptyList(),
     val icons: List<IconBatch> = emptyList(),
@@ -604,6 +663,14 @@ internal class SceneContent(
      * background between them.
      */
     private fun drawGroundPhase(binding: GlBinding) {
+        val terrain = scene.terrain
+        val dem = terrain?.let {
+            GroundDemUniforms(
+                decode = it.decode,
+                interiorSizePx = it.interiorSizePx,
+                exaggeration = it.exaggeration.toFloat(),
+            )
+        }
         when (camera) {
             is ResolvedMercatorCamera -> drawGround(
                 binding = binding,
@@ -615,6 +682,29 @@ internal class SceneContent(
                             resolveBasemapTileQuad(tile.instance, camera),
                         ),
                         texture = tile.texture,
+                        elevation = tile.elevation?.let { demTile ->
+                            MercatorGroundTileDem(
+                                dem = groundTileDemOf(demTile),
+                                mercatorY = mercatorTileYEdges(tile.instance.lod, tile.instance.tileY),
+                            )
+                        },
+                    )
+                },
+                // Mercator has no curvature claim on the granularity, so terrain's is the whole
+                // answer -- and `groundCellsPerTileSide` is still where it is spent, so the cap and
+                // the reconciliation rule live in one place for both projections.
+                cellsPerTileSide = groundCellsPerTileSide(
+                    curvatureCells = 1,
+                    terrainCells = terrain?.cellsPerTileSide ?: 1,
+                ),
+                elevation = dem?.let {
+                    MercatorGroundElevationFrame(
+                        dem = it,
+                        // `projectMercator`'s own altitude scale with its `1 / cos(latitude)` term
+                        // left out, because the vertex shader applies that per vertex -- see
+                        // [TERRAIN_GROUND_VERTEX_SOURCE].
+                        equatorialLogicalPixelsPerMetre =
+                            (camera.worldSizeLogicalPixels / WORLD_CIRCUMFERENCE_METRES).toFloat(),
                     )
                 },
             )
@@ -634,14 +724,22 @@ internal class SceneContent(
                         tileY = tile.instance.tileY.toLong(),
                         unwrappedX = tile.instance.unwrappedX,
                     )
+                    val tileDem = tile.elevation?.let { groundTileDemOf(it) }
                     buildList {
-                        add(ResolvedGlobeGroundTile(edges = edges, texture = tile.texture))
+                        add(
+                            ResolvedGlobeGroundTile(
+                                edges = edges,
+                                texture = tile.texture,
+                                elevation = tileDem,
+                            ),
+                        )
                         if (tile.instance.tileY.toLong() == 0L) {
                             add(
                                 ResolvedGlobeGroundTile(
                                     edges = globeGroundPolarCapEdges(edges, north = true),
                                     texture = tile.texture,
                                     uvV = NORTH_POLAR_CAP_UV_V,
+                                    elevation = tileDem?.let { polarCapDem(it, north = true) },
                                 ),
                             )
                         }
@@ -651,18 +749,66 @@ internal class SceneContent(
                                     edges = globeGroundPolarCapEdges(edges, north = false),
                                     texture = tile.texture,
                                     uvV = SOUTH_POLAR_CAP_UV_V,
+                                    elevation = tileDem?.let { polarCapDem(it, north = false) },
                                 ),
                             )
                         }
                     }
                 },
                 unitSphereToClip = composeGlobeGroundUnitSphereToClip(camera),
-                cellsPerTileSide = globeGroundCellsPerTileSide(
-                    camera,
-                    scene.groundTiles.first().instance.lod,
+                // The frame's one granularity: the globe's curvature claim and terrain's, reconciled
+                // by `max` and capped by the grid's own 16-bit-index ceiling. Two meshes sharing an
+                // edge on the sphere must be subdivided identically, so this is one number for the
+                // whole ground and never one per tile.
+                cellsPerTileSide = groundCellsPerTileSide(
+                    curvatureCells = globeGroundCellsPerTileSide(
+                        camera,
+                        scene.groundTiles.first().instance.lod,
+                    ),
+                    terrainCells = terrain?.cellsPerTileSide ?: 1,
                 ),
+                elevation = dem?.let {
+                    GlobeGroundElevationFrame(
+                        dem = it,
+                        // `globeMetresToLogicalPixels(R) / R`, which is `1 / a` and independent of
+                        // zoom -- written as the quotient so it follows the one function that owns
+                        // the globe's metre scale. A sphere has no `1 / cos(latitude)`.
+                        radialMultiplePerMetre = (
+                            globeMetresToLogicalPixels(camera.radiusLogicalPixels) /
+                                camera.radiusLogicalPixels
+                            ).toFloat(),
+                    )
+                },
             )
         }
+    }
+
+    /** One [SceneTileDem] narrowed to the four `Float`s [GroundTileDem] hands the shader. */
+    private fun groundTileDemOf(tile: SceneTileDem): GroundTileDem = GroundTileDem(
+        demTexture = tile.demTexture,
+        window = floatArrayOf(
+            tile.window.uMinimum.toFloat(),
+            tile.window.uMaximum.toFloat(),
+            tile.window.vMinimum.toFloat(),
+            tile.window.vMaximum.toFloat(),
+        ),
+    )
+
+    /**
+     * A polar cap wedge's DEM window: its tile's own, with `v` collapsed onto the edge the cap hangs
+     * from, exactly as [NORTH_POLAR_CAP_UV_V] collapses the colour texture's.
+     *
+     * The cap covers the world above +85.0511 degrees or below -85.0511, which web Mercator does not
+     * tile at all, so no DEM texel describes it. The honest elevation there is the one at the tile's
+     * own last row, continued outward -- the same answer [padDemTexture]'s `WORLD_EDGE` fill gives
+     * the ring for the same region, so the cap and the tile it hangs from meet at one height.
+     */
+    private fun polarCapDem(tile: GroundTileDem, north: Boolean): GroundTileDem {
+        val v = if (north) tile.window[2] else tile.window[3]
+        return GroundTileDem(
+            demTexture = tile.demTexture,
+            window = floatArrayOf(tile.window[0], tile.window[1], v, v),
+        )
     }
 
     /**

@@ -105,6 +105,88 @@ internal const val GLOBE_GROUND_UNIT_SPHERE_TO_CLIP_UNIFORM_NAME: String =
     "rengGlobeGroundUnitSphereToClip"
 internal const val GLOBE_GROUND_TILE_EDGES_UNIFORM_NAME: String = "rengGlobeGroundTileEdges"
 internal const val GLOBE_GROUND_TILE_UV_V_UNIFORM_NAME: String = "rengGlobeGroundTileUvV"
+internal const val GLOBE_GROUND_RADIAL_PER_METRE_UNIFORM_NAME: String =
+    "rengGlobeGroundRadialPerMetre"
+
+/**
+ * The globe ground's displacing vertex stage: [GLOBE_GROUND_VERTEX_SOURCE] with
+ * [GROUND_ELEVATION_SOURCE] composed in and the emitted direction no longer a unit one.
+ *
+ * **This is where "the radial scale becomes per vertex" actually happens.**
+ * [composeGlobeGroundUnitSphereToClip] folds the sphere's radius into the frame's one matrix
+ * precisely so this stage could emit a unit direction, and its own KDoc has said since Cycle G that
+ * terrain would change that. It changes it here, and by the smallest amount that is correct:
+ *
+ * ```
+ * gl_Position = unitSphereToClip * vec4(direction * (1.0 + metres * radialPerMetre), 1.0)
+ * ```
+ *
+ * **The radius stays in the matrix, in `Double`, and only the *multiple* is per vertex.** The
+ * literal reading — pull the radius out as a `Float` uniform and emit `direction * (R + h)` — was
+ * rejected because `radiusLogicalPixels` reaches `3.9 x 10^9` at zoom 22 and `Float` would quantise
+ * it to about 234 logical pixels there, discarding exactly the property
+ * `GlobeGroundPipelineTest.theFloatNarrowedGroundStaysSubPixelUntilTheMeasuredZoom` was written to
+ * measure. In the form above the new rounding is half an ulp of `1.0` times the radius, which is the
+ * same `6 x 10^-8 * R` the `Float` `direction` already contributes: the same order, no new failure
+ * mode, and nothing measured has to be re-measured.
+ *
+ * **`radialPerMetre` carries no `1 / cos(latitude)` and must never grow one.** It is
+ * `globeMetresToLogicalPixels(R) / R`, whose own KDoc states the trap: a sphere has no Mercator area
+ * distortion, so copying the Mercator ground's `cosh` term here would be **2x too large at latitude
+ * 60** while agreeing exactly at the equator, where a fixture naturally gets written. That the two
+ * projections' conversions look different in these two shaders is the point rather than an
+ * inconsistency.
+ *
+ * Everything else — the sphere evaluation, the polar-cap identity, the UV, the winding ADR 0038's
+ * cull depends on — is [GLOBE_GROUND_VERTEX_SOURCE]'s, unchanged. Displacement does not change
+ * winding, so the far-hemisphere cull survives it.
+ */
+internal const val TERRAIN_GLOBE_GROUND_VERTEX_SOURCE: String =
+    "#version 300 es\n" +
+        "precision highp float;\n" +
+        "layout(location = 0) in vec2 rengGlobeGroundGrid;\n" +
+        "uniform mat4 rengGlobeGroundUnitSphereToClip;\n" +
+        "uniform vec4 rengGlobeGroundTileEdges;\n" +
+        "uniform vec2 rengGlobeGroundTileUvV;\n" +
+        "uniform float rengGlobeGroundRadialPerMetre;\n" +
+        GROUND_ELEVATION_SOURCE +
+        "out vec2 rengGroundUv;\n" +
+        "void main() {\n" +
+        "    float longitude = mix(rengGlobeGroundTileEdges.x, rengGlobeGroundTileEdges.y, " +
+        "rengGlobeGroundGrid.x);\n" +
+        "    float isometricLatitude = mix(rengGlobeGroundTileEdges.z, rengGlobeGroundTileEdges.w, " +
+        "rengGlobeGroundGrid.y);\n" +
+        "    float tangentHalfAngle = exp(isometricLatitude);\n" +
+        "    float tangentSquared = tangentHalfAngle * tangentHalfAngle;\n" +
+        "    float denominator = tangentSquared + 1.0;\n" +
+        "    float sineLatitude = (tangentSquared - 1.0) / denominator;\n" +
+        "    float cosineLatitude = 2.0 * tangentHalfAngle / denominator;\n" +
+        "    vec3 direction = vec3(cosineLatitude * cos(longitude), cosineLatitude * sin(longitude), " +
+        "sineLatitude);\n" +
+        "    float radial = 1.0 + rengGroundElevationMetres(rengGlobeGroundGrid) * " +
+        "rengGlobeGroundRadialPerMetre;\n" +
+        "    rengGroundUv = vec2(rengGlobeGroundGrid.x, mix(rengGlobeGroundTileUvV.x, " +
+        "rengGlobeGroundTileUvV.y, rengGlobeGroundGrid.y));\n" +
+        "    gl_Position = rengGlobeGroundUnitSphereToClip * vec4(direction * radial, 1.0);\n" +
+        "}\n"
+
+internal val TERRAIN_GLOBE_GROUND_SHADER_PAIR: ShaderPair =
+    ShaderPair(vertexSource = TERRAIN_GLOBE_GROUND_VERTEX_SOURCE, fragmentSource = GROUND_FRAGMENT_SOURCE)
+
+/**
+ * The globe ground's displacing program and every uniform location it needs, compiled beside the
+ * flat one on [TerrainGroundProgram]'s reasoning exactly.
+ */
+internal class TerrainGlobeGroundProgram(
+    val key: ResourceKey,
+    val program: Int,
+    val unitSphereToClipUniformLocation: Int,
+    val tileEdgesUniformLocation: Int,
+    val tileUvVUniformLocation: Int,
+    val textureUniformLocation: Int,
+    val radialPerMetreUniformLocation: Int,
+    val elevation: GroundElevationUniformLocations,
+)
 
 /**
  * One subdivided grid: `cellsPerSide^2` quads over the unit `(u, v)` square, indexed as triangles.
@@ -131,6 +213,8 @@ internal class GlobeGroundPipeline(
     val tileEdgesUniformLocation: Int,
     val tileUvVUniformLocation: Int,
     val textureUniformLocation: Int,
+    /** The displacing program this pipeline draws a tile with a DEM through. */
+    val terrain: TerrainGlobeGroundProgram,
     /**
      * Every grid this pipeline has been asked for, keyed by [GlobeGroundGrid.cellsPerSide].
      *
@@ -168,6 +252,18 @@ internal fun createGlobeGroundPipeline(
         is GlProgramResult.Failed -> return GlobeGroundPipelineResult.Failed(result.failure)
     }
 
+    val terrainKey = deriver
+        .internalPipeline(InternalPipelineRole.TERRAIN_GLOBE_GROUND, TERRAIN_GLOBE_GROUND_SHADER_PAIR)
+        .key
+    val terrainVertexPlan = scanShaderProfile(TERRAIN_GLOBE_GROUND_VERTEX_SOURCE)
+        ?: return GlobeGroundPipelineResult.Failed(glOperationFailure(PipelineStage.GPU_RESOURCE, terrainKey))
+    val terrainProgram = when (
+        val result = cache.getOrCompile(binding, dialect, terrainKey, terrainVertexPlan, fragmentPlan)
+    ) {
+        is GlProgramResult.Linked -> result.program
+        is GlProgramResult.Failed -> return GlobeGroundPipelineResult.Failed(result.failure)
+    }
+
     return GlobeGroundPipelineResult.Created(
         GlobeGroundPipeline(
             key = key,
@@ -185,6 +281,31 @@ internal fun createGlobeGroundPipeline(
                 GLOBE_GROUND_TILE_UV_V_UNIFORM_NAME,
             ),
             textureUniformLocation = binding.getUniformLocation(program, GROUND_TEXTURE_UNIFORM_NAME),
+            terrain = TerrainGlobeGroundProgram(
+                key = terrainKey,
+                program = terrainProgram,
+                unitSphereToClipUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GLOBE_GROUND_UNIT_SPHERE_TO_CLIP_UNIFORM_NAME,
+                ),
+                tileEdgesUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GLOBE_GROUND_TILE_EDGES_UNIFORM_NAME,
+                ),
+                tileUvVUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GLOBE_GROUND_TILE_UV_V_UNIFORM_NAME,
+                ),
+                textureUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GROUND_TEXTURE_UNIFORM_NAME,
+                ),
+                radialPerMetreUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GLOBE_GROUND_RADIAL_PER_METRE_UNIFORM_NAME,
+                ),
+                elevation = resolveGroundElevationUniforms(binding, terrainProgram),
+            ),
         ),
     )
 }
@@ -207,6 +328,7 @@ internal fun deleteGlobeGroundPipeline(
     }
     pipeline.grids.clear()
     cache.remove(pipeline.key)?.let { binding.deleteProgram(it) }
+    cache.remove(pipeline.terrain.key)?.let { binding.deleteProgram(it) }
 }
 
 /**
@@ -384,6 +506,15 @@ internal class ResolvedGlobeGroundTile(
     val edges: FloatArray,
     val texture: Int,
     /**
+     * This tile's DEM and the window it reads, or `null` when the frame has no terrain or Rentile
+     * returned no DEM for this tile (ADR 0041: that tile draws flat rather than failing the frame).
+     *
+     * A polar cap wedge carries its own tile's window with `v` collapsed onto the edge it hangs
+     * from, for the same reason [uvV] collapses: the cap is outside the Mercator domain entirely, so
+     * every elevation it can honestly claim is the one at the tile's own last row.
+     */
+    val elevation: GroundTileDem? = null,
+    /**
      * Which rows of [texture] this quad samples, as `(v at the north edge, v at the south edge)`.
      *
      * `(0, 1)` for an ordinary tile, which is the whole texture and the only value that existed
@@ -413,9 +544,12 @@ internal val SOUTH_POLAR_CAP_UV_V: FloatArray = floatArrayOf(1.0f, 1.0f)
  * direction and nothing larger, and keeps the radius in `Double` until the single narrowing every
  * other compose function in this package performs.
  *
- * Altitude zero is baked in, because a ground tile is the sphere's surface. Terrain displacing the
- * ground would need the radial scale per vertex rather than per frame, which is E-terrain's problem
- * in both projections.
+ * Altitude zero is **no longer** baked in, and this matrix did not change to say so.
+ * [TERRAIN_GLOBE_GROUND_VERTEX_SOURCE] emits `direction * (1 + metres * radialPerMetre)` instead of
+ * a unit direction, so the radial scale is per vertex while the radius stays here, per frame and in
+ * `Double` until this one narrowing. That split is deliberate: moving the radius itself into a
+ * `Float` uniform is the obvious reading of "per vertex" and would quantise a zoom-22 radius of
+ * `3.9 x 10^9` to about 234 logical pixels, discarding the measurement this file's own KDoc records.
  */
 internal fun composeGlobeGroundUnitSphereToClip(camera: ResolvedGlobeCamera): FloatArray {
     val radius = camera.radiusLogicalPixels
@@ -535,40 +669,79 @@ internal fun drawGlobeGround(
     tiles: List<ResolvedGlobeGroundTile>,
     unitSphereToClip: FloatArray,
     cellsPerTileSide: Int,
+    elevation: GlobeGroundElevationFrame? = null,
 ) {
     require(unitSphereToClip.size == 16) { "a model-view-projection matrix carries sixteen values" }
     if (tiles.isEmpty()) return
 
     val grid = globeGroundGrid(binding, pipeline, cellsPerTileSide)
-    binding.useProgram(pipeline.program)
     binding.bindVertexArray(grid.vertexArray)
     binding.enable(GL_BLEND)
     binding.blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD)
     binding.blendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
-    binding.activeTexture(GL_TEXTURE0)
-    if (pipeline.textureUniformLocation >= 0) {
-        binding.uniform1i(pipeline.textureUniformLocation, 0)
-    }
     binding.enable(GL_DEPTH_TEST)
     binding.depthMask(false)
     binding.enable(GL_CULL_FACE)
-    if (pipeline.unitSphereToClipUniformLocation >= 0) {
-        binding.uniformMatrix4fv(pipeline.unitSphereToClipUniformLocation, 1, false, unitSphereToClip)
-    }
 
+    // [drawGround]'s arrangement exactly: the two programs interleave in [tiles] order rather than
+    // being partitioned, so a single absent DEM flattens one tile without reordering the ground, and
+    // the frame's one matrix is re-uploaded on each switch because a uniform belongs to whichever
+    // program was current when it was set.
+    var displacing: Boolean? = null
     tiles.forEach { tile ->
-        if (pipeline.tileEdgesUniformLocation >= 0) {
-            binding.uniform4f(
-                pipeline.tileEdgesUniformLocation,
-                tile.edges[0],
-                tile.edges[1],
-                tile.edges[2],
-                tile.edges[3],
-            )
+        val tileElevation = if (elevation == null) null else tile.elevation
+        val wantsDisplacement = tileElevation != null
+        if (displacing != wantsDisplacement) {
+            displacing = wantsDisplacement
+            val matrixLocation = if (wantsDisplacement) {
+                binding.useProgram(pipeline.terrain.program)
+                if (pipeline.terrain.textureUniformLocation >= 0) {
+                    binding.uniform1i(pipeline.terrain.textureUniformLocation, 0)
+                }
+                if (pipeline.terrain.radialPerMetreUniformLocation >= 0) {
+                    binding.uniform1f(
+                        pipeline.terrain.radialPerMetreUniformLocation,
+                        requireNotNull(elevation).radialMultiplePerMetre,
+                    )
+                }
+                bindGroundElevationFrame(
+                    binding,
+                    pipeline.terrain.elevation,
+                    requireNotNull(elevation).dem,
+                )
+                pipeline.terrain.unitSphereToClipUniformLocation
+            } else {
+                binding.useProgram(pipeline.program)
+                if (pipeline.textureUniformLocation >= 0) {
+                    binding.uniform1i(pipeline.textureUniformLocation, 0)
+                }
+                pipeline.unitSphereToClipUniformLocation
+            }
+            if (matrixLocation >= 0) {
+                binding.uniformMatrix4fv(matrixLocation, 1, false, unitSphereToClip)
+            }
         }
-        if (pipeline.tileUvVUniformLocation >= 0) {
-            binding.uniform2f(pipeline.tileUvVUniformLocation, tile.uvV[0], tile.uvV[1])
+
+        val edgesLocation = if (wantsDisplacement) {
+            pipeline.terrain.tileEdgesUniformLocation
+        } else {
+            pipeline.tileEdgesUniformLocation
         }
+        if (edgesLocation >= 0) {
+            binding.uniform4f(edgesLocation, tile.edges[0], tile.edges[1], tile.edges[2], tile.edges[3])
+        }
+        val uvVLocation = if (wantsDisplacement) {
+            pipeline.terrain.tileUvVUniformLocation
+        } else {
+            pipeline.tileUvVUniformLocation
+        }
+        if (uvVLocation >= 0) {
+            binding.uniform2f(uvVLocation, tile.uvV[0], tile.uvV[1])
+        }
+        if (tileElevation != null) {
+            bindGroundElevationTile(binding, pipeline.terrain.elevation, tileElevation)
+        }
+        binding.activeTexture(GL_TEXTURE0)
         binding.bindTexture(GL_TEXTURE_2D, tile.texture)
         binding.drawElements(GL_TRIANGLES, grid.indexCount, GL_UNSIGNED_SHORT, 0)
     }

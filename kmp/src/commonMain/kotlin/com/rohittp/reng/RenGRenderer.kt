@@ -11,12 +11,16 @@ import com.rohittp.reng.internal.driver.PreparationDriver
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
+import com.rohittp.reng.internal.firewall.AcquiredDemTile
 import com.rohittp.reng.internal.firewall.AcquiredLabelCandidates
-import com.rohittp.reng.internal.firewall.reportLabelContentExclusions
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
 import com.rohittp.reng.internal.firewall.ProductionRentilePrivateKeyResolver
 import com.rohittp.reng.internal.firewall.RenderedBasemapTile
 import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
+import com.rohittp.reng.internal.firewall.TerrainAcquisition
+import com.rohittp.reng.internal.firewall.TerrainAcquisitionOutcome
+import com.rohittp.reng.internal.firewall.reportLabelContentExclusions
+import com.rohittp.reng.internal.firewall.reportTerrainDegradation
 import com.rohittp.reng.internal.gl.CompositePipeline
 import com.rohittp.reng.internal.gl.CompositePipelineResult
 import com.rohittp.reng.internal.gl.GeometryPipeline
@@ -38,18 +42,21 @@ import com.rohittp.reng.internal.gl.IconPipelineResult
 import com.rohittp.reng.internal.gl.LabelBatch
 import com.rohittp.reng.internal.gl.LabelPipeline
 import com.rohittp.reng.internal.gl.LabelPipelineResult
-import com.rohittp.reng.internal.gl.OffscreenSurface
-import com.rohittp.reng.internal.gl.OffscreenSurfaceResult
-import com.rohittp.reng.internal.gl.RenderContextProfile
 import com.rohittp.reng.internal.gl.ModelPipeline
 import com.rohittp.reng.internal.gl.ModelPipelineResult
 import com.rohittp.reng.internal.gl.ModelShaderVariant
+import com.rohittp.reng.internal.gl.OffscreenSurface
+import com.rohittp.reng.internal.gl.OffscreenSurfaceResult
+import com.rohittp.reng.internal.gl.RenderContextProfile
+import com.rohittp.reng.internal.gl.ResolvedIconQuad
 import com.rohittp.reng.internal.gl.Scene
 import com.rohittp.reng.internal.gl.SceneContent
 import com.rohittp.reng.internal.gl.SceneGeometry
 import com.rohittp.reng.internal.gl.SceneGroundTile
 import com.rohittp.reng.internal.gl.SceneModel
 import com.rohittp.reng.internal.gl.SceneSticker
+import com.rohittp.reng.internal.gl.SceneTerrain
+import com.rohittp.reng.internal.gl.SceneTileDem
 import com.rohittp.reng.internal.gl.StickerPipeline
 import com.rohittp.reng.internal.gl.StickerPipelineResult
 import com.rohittp.reng.internal.gl.TextureContent
@@ -61,7 +68,6 @@ import com.rohittp.reng.internal.gl.createCompositePipeline
 import com.rohittp.reng.internal.gl.createGeometryPipeline
 import com.rohittp.reng.internal.gl.createGlobeGroundPipeline
 import com.rohittp.reng.internal.gl.createGroundPipeline
-import com.rohittp.reng.internal.gl.ResolvedIconQuad
 import com.rohittp.reng.internal.gl.createIconPipeline
 import com.rohittp.reng.internal.gl.createLabelPipeline
 import com.rohittp.reng.internal.gl.createModelPipeline
@@ -70,18 +76,20 @@ import com.rohittp.reng.internal.gl.createStickerPipeline
 import com.rohittp.reng.internal.gl.defaultSamplerStateFor
 import com.rohittp.reng.internal.gl.deleteCompositePipeline
 import com.rohittp.reng.internal.gl.deleteGeometryPipeline
-import com.rohittp.reng.internal.gl.deleteGlobeGroundPipeline
 import com.rohittp.reng.internal.gl.deleteGlObjects
+import com.rohittp.reng.internal.gl.deleteGlobeGroundPipeline
 import com.rohittp.reng.internal.gl.deleteGroundPipeline
 import com.rohittp.reng.internal.gl.deleteIconPipeline
 import com.rohittp.reng.internal.gl.deleteLabelPipeline
 import com.rohittp.reng.internal.gl.deleteModelPipeline
 import com.rohittp.reng.internal.gl.deleteOffscreenSurface
 import com.rohittp.reng.internal.gl.deleteStickerPipeline
+import com.rohittp.reng.internal.gl.demDecodeCoefficients
 import com.rohittp.reng.internal.gl.drawFrame
 import com.rohittp.reng.internal.gl.jointMatricesForSkin
 import com.rohittp.reng.internal.gl.offscreenSurfaceDescriptorFor
 import com.rohittp.reng.internal.gl.requireResolvedAtDrawTime
+import com.rohittp.reng.internal.gl.uploadDemTexture
 import com.rohittp.reng.internal.gl.uploadGlyphAtlas
 import com.rohittp.reng.internal.gl.uploadModelPrimitive
 import com.rohittp.reng.internal.gl.uploadSpriteAtlas
@@ -100,11 +108,11 @@ import com.rohittp.reng.internal.label.advanceLabelFade
 import com.rohittp.reng.internal.label.placeLabels
 import com.rohittp.reng.internal.lifecycle.GpuLedger
 import com.rohittp.reng.internal.lifecycle.PreparedFrameFact
+import com.rohittp.reng.internal.lifecycle.RenderTargetFact
 import com.rohittp.reng.internal.lifecycle.RendererLifecycleOperation
 import com.rohittp.reng.internal.lifecycle.RendererLifecycleOutcome
 import com.rohittp.reng.internal.lifecycle.RendererLifecycleSnapshot
 import com.rohittp.reng.internal.lifecycle.RendererOwnerState
-import com.rohittp.reng.internal.lifecycle.RenderTargetFact
 import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.maximumBytesFor
 import com.rohittp.reng.internal.model.AnimationResolution
@@ -130,6 +138,15 @@ import com.rohittp.reng.internal.projection.resolveMercatorCamera
 import com.rohittp.reng.internal.renGFailure
 import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
 import com.rohittp.reng.internal.resource.ResourceOperationOutcome
+import com.rohittp.reng.internal.terrain.DemEncoding
+import com.rohittp.reng.internal.terrain.DemTexelDecodeResult
+import com.rohittp.reng.internal.terrain.DemTexels
+import com.rohittp.reng.internal.terrain.DemTileCoordinate
+import com.rohittp.reng.internal.terrain.TerrainGranularityInputs
+import com.rohittp.reng.internal.terrain.decodeDemTexels
+import com.rohittp.reng.internal.terrain.demTileWindowFor
+import com.rohittp.reng.internal.terrain.padDemTexture
+import com.rohittp.reng.internal.terrain.terrainCellsPerTileSide
 import com.rohittp.rentile.PreparedStyle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -226,6 +243,45 @@ internal class PreparedGroundInstance(
     internal val instance: BasemapTileInstance,
     internal val resourceKey: ResourceKey,
 )
+
+/**
+ * One frame's terrain, still encoded: everything the ground needs to displace itself, and nothing
+ * decoded yet.
+ *
+ * **The DEM bytes are carried to the draw rather than decoded in `prepare()`, exactly as a rendered
+ * basemap tile's PNG bytes are**, and for the same reason: a padded DEM texture already resident
+ * from an earlier frame must cost neither a decode nor an upload, `prepare()` holds no render
+ * context, and residency is a question only the draw's [GlObjectRegistry] can answer.
+ *
+ * **What that leaves owed is a per-frame CPU decode, and it is F-2's debt in new material.** A frame
+ * whose padded textures are all resident still inflates every DEM in its request -- the visible set
+ * plus its perimeter ring -- to find out that it did not need to. Design section 6 already refused
+ * the obvious repair: keeping a decoded DEM for every visible tile is about 224 MiB against a
+ * `maximumDecodedImageBytes` of 256 MiB shared with every raster. The cheaper repair it did not
+ * consider is to compose `PaddedDemTexture.contentKey` from the acquired digests *before* decoding
+ * anything, since that key is a function of digests alone, and to decode only the misses.
+ *
+ * [demTiles] is keyed by **requested** canonical tile, which is how the acquisition matched it
+ * (ADR 0041: never by list index). Its `sourceTile` may differ -- an overzoom or a world wrap -- and
+ * resolving that difference is `demTileWindowFor`'s job at draw time.
+ */
+internal class PreparedTerrain(
+    internal val encoding: DemEncoding,
+    internal val tileSizePx: Int,
+    internal val exaggeration: Double,
+    demTiles: Map<CanonicalBasemapTile, AcquiredDemTile>,
+) {
+    private val demSnapshot: Map<CanonicalBasemapTile, AcquiredDemTile> = LinkedHashMap(demTiles)
+
+    /** Every acquired DEM, visible tiles and ring alike, in request order. */
+    internal val demTiles: Map<CanonicalBasemapTile, AcquiredDemTile> get() = LinkedHashMap(demSnapshot)
+
+    internal fun demTileFor(tile: CanonicalBasemapTile): AcquiredDemTile? = demSnapshot[tile]
+
+    override fun toString(): String =
+        "PreparedTerrain(encoding=$encoding, tileSizePx=$tileSizePx, " +
+            "exaggeration=$exaggeration, dem=${demSnapshot.size})"
+}
 
 /**
  * One frame's labels, everything CPU-shaped about them already done: placed, collided, faded, and
@@ -357,6 +413,13 @@ internal class RenGPreparedFrame(
      */
     groundInstances: List<PreparedGroundInstance> = emptyList(),
     /**
+     * This frame's terrain, or `null` when its style declared none, when RenG and the engine did not
+     * name the same source, or when the acquisition failed — the last two being ADR 0041's two
+     * degradations, which have already been reported by the time a frame exists and leave the ground
+     * flat here.
+     */
+    internal val terrain: PreparedTerrain? = null,
+    /**
      * This frame's labels, or `null` when it drew none — `drawLabels = false`, no configured style, no
      * selected tile, a style that declares no text, or a frame every candidate of which lost its place.
      *
@@ -444,6 +507,24 @@ private class FrameAcquisition(
      * becomes atlas geometry.
      */
     val spriteAtlas: SpriteAtlasManifest? = null,
+    /**
+     * What this frame's terrain acquisition produced, or `null` when the frame rendered no ground at
+     * all and therefore asked for none.
+     *
+     * Carried out of acquisition for [basemapStyleDigest]'s reason and one stronger: DEM tiles are
+     * acquired inside the invocation, through its preregistered routes, and the registry that
+     * authorised them is discarded when it ends (ADR 0016). It is `NotDeclared` for the 28 of 34
+     * corpus styles with no `terrain` block, which is not a degradation and reports nothing.
+     */
+    val terrain: TerrainAcquisitionOutcome? = null,
+    /**
+     * The style's own `terrain.exaggeration`, carried beside [terrain] because the two are read from
+     * two different documents and only meet here: the multiplier is RenG's reading of the style JSON
+     * ([com.rohittp.reng.internal.basemap.BasemapStyleManifest.terrainExaggeration]), while
+     * everything else about the source is the engine's compiled descriptor. Rentile ignores the
+     * property entirely, so nothing in the descriptor could carry it.
+     */
+    val terrainExaggeration: Double = 1.0,
 )
 
 /**
@@ -615,6 +696,16 @@ internal class RenGRenderer(
 
     private val preparationMutex: Mutex = Mutex()
     private val geometryKeyDeriver: ResourceKeyDeriver = ResourceKeyDeriver()
+
+    /**
+     * Cycle C's task 20, reached at last: the frame's terrain descriptor and its DEM ring, acquired
+     * across the firewall.
+     *
+     * Constructed here rather than injected because it holds nothing -- it is a translation layer
+     * over [basemapEngineHost], which is the thing with state -- and because a renderer that never
+     * meets a `terrain` block never calls it.
+     */
+    private val terrainAcquisition: TerrainAcquisition = TerrainAcquisition(basemapEngineHost)
     private val geometryPipelines: MutableMap<ResourceKey, GeometryPipeline> = mutableMapOf()
 
     /**
@@ -995,6 +1086,15 @@ internal class RenGRenderer(
                 )
             }
 
+            // ADR 0041's two reports, and the only place RenG says out loud that a frame's ground is
+            // flatter than its style asked for. Once per frame, never once per tile, and never a
+            // failure: the frame prepared and it will draw. Over the frame's own ground tiles rather
+            // than over the request, so the perimeter ring -- which costs a replicated border texel
+            // and not a flat tile -- does not inflate the count.
+            acquired.terrain?.let { outcome ->
+                reportTerrainDegradation(outcome, groundCanonicalTiles, configuration.diagnosticSink)
+            }
+
             previousEncodedPlan = planned.encodedPlan
             previousSelectedLod = planned.spatialPlan.lodObservation.selectedLod
             previousLabelFade = labelFade.nextState
@@ -1015,6 +1115,7 @@ internal class RenGRenderer(
                     renderedTiles = acquired.basemapTiles,
                     styleDigest = acquired.basemapStyleDigest,
                 ),
+                terrain = preparedTerrain(acquired),
                 labels = labels,
                 mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
                 screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
@@ -1119,6 +1220,35 @@ internal class RenGRenderer(
                 ),
             )
         }
+
+    /**
+     * This frame's terrain in the form the draw needs, or `null` when it has none to draw with.
+     *
+     * **`Degraded` collapses to `null` here rather than being carried**, because by this point ADR
+     * 0041's report has already been emitted and the two degradations have exactly one remaining
+     * consequence: the whole ground draws flat, which is what a `null` terrain means. Carrying the
+     * reason onward would put a second authority on that decision inside the draw.
+     *
+     * An `Acquired` outcome with **no** DEM tiles is deliberately *not* collapsed. Its per-frame
+     * uniforms — the decode, the interior size, the exaggeration — are properties of the source
+     * rather than of the coverage, so the frame keeps them, every tile draws flat because each one
+     * individually has no DEM, and the coverage diagnostic has already named the count. Collapsing
+     * would make the frame's granularity fall back to the flat rule as a side effect of a coverage
+     * gap, which is a different picture from the one the style asked for.
+     */
+    private fun preparedTerrain(acquired: FrameAcquisition): PreparedTerrain? {
+        val outcome = acquired.terrain as? TerrainAcquisitionOutcome.Acquired ?: return null
+        val demTiles = LinkedHashMap<CanonicalBasemapTile, AcquiredDemTile>()
+        outcome.requestedTiles.forEach { tile ->
+            outcome.demTileFor(tile)?.let { demTiles[tile] = it }
+        }
+        return PreparedTerrain(
+            encoding = outcome.source.encoding,
+            tileSizePx = outcome.source.tileSizePx,
+            exaggeration = acquired.terrainExaggeration,
+            demTiles = demTiles,
+        )
+    }
 
     /**
      * Pairs every unwrapped draw [instances] entry with the rendered tile it draws, by deriving RenG's
@@ -1353,6 +1483,8 @@ internal class RenGRenderer(
 
         var basemapTiles: List<RenderedBasemapTile> = emptyList()
         var basemapStyleDigest: String? = null
+        var terrain: TerrainAcquisitionOutcome? = null
+        var terrainExaggeration = 1.0
         var labelCandidates: AcquiredLabelCandidates? = null
         // Read inside the invocation and carried out of it, because the registry that holds it is
         // discarded when the invocation ends (ADR 0016). It is the manifest of the sprite pair this
@@ -1393,6 +1525,13 @@ internal class RenGRenderer(
                     if (manifest != null && canonicalTiles.isNotEmpty()) {
                         basemapTiles = renderBasemapTiles(manifest, style, canonicalTiles, accessMode)
                         basemapStyleDigest = style.digest
+                        // Inside the invocation, on the routes `tileTimeRoutes` already preregistered
+                        // for every `raster-dem` source (the 3x3 neighbourhood, which the ring is a
+                        // subset of at any overzoom). Never throws for an acquisition failure: ADR
+                        // 0041 makes terrain the one basemap resource that degrades to a picture RenG
+                        // has already shipped rather than costing the frame.
+                        terrain = terrainAcquisition.acquire(style, manifest, canonicalTiles)
+                        terrainExaggeration = manifest.terrainExaggeration
                     }
                     if (manifest != null && labelTiles.isNotEmpty()) {
                         val handover = labelHandover(manifest, style, labelTiles, accessMode)
@@ -1436,7 +1575,15 @@ internal class RenGRenderer(
             }
             reference.resourceKey to image
         }
-        return FrameAcquisition(decodedByKey, basemapTiles, basemapStyleDigest, labelCandidates, spriteAtlas)
+        return FrameAcquisition(
+            decodedByKey,
+            basemapTiles,
+            basemapStyleDigest,
+            labelCandidates,
+            spriteAtlas,
+            terrain,
+            terrainExaggeration,
+        )
     }
 
     /**
@@ -1961,6 +2108,7 @@ internal class RenGRenderer(
             stickers = sceneStickers,
             geometries = sceneGeometries,
             groundTiles = sceneGroundTiles,
+            terrain = sceneTerrain(frame),
             models = sceneModels,
             labels = sceneLabels(frame, textureLeases),
             icons = sceneIcons(frame, textureLeases),
@@ -1999,6 +2147,37 @@ internal class RenGRenderer(
             composite = composite,
             targetFramebuffer = framebufferName,
             content = content,
+        )
+    }
+
+    /**
+     * This frame's terrain in the form the ground pass consumes, or `null` when it has none.
+     *
+     * **The granularity is derived here rather than in the GL layer because this is where the camera
+     * is legible.** `terrainCellsPerTileSide` needs the plan's own zoom, latitude, projection mode
+     * and selected LOD; `SceneContent` holds a resolved camera whose zoom has already been spent
+     * into matrices. What crosses is terrain's *claim* on the granularity — `SceneContent`
+     * reconciles it with the globe's curvature claim, because a frame draws its whole ground at one
+     * granularity or a sliver of background shows between two tiles that disagree.
+     *
+     * The LOD is read off the first ground instance rather than from the plan: both tile selectors
+     * emit one LOD per frame, which is the premise the whole one-granularity rule rests on, and a
+     * frame with no ground instances returns `null` above before reaching here.
+     */
+    private fun sceneTerrain(frame: RenGPreparedFrame): SceneTerrain? {
+        val terrain = frame.terrain ?: return null
+        val selectedLod = frame.groundInstances.firstOrNull()?.instance?.lod ?: return null
+        return SceneTerrain(
+            decode = demDecodeCoefficients(terrain.encoding),
+            interiorSizePx = terrain.tileSizePx,
+            exaggeration = terrain.exaggeration,
+            cellsPerTileSide = terrainCellsPerTileSide(
+                terrain = TerrainGranularityInputs(terrain.tileSizePx),
+                projectionMode = frame.projectionMode,
+                zoom = frame.camera.zoom,
+                latitude = frame.camera.latitude,
+                selectedLod = selectedLod,
+            ),
         )
     }
 
@@ -2180,12 +2359,18 @@ internal class RenGRenderer(
 
         val renderedByKey = frame.basemapTiles.associateBy { it.key }
         val texturesByKey = HashMap<ResourceKey, Int>(renderedByKey.size)
+        val elevationByTile = resolveDemTextures(frame.terrain, groundLeases)
         val tiles = ArrayList<SceneGroundTile>(groundInstances.size)
         for (groundInstance in groundInstances) {
             val key = groundInstance.resourceKey
             val cached = texturesByKey[key]
+            val elevation = elevationByTile[canonicalTileOf(groundInstance.instance)]
             if (cached != null) {
-                tiles += SceneGroundTile(instance = groundInstance.instance, texture = cached)
+                tiles += SceneGroundTile(
+                    instance = groundInstance.instance,
+                    texture = cached,
+                    elevation = elevation,
+                )
                 continue
             }
             val reused = glObjectRegistry.leaseResident(key)
@@ -2214,10 +2399,82 @@ internal class RenGRenderer(
                 name
             }
             texturesByKey[key] = texture
-            tiles += SceneGroundTile(instance = groundInstance.instance, texture = texture)
+            tiles += SceneGroundTile(
+                instance = groundInstance.instance,
+                texture = texture,
+                elevation = elevation,
+            )
         }
         return GroundTilesResult.Resolved(tiles)
     }
+
+    /**
+     * Decodes, pads and uploads this frame's DEMs, and answers which padded texture and which window
+     * each **canonical** ground tile samples.
+     *
+     * **Four steps, and every one of them can decline without failing the frame** (ADR 0041). A tile
+     * whose bytes are not a PNG RenG can decode, whose image disagrees with the descriptor's
+     * `tileSizePx`, whose alpha is not opaque, whose source is not its request's ancestor, or whose
+     * source never arrived at all, simply gets no entry here — and a ground tile with no entry draws
+     * flat beside its displaced neighbours. Nothing here throws and nothing here retries.
+     *
+     * **The texture is the *source* tile's, and the window is what makes several requests share it.**
+     * Under overzoom `sampleFor` answers many requested tiles from one DEM image, so the padded
+     * texture is assembled once per source tile, keyed by content, and `demTileWindowFor` gives each
+     * requested tile its own sub-rectangle of it. The ring the acquisition paid for is what
+     * guarantees the source tile's own eight neighbours are present to be padded with.
+     *
+     * **The key is [PaddedDemTexture.contentKey], never the centre tile's digest**, which is the one
+     * trap in this function and is invisible when got wrong: a centre-keyed texture hits residency in
+     * the frame after an absent neighbour arrives and serves the replicated ring to a frame that
+     * could have closed the seam. `ResourceKeyDeriver.paddedDemTexture` takes the composed key by
+     * signature so the correct input is the only one that type-checks.
+     *
+     * Every upload leaves a lease in [groundLeases], released by [performDraw]'s `finally` with the
+     * ground textures': a DEM competes for `maximumResidentGpuTextureBytes` on exactly the terms a
+     * tile does, and an unreleased lease is a texture the budget could never reclaim.
+     */
+    private fun resolveDemTextures(
+        terrain: PreparedTerrain?,
+        groundLeases: MutableList<TextureLease>,
+    ): Map<CanonicalBasemapTile, SceneTileDem> {
+        if (terrain == null) return emptyMap()
+        val acquired = terrain.demTiles
+        if (acquired.isEmpty()) return emptyMap()
+
+        // One decode per *source* tile, which is also one per distinct DEM image: several requested
+        // tiles overzooming into one ancestor arrive here as several entries carrying the identical
+        // bytes and the identical digest.
+        val texelsBySource = LinkedHashMap<DemTileCoordinate, DemTexels>()
+        acquired.values.forEach { dem ->
+            if (dem.sourceTile in texelsBySource) return@forEach
+            val decoded = decodeDemTexels(
+                bytes = dem.bytes,
+                tileSizePx = terrain.tileSizePx,
+                maximumDecodedBytes = configuration.resourceLimits.maximumDecodedImageBytes,
+                contentDigest = dem.contentDigest,
+            )
+            if (decoded is DemTexelDecodeResult.Success) texelsBySource[dem.sourceTile] = decoded.texels
+        }
+
+        val texturesBySource = HashMap<DemTileCoordinate, Int>(texelsBySource.size)
+        val resolved = LinkedHashMap<CanonicalBasemapTile, SceneTileDem>(acquired.size)
+        acquired.forEach { (tile, dem) ->
+            val window = demTileWindowFor(dem.requestedTile, dem.sourceTile) ?: return@forEach
+            val texture = texturesBySource.getOrElse(dem.sourceTile) {
+                val padded = padDemTexture(dem.sourceTile, texelsBySource) ?: return@forEach
+                val key = geometryKeyDeriver.paddedDemTexture(padded.contentKey).key
+                val leased = uploadDemTexture(binding, glObjectRegistry, key, padded)
+                groundLeases += leased.lease
+                leased.handle.name.also { texturesBySource[dem.sourceTile] = it }
+            }
+            resolved[tile] = SceneTileDem(demTexture = texture, window = window)
+        }
+        return resolved
+    }
+
+    private fun canonicalTileOf(instance: BasemapTileInstance): CanonicalBasemapTile =
+        CanonicalBasemapTile(lod = instance.lod, tileY = instance.tileY, canonicalX = instance.canonicalX)
 
     /**
      * Task 9b item 1: the texture-lifetime fix. Looks [key] up in [glObjectRegistry] first — the
