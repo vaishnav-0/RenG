@@ -27,6 +27,8 @@ import com.rohittp.reng.internal.gl.GlObjectHandle
 import com.rohittp.reng.internal.gl.GlObjectRegistry
 import com.rohittp.reng.internal.gl.GlObjectType
 import com.rohittp.reng.internal.gl.GlProgramCache
+import com.rohittp.reng.internal.gl.GlobeGroundPipeline
+import com.rohittp.reng.internal.gl.GlobeGroundPipelineResult
 import com.rohittp.reng.internal.gl.GpuTextureResidency
 import com.rohittp.reng.internal.gl.GroundPipeline
 import com.rohittp.reng.internal.gl.GroundPipelineResult
@@ -57,6 +59,7 @@ import com.rohittp.reng.internal.gl.UploadedPrimitive
 import com.rohittp.reng.internal.gl.allModelShaderVariants
 import com.rohittp.reng.internal.gl.createCompositePipeline
 import com.rohittp.reng.internal.gl.createGeometryPipeline
+import com.rohittp.reng.internal.gl.createGlobeGroundPipeline
 import com.rohittp.reng.internal.gl.createGroundPipeline
 import com.rohittp.reng.internal.gl.ResolvedIconQuad
 import com.rohittp.reng.internal.gl.createIconPipeline
@@ -67,6 +70,7 @@ import com.rohittp.reng.internal.gl.createStickerPipeline
 import com.rohittp.reng.internal.gl.defaultSamplerStateFor
 import com.rohittp.reng.internal.gl.deleteCompositePipeline
 import com.rohittp.reng.internal.gl.deleteGeometryPipeline
+import com.rohittp.reng.internal.gl.deleteGlobeGroundPipeline
 import com.rohittp.reng.internal.gl.deleteGlObjects
 import com.rohittp.reng.internal.gl.deleteGroundPipeline
 import com.rohittp.reng.internal.gl.deleteIconPipeline
@@ -119,7 +123,9 @@ import com.rohittp.reng.internal.planning.FramePlanningRequest
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.StaticResourceReference
 import com.rohittp.reng.internal.preparation.buildResourceOperationDefinition
-import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
+import com.rohittp.reng.internal.projection.ResolvedFrameCamera
+import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
+import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import com.rohittp.reng.internal.projection.resolveMercatorCamera
 import com.rohittp.reng.internal.renGFailure
 import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
@@ -306,6 +312,14 @@ internal class RenGPreparedFrame(
     internal val owner: RenGRenderer,
     override val frameIndex: Long,
     internal val camera: Camera,
+    /**
+     * Which projection the plan asked for, carried because [camera] alone cannot say: [Camera]'s
+     * five fields mean the same thing in both modes and it is the *mode* that decides whether they
+     * describe a plane or a sphere (ADR 0037). A Prepared Frame used to carry no projection mode at
+     * all, which was honest while `FramePlanningCore` refused `GLOBE`; without it the draw would
+     * have to guess, and the guess it would make is the one that draws a globe frame flat.
+     */
+    internal val projectionMode: ProjectionMode,
     internal val drawBasemap: Boolean,
     /**
      * Carried beside [drawBasemap] because a Prepared Frame records the whole plan's draw switches,
@@ -662,6 +676,18 @@ internal class RenGRenderer(
      */
     private var iconPipeline: IconPipeline? = initialGlState.iconPipeline
 
+    /**
+     * ADR 0038's globe ground, allocated lazily with the model pipelines rather than eagerly with the
+     * five above.
+     *
+     * `FramePlan.projectionMode` defaults to `MERCATOR`, so a renderer that never draws a globe must
+     * never compile the globe ground program — the same reason `modelPipelines` is lazy, and the
+     * opposite of `labelPipeline`'s (`drawLabels` defaults to `true`). It is created on the first
+     * globe frame that actually carries ground tiles, forgotten on a lost context exactly as the
+     * model pipelines are, and deleted by `close()`.
+     */
+    private var globeGroundPipeline: GlobeGroundPipeline? = null
+
     private var identityRegistry: CanonicalIdentityRegistry = CanonicalIdentityRegistry()
     private var framePlanningCore: FramePlanningCore = newFramePlanningCore(identityRegistry)
     private var previousEncodedPlan: EncodedFramePlan? = null
@@ -977,6 +1003,7 @@ internal class RenGRenderer(
                 owner = this,
                 frameIndex = plan.frameIndex,
                 camera = plan.camera,
+                projectionMode = plan.projectionMode,
                 drawBasemap = plan.drawBasemap,
                 drawLabels = plan.drawLabels,
                 stickers = stickers,
@@ -1691,6 +1718,7 @@ internal class RenGRenderer(
         groundPipeline = null
         labelPipeline = null
         iconPipeline = null
+        globeGroundPipeline = null
         geometryPipelines.clear()
         // The model pipelines and every uploaded primitive are forgotten on exactly the same terms and
         // in exactly the same place as the geometry pipelines above: the joint uniform buffers, the
@@ -1784,7 +1812,7 @@ internal class RenGRenderer(
         val label = requireNotNull(labelPipeline) { "drawing requires the label pipeline" }
         val icon = requireNotNull(iconPipeline) { "drawing requires the icon pipeline" }
 
-        val resolvedCamera = resolveFrameCamera(frame.camera)
+        val resolvedCamera = resolveFrameCamera(frame.camera, frame.projectionMode)
 
         // Every ground texture lease this draw takes is released in the `finally` below -- on the
         // failure returns inside, and on a throw out of drawFrame. An unreleased lease is permanently
@@ -1872,7 +1900,7 @@ internal class RenGRenderer(
         ground: GroundPipeline,
         label: LabelPipeline,
         icon: IconPipeline,
-        resolvedCamera: ResolvedMercatorCamera,
+        resolvedCamera: ResolvedFrameCamera,
         sceneGroundTiles: List<SceneGroundTile>,
         textureLeases: MutableList<TextureLease>,
     ): FailureDescriptor? {
@@ -1939,7 +1967,30 @@ internal class RenGRenderer(
             mapOrder = frame.mapOrder,
             screenOrder = frame.screenOrder,
         )
-        val content = SceneContent(resolvedCamera, scene, sticker, ground, modelPipelines, label, icon)
+        // Compiled on the first globe frame that actually has ground to draw, and never on a
+        // mercator one: a `Failed` here is this draw's failure, exactly as a model pipeline's is a
+        // few lines above.
+        val globeGround = if (resolvedCamera is ResolvedGlobeCamera && sceneGroundTiles.isNotEmpty()) {
+            globeGroundPipeline ?: when (
+                val result = createGlobeGroundPipeline(binding, profile.dialect, programs)
+            ) {
+                is GlobeGroundPipelineResult.Created -> result.pipeline.also { globeGroundPipeline = it }
+                is GlobeGroundPipelineResult.Failed -> return result.failure
+            }
+        } else {
+            null
+        }
+
+        val content = SceneContent(
+            camera = resolvedCamera,
+            scene = scene,
+            stickerPipeline = sticker,
+            groundPipeline = ground,
+            modelPipelines = modelPipelines,
+            labelPipeline = label,
+            iconPipeline = icon,
+            globeGroundPipeline = globeGround,
+        )
 
         return drawFrame(
             binding = binding,
@@ -2189,9 +2240,11 @@ internal class RenGRenderer(
 
     /**
      * Resolves [camera] against the fixed output pixel size a second time (the first was inside
-     * `FramePlanningCore.plan()`'s own `planMercatorSpatial` call, at `prepare()` time). This mirrors
+     * `FramePlanningCore.plan()`'s own spatial-planning call, at `prepare()` time), through whichever
+     * of the two resolvers [projectionMode] names — the same `when` `FramePlanningCore` runs, and the
+     * reason [RenGPreparedFrame] carries a projection mode at all. This mirrors
      * [SceneContent]'s own re-resolution of `Placement`/`Geometry` at draw time and accepts the same
-     * redundant-but-safe reasoning: [resolveMercatorCamera] is pure and deterministic in its two
+     * redundant-but-safe reasoning: both resolvers are pure and deterministic in their two
      * inputs, [camera] cannot have changed since `prepare()` validated it (it is `RenGPreparedFrame`'s
      * own immutable field, not the caller's live [FramePlan]), and `configuration.outputPixelSize` is
      * fixed for the renderer's whole lifetime (ADR 0012). A failure here is therefore a caller
@@ -2200,8 +2253,16 @@ internal class RenGRenderer(
      * that exact same shared function, as a typed [RenGException] (`INVALID_VALUE` at `DRAW`)
      * rather than the bare `error(...)` this used to throw directly.
      */
-    private fun resolveFrameCamera(camera: Camera): ResolvedMercatorCamera =
-        resolveMercatorCamera(camera, configuration.outputPixelSize).requireResolvedAtDrawTime()
+    private fun resolveFrameCamera(
+        camera: Camera,
+        projectionMode: ProjectionMode,
+    ): ResolvedFrameCamera = when (projectionMode) {
+        ProjectionMode.MERCATOR ->
+            resolveMercatorCamera(camera, configuration.outputPixelSize).requireResolvedAtDrawTime()
+
+        ProjectionMode.GLOBE ->
+            resolveGlobeCamera(camera, configuration.outputPixelSize).requireResolvedAtDrawTime()
+    }
 
     // ---- Prepared-frame lifecycle -----------------------------------------------------------------
 
@@ -2227,6 +2288,10 @@ internal class RenGRenderer(
                 compositePipeline?.let { deleteCompositePipeline(binding, programs, it) }
                 stickerPipeline?.let { deleteStickerPipeline(binding, programs, it) }
                 groundPipeline?.let { deleteGroundPipeline(binding, programs, it) }
+                // Deleted here on `geometryPipelines`' terms rather than the registry's: the pipeline
+                // owns its program and every cached grid's vertex array and buffers directly, none of
+                // which is registered under a ResourceKey.
+                globeGroundPipeline?.let { deleteGlobeGroundPipeline(binding, programs, it) }
                 labelPipeline?.let { deleteLabelPipeline(binding, programs, it) }
                 iconPipeline?.let { deleteIconPipeline(binding, programs, it) }
                 geometryPipelines.values.forEach { deleteGeometryPipeline(binding, programs, it) }
@@ -2253,6 +2318,7 @@ internal class RenGRenderer(
                 groundPipeline = null
                 labelPipeline = null
                 iconPipeline = null
+                globeGroundPipeline = null
                 residentCache.closeAll()
                 // CONTEXT.md's Close entry says a close "releases CPU state", and these two are exactly
                 // that and nothing more: an immutable Rentile batch and one decoded atlas, no GL handle

@@ -1,6 +1,5 @@
 package com.rohittp.reng.internal.gl
 
-import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.internal.shader.scanShaderProfile
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -106,7 +105,7 @@ class GroundPipelineTest {
         val binding = newBinding()
         val pipeline = createdPipeline(binding)
         binding.log.clear()
-        drawGround(binding, pipeline, listOf(resolvedTile()), ProjectionMode.MERCATOR)
+        drawGround(binding, pipeline, listOf(resolvedTile()))
         assertTrue(binding.log.contains("enable(${hex(GL_DEPTH_TEST)})"), "the ground is depth-tested")
         val maskedOff = binding.log.indexOfFirst { it == "depthMask(false)" }
         val firstDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
@@ -123,7 +122,7 @@ class GroundPipelineTest {
         val binding = newBinding()
         val pipeline = createdPipeline(binding)
         binding.log.clear()
-        drawGround(binding, pipeline, listOf(resolvedTile()), ProjectionMode.MERCATOR)
+        drawGround(binding, pipeline, listOf(resolvedTile()))
         assertTrue(binding.log.any { it == "blendFuncSeparate(0x1,0x303,0x1,0x303)" })
         assertFalse(binding.log.any { it.startsWith("blendFuncSeparate(0x302,") })
     }
@@ -136,7 +135,6 @@ class GroundPipelineTest {
             binding,
             pipeline,
             listOf(resolvedTile(texture = 11), resolvedTile(texture = 22)),
-            ProjectionMode.MERCATOR,
         )
         val first = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},11)" }
         val second = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},22)" }
@@ -148,7 +146,7 @@ class GroundPipelineTest {
         val binding = newBinding()
         val pipeline = createdPipeline(binding)
         binding.log.clear()
-        drawGround(binding, pipeline, emptyList(), ProjectionMode.MERCATOR)
+        drawGround(binding, pipeline, emptyList())
         assertContentEquals(emptyList(), binding.log)
     }
 
@@ -156,7 +154,7 @@ class GroundPipelineTest {
         val binding = newBinding()
         val pipeline = createdPipeline(binding)
         binding.log.clear()
-        drawGround(binding, pipeline, listOf(resolvedTile()), ProjectionMode.MERCATOR)
+        drawGround(binding, pipeline, listOf(resolvedTile()))
         assertTrue(binding.log.any { it == "uniformMatrix4fv($MODEL_VIEW_PROJECTION_LOCATION,1,false)" })
         assertTrue(binding.log.any { it == "uniform1i($TEXTURE_LOCATION,0)" })
     }
@@ -167,22 +165,28 @@ class GroundPipelineTest {
         assertEquals(-1, pipeline.modelViewProjectionUniformLocation)
         assertEquals(-1, pipeline.textureUniformLocation)
         binding.log.clear()
-        drawGround(binding, pipeline, listOf(resolvedTile()), ProjectionMode.MERCATOR)
+        drawGround(binding, pipeline, listOf(resolvedTile()))
         assertFalse(binding.log.any { it.startsWith("uniformMatrix4fv") })
         assertFalse(binding.log.any { it.startsWith("uniform1i") })
     }
 
     /**
-     * ADR 0038's ownership half, mercator arm. Before this cycle `drawGround` set no cull state at
-     * all and inherited whatever the caller had left enabled — harmless only because [GROUND_QUAD]
-     * happens to wind counter-clockwise. The disable is what makes a mercator frame's pixels a
-     * function of this pass rather than of its caller.
+     * ADR 0038's ownership half, and the whole of it for this pass. Before Cycle G `drawGround` set
+     * no cull state at all and inherited whatever the caller had left enabled — harmless only
+     * because [GROUND_QUAD] happens to wind counter-clockwise. The disable is what makes a mercator
+     * frame's pixels a function of this pass rather than of its caller.
+     *
+     * **The globe arm this pair used to have is gone**, with task 10: `drawGround` is the Mercator
+     * ground and `drawGlobeGround` is the globe's, and the enable ADR 0038 asks for on a sphere is
+     * unconditional in the latter (`GlobeGroundPipelineTest`). Two cases here — "the globe enables
+     * culling before it draws" and "the two modes differ by exactly one GL call" — measured an arm
+     * that no longer exists.
      */
-    @Test fun underMercatorTheGroundDisablesCullingRatherThanInheritingIt() {
+    @Test fun theGroundDisablesCullingRatherThanInheritingIt() {
         val binding = newBinding()
         val pipeline = createdPipeline(binding)
         binding.log.clear()
-        drawGround(binding, pipeline, listOf(resolvedTile()), ProjectionMode.MERCATOR)
+        drawGround(binding, pipeline, listOf(resolvedTile()))
         val disabled = binding.log.indexOfFirst { it == "disable(${hex(GL_CULL_FACE)})" }
         val firstDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
         assertTrue(firstDraw >= 0, "the ground must actually draw")
@@ -194,59 +198,6 @@ class GroundPipelineTest {
         assertFalse(
             binding.log.any { it == "enable(${hex(GL_CULL_FACE)})" },
             "mercator must never enable culling",
-        )
-    }
-
-    /**
-     * ADR 0038's globe arm: on a sphere the far hemisphere is exactly the back-facing set, so the
-     * enable is the whole mechanism. `drawFrame` has already established `GL_CCW`/`GL_BACK` for the
-     * scene, which is why neither is restated here.
-     */
-    @Test fun onAGlobeTheGroundEnablesCullingBeforeItDraws() {
-        val binding = newBinding()
-        val pipeline = createdPipeline(binding)
-        binding.log.clear()
-        drawGround(binding, pipeline, listOf(resolvedTile()), ProjectionMode.GLOBE)
-        val enabled = binding.log.indexOfFirst { it == "enable(${hex(GL_CULL_FACE)})" }
-        val firstDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
-        assertTrue(firstDraw >= 0, "the ground must actually draw")
-        assertTrue(
-            enabled in 0 until firstDraw,
-            "on a globe the ground must enable culling before it draws: ${binding.log}",
-        )
-        assertFalse(
-            binding.log.any { it == "disable(${hex(GL_CULL_FACE)})" },
-            "the globe must never disable culling",
-        )
-    }
-
-    /**
-     * The two arms must differ in **exactly** the cull enable and in nothing else. This is the call-log
-     * half of "no mercator pixel moves": a globe arm that also changed the blend function, the depth
-     * state, the winding or the draw count would pass both tests above and still move pixels under
-     * mercator once anything threaded the mode through. Stripping one call from each log and comparing
-     * the remainder is what makes that claim rather than merely implying it.
-     */
-    @Test fun theTwoProjectionModesDifferByExactlyOneGlCall() {
-        val mercatorBinding = newBinding()
-        val mercator = createdPipeline(mercatorBinding)
-        mercatorBinding.log.clear()
-        drawGround(mercatorBinding, mercator, listOf(resolvedTile()), ProjectionMode.MERCATOR)
-
-        val globeBinding = newBinding()
-        val globe = createdPipeline(globeBinding)
-        globeBinding.log.clear()
-        drawGround(globeBinding, globe, listOf(resolvedTile()), ProjectionMode.GLOBE)
-
-        assertEquals(
-            mercatorBinding.log.size,
-            globeBinding.log.size,
-            "the two arms must issue the same number of calls",
-        )
-        assertContentEquals(
-            mercatorBinding.log.filter { it != "disable(${hex(GL_CULL_FACE)})" },
-            globeBinding.log.filter { it != "enable(${hex(GL_CULL_FACE)})" },
-            "the globe arm must change the cull enable and nothing else",
         )
     }
 

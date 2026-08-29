@@ -103,7 +103,7 @@ internal sealed interface StaticResourceReference {
 internal class PlannedFrameCore(
     val encodedPlan: EncodedFramePlan,
     val structuralDiff: FrameStructuralDiff,
-    val spatialPlan: MercatorSpatialPlan,
+    val spatialPlan: FrameSpatialPlan,
     staticResourceTraversal: List<StaticResourceReference>,
 ) {
     private val staticResourceTraversalSnapshot: List<StaticResourceReference> =
@@ -166,17 +166,20 @@ internal class FramePlanningCore(
 ) {
     internal fun plan(request: FramePlanningRequest): FramePlanningOutcome {
         val plan = request.plan
-        when (plan.projectionMode) {
-            ProjectionMode.GLOBE -> return unsupportedProjectionModeFailure()
-            ProjectionMode.MERCATOR -> Unit
+        // Cycle G task 10: this `when` used to be `GLOBE -> return unsupportedProjectionModeFailure()`.
+        // It is spelled as an exhaustive dispatch to two sibling planners rather than as one planner
+        // taking a mode, because the globe's footprint and tile selection are not the Mercator ones
+        // reparameterised -- see `planGlobeSpatial` and `selectGlobeTiles` for what actually differs.
+        val spatialPlanner = when (plan.projectionMode) {
+            ProjectionMode.GLOBE -> ::planGlobeSpatial
+            ProjectionMode.MERCATOR -> ::planMercatorSpatial
         }
-
-        val spatialOutcome = planMercatorSpatial(
-            plan = plan,
-            outputPixelSize = request.outputPixelSize,
-            previousSelectedLod = request.previousSelectedLod,
-            maximumBasemapTileInstances = request.maximumBasemapTileInstances,
-            basemapStyleConfigured = request.basemapStyle != null,
+        val spatialOutcome = spatialPlanner(
+            plan,
+            request.outputPixelSize,
+            request.previousSelectedLod,
+            request.maximumBasemapTileInstances,
+            request.basemapStyle != null,
         )
         if (spatialOutcome is SpatialOutcome.Failure) {
             return FramePlanningOutcome.Failure(spatialOutcome.failure)
@@ -288,17 +291,6 @@ private fun frameIdentityCollisionFailure(): FramePlanningOutcome.Failure = Fram
         diagnostic = failureContextDiagnostic(
             stage = PipelineStage.FRAME_PLANNING,
             fieldName = DiagnosticField.FRAME_IDENTITY,
-        ),
-    ),
-)
-
-private fun unsupportedProjectionModeFailure(): FramePlanningOutcome.Failure = FramePlanningOutcome.Failure(
-    FailureDescriptor(
-        code = RenGErrorCode.UNSUPPORTED_PROJECTION_MODE,
-        stage = PipelineStage.FRAME_PLANNING,
-        diagnostic = failureContextDiagnostic(
-            stage = PipelineStage.FRAME_PLANNING,
-            fieldName = DiagnosticField.PROJECTION_MODE,
         ),
     ),
 )

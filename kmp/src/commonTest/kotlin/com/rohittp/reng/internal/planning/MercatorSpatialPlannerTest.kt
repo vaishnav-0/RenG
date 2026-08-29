@@ -32,7 +32,7 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-class MercatorSpatialPlannerTest {
+class FrameSpatialPlannerTest {
     @Test
     fun inactiveBasemapStillObservesLodWithoutFootprintSelectionOrBudgetWork() {
         val exactLatitude = 31.1234567890123
@@ -67,10 +67,10 @@ class MercatorSpatialPlannerTest {
             assertEquals(4, spatialPlan.lodObservation.selectedLod)
             assertNull(spatialPlan.footprint)
             assertNull(spatialPlan.tileSelection)
-            assertEquals(exactLatitude.toBits(), spatialPlan.camera.geographicGroundAnchor.latitude.toBits())
+            assertEquals(exactLatitude.toBits(), spatialPlan.mercatorCamera.geographicGroundAnchor.latitude.toBits())
             assertEquals(
                 exactLongitude.toBits(),
-                spatialPlan.camera.geographicGroundAnchor.unwrappedLongitude.toBits(),
+                spatialPlan.mercatorCamera.geographicGroundAnchor.unwrappedLongitude.toBits(),
             )
         }
 
@@ -103,7 +103,7 @@ class MercatorSpatialPlannerTest {
     fun eitherDrawSwitchSelectsTheSameTilesAndOnlyNeitherSelectsNone() {
         val camera = Camera(latitude = -55.0, unwrappedLongitude = -135.0, zoom = 4.0, bearing = 0.0, pitch = 0.0)
 
-        fun selectionFor(drawBasemap: Boolean, drawLabels: Boolean): MercatorSpatialPlan = planSuccess(
+        fun selectionFor(drawBasemap: Boolean, drawLabels: Boolean): FrameSpatialPlan = planSuccess(
             plan = framePlan(camera = camera, drawBasemap = drawBasemap, drawLabels = drawLabels),
             outputPixelSize = OutputPixelSize(64, 64),
             maximumBasemapTileInstances = 512,
@@ -274,11 +274,11 @@ class MercatorSpatialPlannerTest {
             spatialPlan.screenEntries.map(ResolvedDrawnThing::reference),
         )
         assertEquals(
-            resolvePlacement(mapStickerPlacement, spatialPlan.camera).successValue(),
+            resolvePlacement(mapStickerPlacement, spatialPlan.mercatorCamera).successValue(),
             spatialPlan.mapEntries[0].placement,
         )
         assertEquals(
-            resolvePlacement(screenStickerPlacement, spatialPlan.camera).successValue(),
+            resolvePlacement(screenStickerPlacement, spatialPlan.mercatorCamera).successValue(),
             spatialPlan.screenEntries[0].placement,
         )
         assertEquals(DrawRegime.MAP_OCCLUDED, spatialPlan.mapEntries[0].placement.drawRegime)
@@ -348,8 +348,8 @@ class MercatorSpatialPlannerTest {
 
         assertEquals(
             listOf(
-                resolveGeometry(first, spatialPlan.camera).successValue(),
-                resolveGeometry(second, spatialPlan.camera).successValue(),
+                resolveGeometry(first, spatialPlan.mercatorCamera).successValue(),
+                resolveGeometry(second, spatialPlan.mercatorCamera).successValue(),
             ),
             spatialPlan.geometries,
         )
@@ -365,7 +365,7 @@ class MercatorSpatialPlannerTest {
         val firstCorners = spatialPlan.geometries[0].cornersClockwiseFromTopLeft
         assertEquals(4, firstCorners.size)
         assertEquals(
-            resolveGeometry(first, spatialPlan.camera).successValue().cornersClockwiseFromTopLeft,
+            resolveGeometry(first, spatialPlan.mercatorCamera).successValue().cornersClockwiseFromTopLeft,
             firstCorners,
         )
     }
@@ -828,7 +828,7 @@ class MercatorSpatialPlannerTest {
             instances = listOf(BasemapTileInstance(0, 0, 0L, 0, 0)),
             canonicalResources = listOf(CanonicalBasemapTile(0, 0, 0)),
         )
-        val spatialPlan = MercatorSpatialPlan(
+        val spatialPlan = FrameSpatialPlan(
             camera = camera,
             lodObservation = LodObservation(0),
             footprint = footprint,
@@ -861,7 +861,7 @@ class MercatorSpatialPlannerTest {
         assertNotSame(firstGeometryRead, spatialPlan.geometries)
         assertNotSame(firstProfileRead, spatialPlan.shaderProfiles)
 
-        val structurallyEqual = MercatorSpatialPlan(
+        val structurallyEqual = FrameSpatialPlan(
             camera = camera.copy(),
             lodObservation = LodObservation(0),
             footprint = ClosedMercatorFootprint.Point(MercatorGroundPoint(0.5, 0.5)),
@@ -879,7 +879,7 @@ class MercatorSpatialPlannerTest {
                     requireNotNull(scanShaderProfile(geometry.shaderPair.fragmentSource)),
             ),
         )
-        val different = MercatorSpatialPlan(
+        val different = FrameSpatialPlan(
             camera = camera,
             lodObservation = LodObservation(1),
             footprint = footprint,
@@ -918,7 +918,7 @@ class MercatorSpatialPlannerTest {
         previousSelectedLod: Int? = null,
         maximumBasemapTileInstances: Int,
         basemapStyleConfigured: Boolean,
-    ): MercatorSpatialPlan = assertIs<SpatialOutcome.Success<MercatorSpatialPlan>>(
+    ): FrameSpatialPlan = assertIs<SpatialOutcome.Success<FrameSpatialPlan>>(
         planMercatorSpatial(
             plan = plan,
             outputPixelSize = outputPixelSize,
@@ -936,7 +936,7 @@ class MercatorSpatialPlannerTest {
         screenEntries: List<ResolvedDrawnThing> = emptyList(),
         geometries: List<ResolvedGeometry> = emptyList(),
         shaderProfiles: List<Pair<ShaderProfilePlan, ShaderProfilePlan>> = emptyList(),
-    ): MercatorSpatialPlan = MercatorSpatialPlan(
+    ): FrameSpatialPlan = FrameSpatialPlan(
         camera = camera,
         lodObservation = LodObservation(0),
         footprint = footprint,
@@ -1048,3 +1048,13 @@ class MercatorSpatialPlannerTest {
         }
     }
 }
+
+/**
+ * The plan's camera as the Mercator one it must be: [planMercatorSpatial] resolves exactly one
+ * camera type, and every case here that reads `geographicGroundAnchor` or hands the camera to
+ * `resolvePlacement`/`resolveGeometry` is asserting about *that* resolver's output. The cast is the
+ * assertion — a globe camera reaching a Mercator plan would fail here rather than at a later,
+ * less-explicable line.
+ */
+private val FrameSpatialPlan.mercatorCamera: ResolvedMercatorCamera
+    get() = assertIs<ResolvedMercatorCamera>(camera)

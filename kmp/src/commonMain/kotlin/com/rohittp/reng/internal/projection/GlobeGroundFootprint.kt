@@ -62,11 +62,20 @@ import kotlin.math.sqrt
  */
 internal class GlobeGroundFootprint internal constructor(
     halfSpaces: List<GlobeGroundHalfSpace>,
-) {
+) : FrameGroundFootprint {
     private val cameraHalfSpaces: List<GlobeGroundHalfSpace> = halfSpaces.toList()
 
     /** The camera half-spaces, unit-normalised, in [projectGlobe]'s globe-fixed frame. */
     val halfSpaces: List<GlobeGroundHalfSpace> get() = ArrayList(cameraHalfSpaces)
+
+    // Structural for [GlobeGroundHalfSpace]'s reason: a footprint is a value derived from a camera,
+    // and `internal.planning.FrameSpatialPlan` compares two plans by comparing what they derived.
+    override fun equals(other: Any?): Boolean =
+        other is GlobeGroundFootprint && cameraHalfSpaces == other.cameraHalfSpaces
+
+    override fun hashCode(): Int = cameraHalfSpaces.hashCode()
+
+    override fun toString(): String = "GlobeGroundFootprint(halfSpaces=$cameraHalfSpaces)"
 
     /**
      * Whether the surface point in unit direction [direction] is visible: in front of the near
@@ -141,6 +150,16 @@ internal class GlobeGroundHalfSpace internal constructor(
 ) {
     fun admits(direction: DoubleVector3): Boolean =
         normal.dot(direction) >= offset - ADMISSION_TOLERANCE
+
+    // Structural, because `FrameSpatialPlan` carries a footprint and two plans built from the same
+    // camera must compare equal -- identity equality would make every re-plan of an unmoved camera
+    // report a different frame.
+    override fun equals(other: Any?): Boolean =
+        other is GlobeGroundHalfSpace && normal == other.normal && offset == other.offset
+
+    override fun hashCode(): Int = 31 * normal.hashCode() + offset.hashCode()
+
+    override fun toString(): String = "GlobeGroundHalfSpace(normal=$normal, offset=$offset)"
 }
 
 /**

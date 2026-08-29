@@ -4,7 +4,6 @@ import com.rohittp.reng.Geometry
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.Placement
 import com.rohittp.reng.PipelineStage
-import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.RenGErrorCode
 import com.rohittp.reng.ShaderValue
 import com.rohittp.reng.internal.failureContextDiagnostic
@@ -20,6 +19,7 @@ import com.rohittp.reng.internal.planning.ResolvedGeometry
 import com.rohittp.reng.internal.planning.ResolvedPlacement
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.resolveBasemapTileQuad
+import com.rohittp.reng.internal.planning.resolveGlobePlacement
 import com.rohittp.reng.internal.planning.resolvePlacement
 import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
@@ -346,23 +346,29 @@ internal class Scene(
  * none, and a frame *with* labels and none supplied hits a `requireNotNull` at phase 5 rather than
  * silently drawing a labelless map that looks finished.
  *
- * **[projectionMode] reaches exactly one decision today: whether [drawGround] culls the far
- * hemisphere (ADR 0038).** It defaults to [ProjectionMode.MERCATOR] because nothing upstream can yet
- * supply anything else — a `PreparedFrame` carries no projection mode at all, and
- * `FramePlanningCore` still refuses [ProjectionMode.GLOBE] outright — so `RenGRenderer` has no globe
- * to pass down and does not pass one. Threading it from the frame plan is the globe cycle's own seam
- * work; until then this parameter is reached by tests, and a green mercator run says nothing about
- * whether a globe frame ever gets here.
+ * **[camera] is the frame's projection mode, and it is the only place that mode appears here.**
+ * `ResolvedFrameCamera` is sealed over the two modes, so every decision that differs between them —
+ * which ground entry point draws the basemap, which resolver a `Placement` goes through, which
+ * `geometryGrid` overload subdivides a `Geometry` — is an exhaustive `when` on this one value. This
+ * class used to take a separate `projectionMode: ProjectionMode` parameter defaulting to
+ * `MERCATOR`, which was the honest shape while `FramePlanningCore` still refused `GLOBE` and no
+ * globe camera could reach here; carrying both now would be two authorities on one rule, and the
+ * one that could disagree with the pixels is the parameter.
+ *
+ * **[globeGroundPipeline] is required exactly when a globe frame carries ground tiles**, and is
+ * `null` otherwise on [labelPipeline]'s terms: a mercator renderer must not pay for a program it
+ * will never use, and a globe frame that reaches the ground pass without one hits a `requireNotNull`
+ * rather than silently drawing a flat map.
  */
 internal class SceneContent(
-    private val camera: ResolvedMercatorCamera,
+    private val camera: ResolvedFrameCamera,
     private val scene: Scene,
     private val stickerPipeline: StickerPipeline,
     private val groundPipeline: GroundPipeline,
     private val modelPipelines: Map<ModelShaderVariant, ModelPipeline> = emptyMap(),
     private val labelPipeline: LabelPipeline? = null,
     private val iconPipeline: IconPipeline? = null,
-    private val projectionMode: ProjectionMode = ProjectionMode.MERCATOR,
+    private val globeGroundPipeline: GlobeGroundPipeline? = null,
 ) : GlFrameContent {
 
     override fun draw(binding: GlBinding) {
@@ -379,20 +385,7 @@ internal class SceneContent(
         if (scene.groundTiles.isNotEmpty()) {
             binding.enable(GL_DEPTH_TEST)
             binding.depthMask(false)
-            drawGround(
-                binding = binding,
-                pipeline = groundPipeline,
-                tiles = scene.groundTiles.map { tile ->
-                    ResolvedGroundTile(
-                        modelViewProjection = composeGroundModelViewProjection(
-                            camera,
-                            resolveBasemapTileQuad(tile.instance, camera),
-                        ),
-                        texture = tile.texture,
-                    )
-                },
-                projectionMode = projectionMode,
-            )
+            drawGroundPhase(binding)
         }
 
         if (scene.geometries.isNotEmpty()) {
@@ -411,14 +404,20 @@ internal class SceneContent(
             // the disable belongs here beside the depth state, for the same reason the depth state
             // does: `drawGeometry` cannot make these calls for itself.
             binding.disable(GL_CULL_FACE)
-            val geometryViewProjection = composeGeometryViewProjection(camera)
+            val geometryViewProjection = when (camera) {
+                is ResolvedMercatorCamera -> composeGeometryViewProjection(camera)
+                is ResolvedGlobeCamera -> composeGeometryViewProjection(camera)
+            }
             for (sceneGeometry in scene.geometries) {
-                // Subdivided and CPU-projected, in both projection modes, so that the matrix below
+                // Subdivided and CPU-projected, in both projection modes, so that the matrix above
                 // stays linear and a consumer's shader pair survives a globe unchanged (ADR 0008's
                 // 2026-08-29 erratum). Under Mercator the camera implies a single cell, so this
                 // resolves the same four corners `resolveGeometry` always did and the frame is the
                 // one `0.3.0` drew.
-                val grid = geometryGrid(sceneGeometry.geometry, camera).requireResolvedAtDrawTime()
+                val grid = when (camera) {
+                    is ResolvedMercatorCamera -> geometryGrid(sceneGeometry.geometry, camera)
+                    is ResolvedGlobeCamera -> geometryGrid(sceneGeometry.geometry, camera)
+                }.requireResolvedAtDrawTime()
                 drawGeometry(
                     binding = binding,
                     pipeline = sceneGeometry.pipeline,
@@ -457,7 +456,9 @@ internal class SceneContent(
             drawModels(
                 binding = binding,
                 pipelines = modelPipelines,
-                models = mapModels.map { resolveModel(it, camera) },
+                models = mapModels.mapNotNull { model ->
+                    drawTimePlacement(model.placement)?.let { resolveModel(model, camera, it) }
+                },
                 lightDirectionCameraSpace = sceneLightDirectionCameraSpace(camera),
             )
         }
@@ -473,7 +474,7 @@ internal class SceneContent(
             drawStickers(
                 binding,
                 stickerPipeline,
-                StickerWorld(mapStickers.map { mapAnchoredSticker(it) }),
+                StickerWorld(mapStickers.mapNotNull { mapAnchoredSticker(it) }),
             )
         }
 
@@ -586,12 +587,97 @@ internal class SceneContent(
     }
 
     /**
+     * Phase 1, at whichever of the two ground entry points this frame's projection mode names.
+     *
+     * **There are two of them and a globe frame must reach the second.** [drawGround] draws the flat
+     * `GROUND_QUAD` once per tile with a per-tile matrix; [drawGlobeGround] draws one shared,
+     * subdivided grid per tile with a per-tile `vec4` of edges and one matrix for the whole frame.
+     * Routing a globe frame to the first would draw a tangent plane — which is not obviously wrong on
+     * screen at high zoom, and is exactly the kind of defect that survives a look at the output — so
+     * the choice is an exhaustive `when` over the sealed camera rather than a flag.
+     *
+     * Every one of `drawGlobeGround`'s inputs is derived here from what the tiles already carry:
+     * `globeGroundTileEdges` from each instance's own `(lod, tileY, unwrappedX)`, and the frame's one
+     * granularity from the camera and that same LOD. The tiles all sit at one LOD because
+     * `selectGlobeTiles` emits one, which is the premise `globeGroundCellsPerTileSide` is written
+     * against: two meshes sharing a sphere edge at different granularities leave a sliver of
+     * background between them.
+     */
+    private fun drawGroundPhase(binding: GlBinding) {
+        when (camera) {
+            is ResolvedMercatorCamera -> drawGround(
+                binding = binding,
+                pipeline = groundPipeline,
+                tiles = scene.groundTiles.map { tile ->
+                    ResolvedGroundTile(
+                        modelViewProjection = composeGroundModelViewProjection(
+                            camera,
+                            resolveBasemapTileQuad(tile.instance, camera),
+                        ),
+                        texture = tile.texture,
+                    )
+                },
+            )
+
+            is ResolvedGlobeCamera -> drawGlobeGround(
+                binding = binding,
+                pipeline = requireNotNull(globeGroundPipeline) {
+                    "a globe frame carrying ground tiles must be drawn with the globe ground pipeline"
+                },
+                tiles = scene.groundTiles.map { tile ->
+                    ResolvedGlobeGroundTile(
+                        edges = globeGroundTileEdges(
+                            lod = tile.instance.lod,
+                            tileY = tile.instance.tileY.toLong(),
+                            unwrappedX = tile.instance.unwrappedX,
+                        ),
+                        texture = tile.texture,
+                    )
+                },
+                unitSphereToClip = composeGlobeGroundUnitSphereToClip(camera),
+                cellsPerTileSide = globeGroundCellsPerTileSide(
+                    camera,
+                    scene.groundTiles.first().instance.lod,
+                ),
+            )
+        }
+    }
+
+    /**
+     * One [Placement] resolved against this frame's camera at draw time, or `null` when the globe is
+     * standing in front of it.
+     *
+     * **`null` is not a failure and is not a viewport test.** ADR 0038 culls the far hemisphere, and
+     * a placement on it projects to a perfectly ordinary pixel — an antipodal one lands dead centre
+     * with a large positive `w`, because `w` is the distance in front of the *camera plane* and a
+     * camera outside the sphere has the whole planet in front of it. Nothing about the projected
+     * value distinguishes it, which is why `resolveGlobePlacement` answers the limb-plane question
+     * separately and this is where that answer is spent.
+     *
+     * **The cull is here rather than in the plan** because `Scene` requires every sticker and every
+     * model to be named exactly once by `mapOrder` or `screenOrder`: a plan that dropped a hidden
+     * placement would be indistinguishable from a caller that forgot to build the orders, which is
+     * the one thing that check exists to catch. `planGlobeSpatial` therefore keeps every entry and
+     * discards the horizon verdict, and this re-resolution — the same re-resolution Mercator has
+     * always done here, on the same purity argument — recovers it.
+     *
+     * Under Mercator this is `resolvePlacement` and nothing else, so no mercator pixel moves.
+     */
+    private fun drawTimePlacement(placement: Placement): ResolvedPlacement? = when (camera) {
+        is ResolvedMercatorCamera -> resolvePlacement(placement, camera).requireResolvedAtDrawTime()
+        is ResolvedGlobeCamera -> {
+            val resolved = resolveGlobePlacement(placement, camera).requireResolvedAtDrawTime()
+            if (resolved.beyondHorizon) null else resolved.placement
+        }
+    }
+
+    /**
      * One map-anchored sticker's draw instance. [composeMapCameraSpaceModel]'s own `require` is what
      * catches a planner regime that contradicts the placement's resolution, which is the only way
      * these two can now disagree.
      */
-    private fun mapAnchoredSticker(sticker: SceneSticker): ResolvedSticker {
-        val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
+    private fun mapAnchoredSticker(sticker: SceneSticker): ResolvedSticker? {
+        val resolved = drawTimePlacement(sticker.placement) ?: return null
         return ResolvedSticker(
             modelViewProjection = composeMapModelViewProjection(camera, resolved, sticker.localDimensions()),
             texture = sticker.texture,
@@ -600,7 +686,9 @@ internal class SceneContent(
 
     /** One screen-composited sticker's draw instance; see [mapAnchoredSticker] for the regime cross-check. */
     private fun screenCompositedSticker(sticker: SceneSticker): ResolvedSticker {
-        val resolved = resolvePlacement(sticker.placement, camera).requireResolvedAtDrawTime()
+        val resolved = requireNotNull(drawTimePlacement(sticker.placement)) {
+            "a screen-composited placement is never behind the globe's limb"
+        }
         return ResolvedSticker(
             modelViewProjection = composeScreenModelViewProjection(
                 scene.outputPixelSize,
@@ -645,9 +733,12 @@ private fun SceneSticker.localDimensions(): DoubleVector3 =
  * from the full camera-space product, which is glTF's own rule and is equivalent here: a placement
  * contributes a proper rotation and a non-negative scalar scale, so it can never flip handedness.
  */
-private fun resolveModel(sceneModel: SceneModel, camera: ResolvedMercatorCamera): ResolvedModel {
-    val resolved = resolvePlacement(sceneModel.placement, camera).requireResolvedAtDrawTime()
-    // ADR 0029 refuses a SCREEN-positioned Model at frame planning -- `planMercatorSpatial` returns
+private fun resolveModel(
+    sceneModel: SceneModel,
+    camera: ResolvedFrameCamera,
+    resolved: ResolvedPlacement,
+): ResolvedModel {
+    // ADR 0029 refuses a SCREEN-positioned Model at frame planning -- both spatial planners return
     // `screenPositionedModelFailure()` before acquisition -- so one cannot legitimately reach a draw.
     require(resolved.drawRegime == DrawRegime.MAP_OCCLUDED) {
         "ADR 0029 refuses a SCREEN-positioned Model before drawing; one reached SceneContent"

@@ -351,11 +351,13 @@ private fun failureRule(code: RenGErrorCode, stage: PipelineStage): FailureRule?
             FailureRule.Context(setOf(DiagnosticField.PROJECTION_MODE)),
         )
 
-        // ADR 0029: a SCREEN-positioned Model is refused at frame planning for the same reason
-        // UNSUPPORTED_PROJECTION_MODE refuses ProjectionMode.GLOBE -- RenG never substitutes a
-        // mode it does not implement. One level down from a projection: the screen projection has
+        // ADR 0029: a SCREEN-positioned Model is refused at frame planning for the reason
+        // UNSUPPORTED_PROJECTION_MODE used to refuse ProjectionMode.GLOBE -- RenG never substitutes
+        // a mode it does not implement. One level down from a projection: the screen projection has
         // no z row at all, so a volumetric mesh drawn there would show its back faces through its
-        // front ones.
+        // front ones. Cycle G implemented the globe, so nothing raises
+        // UNSUPPORTED_PROJECTION_MODE any more; its rule above stays because the code is public and
+        // a removed enum constant is a break.
         RenGErrorCode.UNSUPPORTED_ANCHORING_MODE -> ruleAt(
             stage,
             PipelineStage.FRAME_PLANNING,

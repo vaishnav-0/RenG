@@ -6,7 +6,6 @@ import com.rohittp.reng.Geometry
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.PipelineStage
 import com.rohittp.reng.Placement
-import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.RenGErrorCode
 import com.rohittp.reng.RenGException
 import com.rohittp.reng.ResourceLocator
@@ -33,7 +32,9 @@ import com.rohittp.reng.internal.planning.resolveBasemapTileQuad
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.resolveGeometry
 import com.rohittp.reng.internal.planning.resolvePlacement
+import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
+import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import com.rohittp.reng.internal.projection.resolveMercatorCamera
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -1528,18 +1529,30 @@ class SceneContentTest {
     // --- ADR 0038: the ground owns its cull state, and the geometry pass never inherits it -------
 
     /**
-     * The mode reaches [drawGround] rather than stopping at [SceneContent]'s constructor. Both arms
-     * are asserted: a test that only exercised the globe would pass with the mercator arm deleted,
-     * and a test that only exercised mercator would pass with the globe arm deleted.
+     * **The seam, at the one place it can be got wrong silently.** There are two ground entry points
+     * — `drawGround`, which draws the flat quad with `glDrawArrays`, and `drawGlobeGround`, which
+     * draws the subdivided grid with `glDrawElements` — and the frame's camera is what chooses
+     * between them. Routing a globe frame to the first would draw a tangent plane, which at anything
+     * above about zoom 12 looks exactly like a globe.
+     *
+     * Both arms are asserted, and each is pinned by two independent things: the **program** bound
+     * (the two pipelines are required to differ, or neither could be located) and the **draw call**
+     * issued. A case that checked only the cull state would pass with the ground routed to the wrong
+     * entry point entirely, because both functions establish one.
      */
     @Test
-    fun theGroundPassCarriesTheFramesProjectionModeIntoItsCullState() {
+    fun theFramesCameraChoosesWhichGroundEntryPointDrawsIt() {
+        val binding = RecordingGlBinding()
+        val groundPipeline = newGroundPipeline(binding)
+        val globePipeline = newGlobeGroundPipeline(binding)
+        assertTrue(
+            groundPipeline.program != globePipeline.program,
+            "the fixture must give the two ground pipelines distinct programs or neither can be located",
+        )
         listOf(
-            ProjectionMode.MERCATOR to "disable(${hex(GL_CULL_FACE)})",
-            ProjectionMode.GLOBE to "enable(${hex(GL_CULL_FACE)})",
-        ).forEach { (mode, expected) ->
-            val binding = RecordingGlBinding()
-            val groundPipeline = newGroundPipeline(binding)
+            Triple(topDownCamera(), groundPipeline.program, "drawArrays"),
+            Triple(globeCamera(), globePipeline.program, "drawElements"),
+        ).forEach { (camera, expectedProgram, expectedDraw) ->
             val scene = Scene(
                 outputPixelSize = OUTPUT_SIZE,
                 frameIndex = 0L,
@@ -1547,16 +1560,56 @@ class SceneContentTest {
             )
             binding.log.clear()
             SceneContent(
-                topDownCamera(),
-                scene,
-                newStickerPipeline(),
-                groundPipeline,
-                projectionMode = mode,
+                camera = camera,
+                scene = scene,
+                stickerPipeline = newStickerPipeline(),
+                groundPipeline = groundPipeline,
+                globeGroundPipeline = globePipeline,
+            ).draw(binding)
+            val draw = binding.log.indexOfFirst { it.startsWith(expectedDraw) }
+            assertTrue(draw >= 0, "${camera::class.simpleName} must draw the ground with $expectedDraw: ${binding.log}")
+            val program = binding.log.subList(0, draw).indexOfLast { it == "useProgram($expectedProgram)" }
+            assertTrue(
+                program >= 0,
+                "${camera::class.simpleName} must bind program $expectedProgram before drawing: ${binding.log}",
+            )
+        }
+    }
+
+    /**
+     * ADR 0038's cull state, at whichever entry point the camera named. The mercator ground disables
+     * and the globe ground enables, and asserting only one of the two would pass with the other's
+     * line deleted.
+     */
+    @Test
+    fun theGroundPassEstablishesTheCullStateItsProjectionRequires() {
+        val binding = RecordingGlBinding()
+        val groundPipeline = newGroundPipeline(binding)
+        val globePipeline = newGlobeGroundPipeline(binding)
+        listOf(
+            Triple(topDownCamera(), "disable(${hex(GL_CULL_FACE)})", "drawArrays"),
+            Triple(globeCamera(), "enable(${hex(GL_CULL_FACE)})", "drawElements"),
+        ).forEach { (camera, expected, drawCall) ->
+            val scene = Scene(
+                outputPixelSize = OUTPUT_SIZE,
+                frameIndex = 0L,
+                groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = 303)),
+            )
+            binding.log.clear()
+            SceneContent(
+                camera = camera,
+                scene = scene,
+                stickerPipeline = newStickerPipeline(),
+                groundPipeline = groundPipeline,
+                globeGroundPipeline = globePipeline,
             ).draw(binding)
             val call = binding.log.indexOfFirst { it == expected }
-            val firstDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
-            assertTrue(firstDraw >= 0, "$mode must draw the ground")
-            assertTrue(call in 0 until firstDraw, "$mode must issue $expected before drawing: ${binding.log}")
+            val firstDraw = binding.log.indexOfFirst { it.startsWith(drawCall) }
+            assertTrue(firstDraw >= 0, "${camera::class.simpleName} must draw the ground")
+            assertTrue(
+                call in 0 until firstDraw,
+                "${camera::class.simpleName} must issue $expected before drawing: ${binding.log}",
+            )
         }
     }
 
@@ -1572,9 +1625,10 @@ class SceneContentTest {
      */
     @Test
     fun theGeometryPassDisablesCullingRatherThanInheritingTheGlobeGroundsEnable() {
-        ProjectionMode.entries.forEach { mode ->
+        listOf(topDownCamera(), globeCamera()).forEach { camera ->
             val binding = RecordingGlBinding()
             val groundPipeline = newGroundPipeline(binding)
+            val globePipeline = newGlobeGroundPipeline(binding)
             val geometryPipeline = newGeometryPipeline(binding)
             assertTrue(
                 groundPipeline.program != geometryPipeline.program,
@@ -1588,21 +1642,22 @@ class SceneContentTest {
             )
             binding.log.clear()
             SceneContent(
-                topDownCamera(),
-                scene,
-                newStickerPipeline(),
-                groundPipeline,
-                projectionMode = mode,
+                camera = camera,
+                scene = scene,
+                stickerPipeline = newStickerPipeline(),
+                groundPipeline = groundPipeline,
+                globeGroundPipeline = globePipeline,
             ).draw(binding)
 
+            val label = camera::class.simpleName
             val geometryProgram = binding.log.indexOfFirst { it == "useProgram(${geometryPipeline.program})" }
-            assertTrue(geometryProgram >= 0, "$mode must bind the geometry program: ${binding.log}")
+            assertTrue(geometryProgram >= 0, "$label must bind the geometry program: ${binding.log}")
             val disabled = binding.log.subList(0, geometryProgram).indexOfLast { it == "disable(${hex(GL_CULL_FACE)})" }
             assertTrue(
                 disabled >= 0,
-                "$mode must disable culling before the geometry pass binds its program: ${binding.log}",
+                "$label must disable culling before the geometry pass binds its program: ${binding.log}",
             )
-            if (mode == ProjectionMode.GLOBE) {
+            if (camera is ResolvedGlobeCamera) {
                 val groundEnable = binding.log.indexOfFirst { it == "enable(${hex(GL_CULL_FACE)})" }
                 assertTrue(groundEnable >= 0, "the globe ground must have enabled culling first")
                 assertTrue(
@@ -1626,6 +1681,14 @@ class SceneContentTest {
         ) as SpatialOutcome.Success
         ).value
 
+    /** [topDownCamera]'s globe counterpart, at the same five [Camera] fields. */
+    private fun globeCamera(): ResolvedGlobeCamera = (
+        resolveGlobeCamera(
+            camera = Camera(latitude = 0.0, unwrappedLongitude = 0.0, zoom = 10.0, bearing = 0.0, pitch = 0.0),
+            outputPixelSize = OUTPUT_SIZE,
+        ) as SpatialOutcome.Success
+        ).value
+
     private fun newGeometryPipeline(binding: RecordingGlBinding = RecordingGlBinding().withNoDeclaredNames()): GeometryPipeline =
         (
             createGeometryPipeline(binding, ShaderDialect.GLES, GlProgramCache(), minimalShaderPair())
@@ -1637,6 +1700,13 @@ class SceneContentTest {
 
     private fun newGroundPipeline(binding: RecordingGlBinding = RecordingGlBinding().withNoDeclaredNames()): GroundPipeline =
         (createGroundPipeline(binding, ShaderDialect.GLES, GlProgramCache()) as GroundPipelineResult.Created).pipeline
+
+    private fun newGlobeGroundPipeline(
+        binding: RecordingGlBinding = RecordingGlBinding().withNoDeclaredNames(),
+    ): GlobeGroundPipeline = (
+        createGlobeGroundPipeline(binding, ShaderDialect.GLES, GlProgramCache())
+            as GlobeGroundPipelineResult.Created
+        ).pipeline
 
     /**
      * A [RecordingGlBinding] a model pipeline can actually be built on. [createModelPipeline] reads

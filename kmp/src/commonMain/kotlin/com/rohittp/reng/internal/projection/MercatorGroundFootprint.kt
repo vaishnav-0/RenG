@@ -3,7 +3,7 @@ package com.rohittp.reng.internal.projection
 import kotlin.math.max
 import kotlin.math.min
 
-internal sealed interface ClosedMercatorFootprint {
+internal sealed interface ClosedMercatorFootprint : FrameGroundFootprint {
     data object Empty : ClosedMercatorFootprint
 
     data class Point(val point: MercatorGroundPoint) : ClosedMercatorFootprint
