@@ -160,6 +160,66 @@ class GlobeCameraTest {
     }
 
     @Test
+    fun groundHitsKeepTheCameraOwnWorldCopyAndCrossTheAntimeridianContinuously() {
+        val wound = resolveTilted()
+        val unwound = resolve(
+            camera(
+                latitude = TILTED_LATITUDE,
+                unwrappedLongitude = TILTED_LONGITUDE - 720.0,
+                zoom = 4.0,
+                bearing = 37.0,
+                pitch = 52.0,
+            ),
+        )
+        val here = assertIs<GlobeRayResult.Hit>(physicalPixelGlobeRay(wound, 480, 400))
+        val there = assertIs<GlobeRayResult.Hit>(physicalPixelGlobeRay(unwound, 480, 400))
+
+        // The round trip cannot see this: everything downstream wraps the Mercator x, so a hit
+        // reported in the wrong world copy projects back to the same pixel. Tile selection is what
+        // reads it, and tiles are chosen in the camera's own copy.
+        assertClose(2.0, here.point.x - there.point.x, tolerance = 1e-9)
+        assertClose(there.point.y, here.point.y, tolerance = 1e-12)
+        assertTrue(
+            abs(here.point.x - wound.mercatorAnchor.x) < 0.25,
+            "the hit left the camera's world copy at ${here.point.x}",
+        )
+
+        val straddling = resolve(camera(unwrappedLongitude = 179.97, zoom = 6.0))
+        val across = listOf(0, 240, 480, 720, 959).map {
+            assertIs<GlobeRayResult.Hit>(physicalPixelGlobeRay(straddling, it, 270)).point.x
+        }
+
+        assertTrue(across.first() < 1.0, "the west edge should sit before the antimeridian: $across")
+        assertTrue(across.last() > 1.0, "the east edge should sit past the antimeridian: $across")
+        across.zipWithNext().forEach { (west, east) ->
+            assertTrue(east > west && east - west < 0.05, "the seam is not continuous: $across")
+        }
+    }
+
+    @Test
+    fun theEyeIsTheCameraItselfWrittenInGlobeFixedCoordinates() {
+        val resolved = resolveTilted()
+        val radius = resolved.radiusLogicalPixels
+        val distance = resolved.cameraDistanceLogicalPixels
+
+        assertVectorClose(
+            resolved.cameraBack * distance,
+            cameraRelativeLogicalPosition(resolved, resolved.eyeGlobeFixed),
+            tolerance = 1e-8,
+        )
+        assertClose(
+            sqrt(distance * distance + 2.0 * radius * distance * resolved.cameraBack.z +
+                radius * radius),
+            sqrt(resolved.eyeGlobeFixed.dot(resolved.eyeGlobeFixed)),
+            tolerance = 1e-8,
+        )
+        assertTrue(
+            sqrt(resolved.eyeGlobeFixed.dot(resolved.eyeGlobeFixed)) > radius,
+            "the camera must sit outside the sphere it orbits",
+        )
+    }
+
+    @Test
     fun bearingRotatesTheScreenUnderAFixedWorldRatherThanTheWorldUnderTheScreen() {
         val resolved = resolve(
             camera(
