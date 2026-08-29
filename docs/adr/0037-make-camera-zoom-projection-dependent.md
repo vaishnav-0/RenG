@@ -119,3 +119,31 @@ carries the precise form.
 What survives unaltered is this ADR's decision and its central argument: the convention is latitude-matched,
 the naive alternative makes high-latitude frames **fail closed** rather than render slowly, and `Camera.zoom`
 remains projection-dependent in what it shows.
+
+---
+
+## Erratum, 2026-08-29 — the high-zoom transition is decided, and the answer is no transition
+
+Section 5 of the cycle's design deferred whether the globe should hand over to Mercator at high zoom.
+Task 7 then measured that **subdivision cost is not what argues for it**: granularity derived from the
+camera halves every second zoom level to a single quad above zoom 11, so the expense the transition was
+meant to avoid does not arise. What remained was precision. The globe-fixed formulation evaluates in
+`Float` on the GPU, where Mercator rebases per tile in `Double`.
+
+That was then measured on screen rather than left as arithmetic
+(`docs/research/2026-08-29-g-float-precision-measured.md`). Against a Mercator control at the same static
+camera — a fair control above about zoom 12, where the sagitta has fallen under half a pixel and the two
+projections draw the same picture — the globe's local displacement is **zero at the frame centre at every
+zoom**, because `globeFixedToCameraRelative` subtracts the radius on the up axis and the anchor maps to the
+origin exactly. It reaches **+50 logical pixels at the frame edge at zoom 22**, against the spike's
+predicted 45.8, spreading 71 pixels across the frame. It is invisible to a pixel-aligned search below about
+zoom 21.5.
+
+**The owner's decision, on seeing it: the error is acceptable and RenG does not transition.** No Mercator
+handover at high zoom, and no per-tile rebasing of the globe path. The globe stays one formulation at every
+zoom, which is the property that makes it simple to reason about, and the cost is a smear at the frame edge
+in the last zoom level or so of the supported range.
+
+Reversing this is compatible and cheap if it ever matters: a handover is additive, and nothing in the
+public API forecloses it. What must not happen quietly is the *third* option — shipping a tuned constant
+that transitions at some hand-picked zoom without measuring it — which this record exists to prevent.

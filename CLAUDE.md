@@ -368,13 +368,18 @@ and undrawn falls **94.3% → 53.8% → 0.0%** across zooms 0, 2 and 5.
 `Apple Software Renderer` at atan 1,687 ULP, sin 170,439 and cos 117,441, which puts the naive latitude
 formulation **7,118 m** out against the half-angle form's **0.680 m**.
 
-**What Cycle G leaves owed, and it is one owner decision rather than a defect.** The globe-fixed
-formulation evaluates in `Float` on the GPU, and its positional error is **0.008 px at zoom 10, 0.979 at
-17, 2.557 at 18 and 45.8 at 22** — Mercator does not pay this because it rebases per tile in `Double`.
-Subdivision *cost* turned out not to argue for a transition at all (granularity halves to a single quad
-above zoom 11), so the question §5 deferred is live again and about precision: a Mercator handover at high
-zoom, a per-tile rebasing of the globe path, or accepting sub-pixel error to about zoom 17. **No tuned
-constant ships either way.**
+**Cycle G's one open decision is closed: the `Float` error is accepted and RenG does not transition.**
+The globe-fixed formulation evaluates in `Float` on the GPU where Mercator rebases per tile in `Double`.
+Subdivision *cost* turned out not to argue for a transition at all — granularity halves to a single quad
+above zoom 11 — so the question §5 deferred was purely precision, and it was measured on screen against a
+Mercator control rather than left as arithmetic
+(`docs/research/2026-08-29-g-float-precision-measured.md`). The displacement is **zero at the frame centre
+at every zoom**, because `globeFixedToCameraRelative` subtracts the radius on the up axis and the anchor
+maps to the origin exactly; it reaches **+50 logical pixels at the frame edge at zoom 22** against a
+predicted 45.8, and is invisible to a pixel-aligned search below about zoom 21.5. **The owner accepted it
+on 2026-08-29**: no Mercator handover, no per-tile rebasing, one formulation at every zoom, and a smear at
+the frame edge in the top zoom level or so. ADR 0037 carries the erratum. Reversal is additive and cheap;
+what must not happen quietly is a tuned transition constant nobody measured.
 
 **The poles are closed by stretching the edge texel row, and that is the one defect the videos found.**
 Web Mercator tiles end at ±85.0511°, so the cap above them has no tile — a hole a flat map can never show,

@@ -70,9 +70,14 @@ roughly constant across the sweep (15.2 at zoom 19, 17.1 at 21.9) because the im
 smooth, so a small displacement differs everywhere and a large one differs no more. Difference measures
 *disagreement*; the defect is *displacement*, and only an overlay shows displacement as displacement.
 
-## What this does not settle
+## What it settled
 
-The decision is still the owner's, and this narrows it rather than making it. The error is invisible below
-about zoom 20 on real imagery and severe by 22. The options are unchanged: a Mercator handover at high
-zoom, a per-tile rebasing of the globe path, or accepting it. **No tuned constant ships either way**, and
-nothing here is a gate — these are developer measurements, taken with a tool that is not in CI.
+**The owner saw this and accepted the error on 2026-08-29: RenG does not transition.** No Mercator handover
+at high zoom, no per-tile rebasing of the globe path. The globe stays one formulation at every zoom, and
+the cost is a smear at the frame edge in the top zoom level or so of the supported range. ADR 0037 carries
+the erratum; `CLAUDE.md` no longer lists it as owed.
+
+Nothing here is a gate — these are developer measurements taken with a tool that is not in CI, and the
+figures below zoom 21.5 are limited by the instrument rather than by the renderer. If the decision is ever
+revisited, the reversal is additive and the thing to avoid is a transition constant picked by hand instead
+of measured.
