@@ -305,7 +305,8 @@ internal class Scene(
  *
  * ```
  * map regime (depth tested throughout, ADR 0027)
- *   1 ground   2 geometries   3 models (test AND write, ADR 0030)   4 map-anchored stickers
+ *   1 ground (test, AND write when displaced, ADR 0039)   2 geometries
+ *   3 models (test AND write, ADR 0030)                   4 map-anchored stickers
  *   5 LABELS   depth test OFF   <-- ADR 0034, and OUTSIDE both regimes
  * screen regime (no depth)
  *   6 consumer screen-anchored stickers, by z (ADR 0024)
@@ -347,14 +348,23 @@ internal class Scene(
  * placement's own resolution agree, and they fail loudly rather than letting the two silently diverge.
  *
  * That order used to be arbitrary and is now load-bearing. `drawFrame` tests `GL_GEQUAL`, not
- * `GL_GREATER` (ADR 0025), and the map regime has **three depth phases** rather than one policy:
+ * `GL_GREATER` (ADR 0025), and the map regime has **four depth phases** rather than one policy:
  *
- * - **The ground and each [Geometry] test depth and write none** (ADR 0027). ADR 0025's tie-break
+ * - **The ground tests depth, and writes it exactly when this frame's ground is displaced**
+ *   (ADR 0039, superseding ADR 0027 for this pass alone, as ADR 0030 already did for the model
+ *   pass). Terrain that cannot occlude is not terrain: a model standing behind a ridge would paint
+ *   straight over it. The condition is the frame's rather than the tile's, and it is not a hedge —
+ *   an unconditional write revives ADR 0027's coplanar defect in the 28 of 34 corpus styles that
+ *   declare no terrain, and buys nothing in any of them, because a flat ground has no relief to
+ *   occlude with. [drawGround] and [drawGlobeGround] own the decision, because they are the only
+ *   passes that know which of a frame's tiles carry a DEM.
+ * - **Each [Geometry] tests depth and writes none** (ADR 0027). ADR 0025's tie-break
  *   closed only the bit-identical case, and the two defects that actually shipped were near-ties — a
  *   coplanar `Geometry` tearing itself apart frame to frame as the epsilon between two different
  *   matrix products changed sign, and a billboard bisected along its anchor row by a ground plane
  *   whose depth varies down the screen. Flat map-plane content acting as an occluder was the single
- *   cause of both. Among these, later declared wins, full stop, not merely on an exact tie.
+ *   cause of both. Among the passes that write nothing, later declared wins, full stop, not merely
+ *   on an exact tie.
  * - **Models test *and* write** (ADR 0030, which supersedes ADR 0027 for this pass alone). A mesh
  *   that writes no depth cannot occlude itself: every triangle passes the test against whatever is
  *   behind it and paints in submission order, so back faces show through front ones. Back-face
@@ -364,11 +374,11 @@ internal class Scene(
  *   it unconditionally, which is what the sticker pass after it depends on.
  * - **Map-anchored stickers test and write none** (ADR 0027 again, unchanged).
  *
- * The map regime still *tests* depth throughout, so content that genuinely wrote nearer depth — which,
- * from ADR 0030 onward, means a model — occludes what is drawn after it. The ground goes first because
- * it is the backdrop everything else paints onto. ADR 0030 records the cost it accepts: a billboard
- * sharing space with a model can still be cut along its own anchor row, exactly as ADR 0027 describes
- * against the ground, because a model is a real occluder again.
+ * The map regime still *tests* depth throughout, so content that genuinely wrote nearer depth — a
+ * model since ADR 0030, and a displaced ground since ADR 0039 — occludes what is drawn after it. The
+ * ground goes first because it is the backdrop everything else paints onto. ADR 0030 records the
+ * cost it accepts: a billboard sharing space with a model can still be cut along its own anchor row,
+ * exactly as ADR 0027 describes against the ground, because a model is a real occluder again.
  *
  * **Why resolving [Placement]/[Geometry] here does not put spatial-failure handling inside a GL
  * draw call.** Cycle F-1 Tasks 5 and 6 pushed placement and geometry resolution out of
@@ -443,7 +453,13 @@ internal class SceneContent(
 
         if (scene.groundTiles.isNotEmpty()) {
             binding.enable(GL_DEPTH_TEST)
-            binding.depthMask(false)
+            // No `depthMask` here, and its absence is ADR 0039's. The ground's mask is now a
+            // *decision* -- on in a displaced frame, off in a flat one -- and [drawGround] and
+            // [drawGlobeGround] are the two places that can make it, because they are the only ones
+            // that know which of this frame's tiles carry a DEM. A `depthMask(false)` at this level
+            // would be a second authority that is wrong in every terrain frame and immediately
+            // overwritten in all of them: harmless in pixels, and exactly the kind of line a later
+            // reader takes for the rule.
             drawGroundPhase(binding)
         }
 
@@ -452,6 +468,11 @@ internal class SceneContent(
             // consumer's own shader pair, so unlike `drawGround` and `drawStickers` it establishes
             // no pipeline state of its own -- the depth state for the geometry pass is set here,
             // beside the `GL_DEPTH_TEST` enable that has always lived here.
+            //
+            // This `depthMask(false)` stopped being one of three identical redundant calls when
+            // ADR 0039 landed: the pass immediately before it now leaves the mask **on** in every
+            // displaced frame, so deleting this line puts a consumer's shader pair into the depth
+            // buffer.
             binding.enable(GL_DEPTH_TEST)
             binding.depthMask(false)
             // ADR 0038: the geometry pass must not inherit the ground's cull enable. The ground

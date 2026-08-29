@@ -155,13 +155,17 @@ class GroundPipelineTest {
     }
 
     /**
-     * ADR 0027, superseding ADR 0025 on this point. This test used to assert the exact opposite —
-     * that `depthMask(false)` never appears, "or terrain can never occlude anything" — and that
-     * reasoning shipped two visible defects. Keeping the ground's depth writes bought exactly one
-     * thing, an occluder for content below altitude 0, and cost a coplanar `Geometry` up to 100% of
-     * its pixels frame to frame plus the lower half of every map-anchored billboard at any nonzero
-     * pitch. The ground still *tests* depth, so terrain and models can occlude it once they exist
-     * and write depth of their own.
+     * ADR 0027, superseding ADR 0025 on this point, **narrowed by ADR 0039 to the frame with no
+     * terrain — which this fixture is.** This test used to assert the exact opposite — that
+     * `depthMask(false)` never appears, "or terrain can never occlude anything" — and that reasoning
+     * shipped two visible defects. Keeping the ground's depth writes bought exactly one thing, an
+     * occluder for content below altitude 0, and cost a coplanar `Geometry` up to 100% of its pixels
+     * frame to frame plus the lower half of every map-anchored billboard at any nonzero pitch.
+     *
+     * Terrain is the case where that trade inverts, and it is
+     * [aDisplacedGroundWritesDepthOnceBeforeItDrawsAnything]'s. This case keeps the other 28 of the
+     * corpus's 34 styles honest: a build that made the write unconditional fails **here**, on
+     * `depthMask(true)` appearing in a frame with no DEM at all.
      */
     @Test fun theGroundDrawsDepthTestedAndWritesNoDepth() {
         val binding = newBinding()
@@ -401,6 +405,101 @@ class GroundPipelineTest {
             "the frame's ground order is unchanged by the gap: ${binding.log}",
         )
         assertEquals(3, binding.log.count { it.startsWith("drawElements") }, "every tile still draws")
+    }
+
+    /**
+     * **ADR 0039: the ground writes depth in a displaced frame, once, before it draws anything.**
+     *
+     * Once rather than per tile, and that is the ADR's own ruling rather than an economy: a per-tile
+     * flip churns state inside the loop and would make a coplanar `Geometry` win over a flat coverage
+     * gap while losing to the displaced tile beside it, which is a worse picture than either
+     * consistent answer. The mask must also be set **before** the first draw, or the first tile of
+     * every frame renders under whatever the caller left — and `drawFrame` leaves it on around its
+     * own depth clear, so "whatever the caller left" is not a stable value either.
+     */
+    @Test fun aDisplacedGroundWritesDepthOnceBeforeItDrawsAnything() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+        drawGround(
+            binding,
+            pipeline,
+            listOf(demTile(texture = 11, demTexture = 21), demTile(texture = 12, demTexture = 22)),
+            cellsPerTileSide = 2,
+            elevation = elevationFrame(exaggeration = 2.0f),
+        )
+
+        val firstDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
+        assertTrue(firstDraw >= 0, "the ground must actually draw")
+        assertEquals(
+            1,
+            binding.log.count { it == "depthMask(true)" },
+            "one mask for the whole pass, never one per tile (ADR 0039): " + binding.log,
+        )
+        assertTrue(
+            binding.log.indexOf("depthMask(true)") in 0 until firstDraw,
+            "the displaced ground must turn depth writes on before it draws: " + binding.log,
+        )
+        assertFalse(
+            binding.log.any { it == "depthMask(false)" },
+            "nothing in the ground pass turns the write back off; the geometry pass owns that: " +
+                binding.log,
+        )
+    }
+
+    /**
+     * **The condition is the frame's, not the tile's.** A frame with terrain whose *first* tile lost
+     * its DEM still writes: the pass is displaced if any of it is, so the flat tile among displaced
+     * neighbours draws under the same mask rather than flipping it back.
+     *
+     * The gap is put first deliberately. The mask is set before the loop and the loop's own program
+     * switch starts flat here, so a build that derived the frame's answer from the *first* tile — the
+     * cheapest wrong reading of "is this frame displaced" — writes nothing at all and fails.
+     */
+    @Test fun aFrameWhoseFirstTileLostItsDemStillWritesDepthForTheWholePass() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+        drawGround(
+            binding,
+            pipeline,
+            listOf(resolvedTile(texture = 11), demTile(texture = 12, demTexture = 22)),
+            cellsPerTileSide = 2,
+            elevation = elevationFrame(exaggeration = 2.0f),
+        )
+
+        assertEquals(
+            1,
+            binding.log.count { it == "depthMask(true)" },
+            "one displaced tile makes the whole pass write (ADR 0039): " + binding.log,
+        )
+        assertEquals(2, binding.log.count { it.startsWith("drawElements") }, "both tiles still draw")
+    }
+
+    /**
+     * The other half of the condition, and the one ADR 0041 creates: a frame that declares terrain
+     * and whose every tile turned out to have no DEM has no relief anywhere, so it is ADR 0027's
+     * frame and writes nothing. `drawGround` sees that as an elevation frame with no tile carrying
+     * one — the shape `SceneContent` hands it when a whole frame's DEM acquisition came back empty.
+     */
+    @Test fun aTerrainFrameWithNoDemOnAnyTileWritesNoDepth() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+        drawGround(
+            binding,
+            pipeline,
+            listOf(resolvedTile(texture = 11), resolvedTile(texture = 12)),
+            cellsPerTileSide = 2,
+            elevation = elevationFrame(exaggeration = 2.0f),
+        )
+
+        assertFalse(
+            binding.log.any { it == "depthMask(true)" },
+            "a declared terrain with no DEM anywhere is a flat ground (ADR 0041), and a flat ground " +
+                "writes no depth (ADR 0039): " + binding.log,
+        )
+        assertEquals(2, binding.log.count { it.startsWith("drawElements") }, "both tiles still draw flat")
     }
 
     private fun demTile(texture: Int, demTexture: Int): ResolvedGroundTile = ResolvedGroundTile(

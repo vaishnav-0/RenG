@@ -94,9 +94,10 @@ internal const val GROUND_ELEVATION_SCALE_UNIFORM_NAME: String = "rengGroundElev
  *
  * ## What is deliberately not here
  *
- * No depth write: ADR 0039 makes the ground's depth write conditional on the frame being displaced,
- * and that is task 9's, not this shader's. No shading: ADR 0026 leaves the ground unlit and terrain
- * shading is task 11's opt-in. The UV, the winding and the position of an undisplaced vertex are
+ * No depth write here: ADR 0039's write is conditional on the *frame* being displaced, so it belongs
+ * to [drawGround] -- which is the only place that knows which of a frame's tiles carry a DEM -- and
+ * not to a shader compiled once per renderer. No shading: ADR 0026 leaves the ground unlit and
+ * terrain shading is task 11's opt-in. The UV, the winding and the position of an undisplaced vertex are
  * [GROUND_VERTEX_SOURCE]'s, character for character.
  */
 internal const val TERRAIN_GROUND_VERTEX_SOURCE: String =
@@ -323,16 +324,27 @@ internal class MercatorGroundTileDem(val dem: GroundTileDem, mercatorY: FloatArr
 /**
  * Draws [tiles] as the frame's ground, in the order given.
  *
- * **Depth testing on, depth writes off (ADR 0027, superseding ADR 0025 on this point).** ADR 0025
- * kept the ground's depth writes and bought coplanarity with `GL_GEQUAL` alone, on the reasoning
- * that terrain would later need the ground to occlude. That resolves an *exact* tie and nothing
- * else, and a moving camera does not produce exact ties: the ground's depth and a coplanar
- * altitude-0 `Geometry`'s depth are computed through different matrix products, so they differ by a
- * float epsilon whose sign changes from frame to frame and the quad tears itself apart. Measured on
- * a real style, a coplanar quad lost up to 100% of its pixels between consecutive frames. The
- * ground no longer writes depth at all, so there is nothing for coplanar map content to tie with,
- * near-tie or exact. [tiles] order and the ground's position first in [SceneContent.draw] stay
- * contracts — they are now the *whole* of the rule rather than only its tie-break.
+ * **Depth testing on; depth writes on exactly when this frame's ground is displaced (ADR 0039,
+ * superseding ADR 0027 for this pass alone).** ADR 0027 removed the ground's depth writes because
+ * flat map-plane content acting as an occluder cost a coplanar altitude-0 `Geometry` up to 100% of
+ * its pixels between consecutive frames -- the ground's depth and the quad's are different
+ * floating-point products of the same plane, so they differ by an epsilon whose sign changes as the
+ * camera moves. Terrain inverts that trade: a mountain that does not hide what is behind it is a
+ * different picture of the world, not a flicker on a shared plane.
+ *
+ * So the write is **conditional, and the condition is the frame's rather than the tile's**. If any
+ * tile of this ground is displaced the whole pass writes; if none is -- which is 28 of the corpus's
+ * 34 styles and every frame of three published releases -- the pass writes nothing and ADR 0027's
+ * rule stands untouched. There is no frame in which that costs something an unconditional write
+ * would have bought, because the write buys occlusion only where the ground has relief and the
+ * defect it revives exists only where it has none. A per-tile flip was rejected by ADR 0039: it
+ * churns state inside the loop, and it would let a coplanar `Geometry` win over a flat coverage gap
+ * while losing to the displaced tile beside it.
+ *
+ * [tiles] order and the ground's position first in [SceneContent.draw] stay contracts. Inside a
+ * frame with no terrain they remain the *whole* of the rule rather than only its tie-break; inside a
+ * displaced one, depth decides between the ground and what is drawn after it, and order decides the
+ * rest.
  *
  * Blend state is established here rather than inherited, exactly as [drawStickers] does and for the
  * same reason: the premultiplied `GL_ONE, GL_ONE_MINUS_SRC_ALPHA` function is what [uploadTexture]'s
@@ -389,15 +401,19 @@ internal fun drawGround(
     binding.blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD)
     binding.blendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
     binding.enable(GL_DEPTH_TEST)
-    binding.depthMask(false)
+    // Each tile's own answer to "am I displaced", resolved once. The frame's answer is `any` over
+    // it rather than a second reading of [elevation], so the mask below and the program switch
+    // inside the loop cannot disagree about what this frame's terrain is.
+    val tileElevations = tiles.map { if (elevation == null) null else it.elevation }
+    binding.depthMask(tileElevations.any { it != null })
     binding.disable(GL_CULL_FACE)
 
     // Which program was made current last, so a run of tiles on one side of the terrain/flat split
     // costs one `useProgram` rather than one per tile. `null` until the first tile, because either
     // program may be the first: a frame whose only coverage gap is its first tile starts flat.
     var displacing: Boolean? = null
-    tiles.forEach { tile ->
-        val tileElevation = if (elevation == null) null else tile.elevation
+    tiles.forEachIndexed { index, tile ->
+        val tileElevation = tileElevations[index]
         val wantsDisplacement = tileElevation != null
         if (displacing != wantsDisplacement) {
             displacing = wantsDisplacement

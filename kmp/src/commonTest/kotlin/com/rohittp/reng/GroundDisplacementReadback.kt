@@ -110,8 +110,10 @@ import kotlin.test.assertTrue
  *
  * **What this suite does not claim.** Nothing about fidelity — that terrain looks like the terrain —
  * which is pixel verification and stays Cycle J's. Nothing about seams between adjacent tiles, which
- * is task 12's. And nothing about depth: the ground still writes no depth here, because ADR 0039
- * makes that conditional and task 9 owns the condition.
+ * is task 12's. And nothing about depth: this suite's target carries a colour attachment and no
+ * depth one, so ADR 0039's conditional write -- which task 9 landed, and which every displaced frame
+ * below now issues -- is discarded by the framebuffer before it can reach a pixel here.
+ * `runGroundDepthReadback` is the suite that attaches a depth buffer and measures it.
  */
 internal fun runGroundDisplacementReadback(binding: GlBinding, dialect: ShaderDialect) {
     val target = createDisplacementTarget(binding)

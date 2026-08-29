@@ -311,6 +311,15 @@ class SceneContentTest {
      * - **exactly one** phase turns writes on, and it is the model pass;
      * - the mask is off again **on the way out of the model pass**, before the sticker pass runs.
      *
+     * **This fixture's ground carries no DEM, and after ADR 0039 that is the load-bearing half of
+     * it.** The count of one is now a statement about a frame with *no terrain* -- which is 28 of the
+     * corpus's 34 styles and every frame of three published releases -- rather than about every
+     * frame, and a build that made the ground's new depth write unconditional takes it to two and
+     * fails here. Its terrain twin is
+     * [aDisplacedGroundIsTheSecondPhaseThatWritesAndTheMaskIsOffAgainBeforeTheGeometries], which
+     * asserts **two** rather than widening this one: a widened count would also accept a frame that
+     * wrote depth in the wrong pass.
+     *
      * **The fixture carries a label batch, and ADR 0034 is what put it there.** Labels are not a
      * member of the map regime, so ADRs 0027 and 0030 do not describe them — but this invariant is
      * over the *whole scene*, so it does: a label pass that enabled a depth write would take the
@@ -441,6 +450,141 @@ class SceneContentTest {
             exitMask,
             "ADR 0030: the model pass owes a depthMask(false) on the way out, or ADR 0027's " +
                 "billboard fix silently stops working in every frame with a model and a billboard",
+        )
+    }
+
+    /**
+     * **ADR 0039's terrain arm, asserting two writes rather than widening the count above to two.**
+     *
+     * A frame whose ground is displaced has *two* phases that enable depth writes -- the ground
+     * first, the models second -- and the difference between "exactly two" and "at most two" is the
+     * whole value of this test: a widened count on the no-terrain fixture would pass just as happily
+     * against a build that wrote depth in the geometry pass and left the ground alone, which is the
+     * opposite of ADR 0039.
+     *
+     * So the claim is made per *pass* rather than per call. Every draw is classified by the program
+     * bound before it, and the ground's displacing program is what identifies phase 1 -- the ground,
+     * a `Geometry` and an opaque model all issue `drawElements(GL_TRIANGLES, ..., GL_UNSIGNED_SHORT,
+     * 0)` since Cycle E-terrain subdivided the ground, so a classifier keyed on the call alone cannot
+     * tell them apart. The ground must draw with writes **on**; the geometry, the stickers and the
+     * label batch must all draw with them **off**, which is what pins the mask coming back down
+     * between phase 1 and phase 2 rather than staying on for the rest of the map regime.
+     */
+    @Test
+    fun aDisplacedGroundIsTheSecondPhaseThatWritesAndTheMaskIsOffAgainBeforeTheGeometries() {
+        val binding = modelCapableBinding()
+        val camera = topDownCamera()
+        val geometryPipeline = newGeometryPipeline(binding)
+        val stickerPipeline = newStickerPipeline(binding)
+        val groundPipeline = newGroundPipeline(binding)
+        val modelPipelines = newModelPipelines(binding)
+        val labelPipeline = newLabelPipeline(binding)
+
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            stickers = listOf(
+                SceneSticker(mapPlacement(), texture = 101),
+                SceneSticker(screenPlacement(z = 5.0), texture = 202),
+            ),
+            geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
+            groundTiles = listOf(displacedGroundTile(canonicalX = 0, tileY = 0, texture = 303, demTexture = 77)),
+            terrain = fixtureTerrain(),
+            models = listOf(sceneModel(indexCounts = listOf(OPAQUE_INDEX_COUNT))),
+            labels = listOf(labelBatch()),
+            mapOrder = listOf(StickerAt(0), ModelAt(0)),
+            screenOrder = listOf(StickerAt(1)),
+        )
+        binding.log.clear()
+
+        SceneContent(camera, scene, stickerPipeline, groundPipeline, modelPipelines, labelPipeline).draw(binding)
+
+        var depthWrites = true
+        var currentProgram = -1
+        var groundDraws = 0
+        var flatDraws = 0
+        var labelDraws = 0
+        var modelDraws = 0
+        binding.log.forEachIndexed { index, call ->
+            when {
+                call == "depthMask(true)" -> depthWrites = true
+                call == "depthMask(false)" -> depthWrites = false
+                call.startsWith("useProgram(") ->
+                    currentProgram = call.removePrefix("useProgram(").removeSuffix(")").toInt()
+                call.startsWith("drawElements") && currentProgram == groundPipeline.terrain.program -> {
+                    groundDraws += 1
+                    assertTrue(
+                        depthWrites,
+                        "call $index ($call) is the displaced ground and ADR 0039 requires it to " +
+                            "write depth, or terrain occludes nothing",
+                    )
+                }
+                call.startsWith("drawArrays") ||
+                    (call.startsWith("drawElements") && currentProgram == geometryPipeline.program) -> {
+                    flatDraws += 1
+                    assertFalse(
+                        depthWrites,
+                        "call $index ($call) draws with depth writes still on; ADR 0027 keeps every " +
+                            "Geometry and every sticker out of the depth buffer even over terrain",
+                    )
+                }
+                call.startsWith("drawElements(${hex(GL_TRIANGLES)},") &&
+                    call.endsWith(",${hex(GL_UNSIGNED_INT)},0)") -> {
+                    labelDraws += 1
+                    assertFalse(depthWrites, "call $index ($call) is the label batch, and ADR 0034 gives it no write")
+                }
+                call.startsWith("drawElements") -> {
+                    modelDraws += 1
+                    assertTrue(depthWrites, "call $index ($call) is an opaque model draw (ADR 0030)")
+                }
+            }
+        }
+        assertEquals(1, groundDraws, "the scene must issue exactly one displaced ground draw: ${binding.log}")
+        assertEquals(3, flatDraws, "one geometry and two stickers")
+        assertEquals(1, labelDraws, "one label batch")
+        assertEquals(1, modelDraws, "one model draw")
+
+        assertEquals(
+            2,
+            binding.log.count { it == "depthMask(true)" },
+            "a terrain frame has exactly two phases that write depth, the ground and the models, " +
+                "and no third: ${binding.log}",
+        )
+    }
+
+    /**
+     * **The condition is the frame's, and a frame is displaced by carrying a DEM rather than by
+     * declaring terrain.**
+     *
+     * [Scene.terrain] is non-null whenever the style declared a `terrain` block RenG agreed with,
+     * *including* when every one of the frame's tiles turned out to have no DEM -- ADR 0041 draws
+     * those tiles flat rather than failing the frame. Such a frame has no relief anywhere, so it is
+     * ADR 0027's frame in every respect that matters and must write no depth. Keying the write on
+     * `terrain != null` instead of on the DEMs would revive the coplanar defect in exactly the frames
+     * ADR 0041 exists to keep renderable.
+     */
+    @Test
+    fun aTerrainFrameWhoseEveryTileLostItsDemWritesNoGroundDepth() {
+        val binding = RecordingGlBinding().withNoDeclaredNames()
+        val pipeline = newGroundPipeline(binding)
+        val scene = Scene(
+            outputPixelSize = OUTPUT_SIZE,
+            frameIndex = 0L,
+            groundTiles = listOf(groundTile(canonicalX = 0, tileY = 0, texture = 303)),
+            terrain = fixtureTerrain(),
+        )
+        binding.log.clear()
+
+        SceneContent(topDownCamera(), scene, newStickerPipeline(), pipeline).draw(binding)
+
+        assertTrue(
+            binding.log.any { it.startsWith("drawElements") },
+            "the frame must still draw its ground flat (ADR 0041): ${binding.log}",
+        )
+        assertFalse(
+            binding.log.any { it == "depthMask(true)" },
+            "a declared terrain none of whose tiles has a DEM is a flat ground, and a flat ground " +
+                "writes no depth (ADR 0039): ${binding.log}",
         )
     }
 
@@ -1981,6 +2125,38 @@ class SceneContentTest {
 
     private fun columnMajor(matrix: DoubleMatrix4): FloatArray =
         FloatArray(16) { index -> matrix[index % 4, index / 4].toFloat() }
+
+    /** [groundTile] with a DEM, which is what makes its frame a displaced one (ADR 0039). */
+    private fun displacedGroundTile(
+        canonicalX: Int,
+        tileY: Int,
+        texture: Int,
+        demTexture: Int,
+    ): SceneGroundTile = SceneGroundTile(
+        instance = BasemapTileInstance(
+            lod = 4,
+            tileY = tileY,
+            unwrappedX = canonicalX.toLong(),
+            instanceCopy = 0,
+            canonicalX = canonicalX,
+        ),
+        texture = texture,
+        elevation = SceneTileDem(
+            demTexture = demTexture,
+            window = DemTileWindow(childScale = 1, childX = 0, childY = 0),
+        ),
+    )
+
+    /**
+     * A frame's terrain, at an exaggeration that is **not 1**: at 1 an honoured multiplier and a
+     * dropped one are the same picture, and all six corpus styles declare 1.
+     */
+    private fun fixtureTerrain(): SceneTerrain = SceneTerrain(
+        decode = demDecodeCoefficients(DemEncoding.MAPBOX),
+        interiorSizePx = 256,
+        exaggeration = 2.0,
+        cellsPerTileSide = 4,
+    )
 
     private fun groundTile(canonicalX: Int, tileY: Int, texture: Int): SceneGroundTile = SceneGroundTile(
         instance = BasemapTileInstance(

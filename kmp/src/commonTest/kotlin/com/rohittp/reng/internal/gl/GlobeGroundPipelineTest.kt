@@ -406,6 +406,11 @@ class GlobeGroundPipelineTest {
      * draw, depth tested, depth writes off and never turned back on. The winding and the cull mode
      * are `drawFrame`'s, scene-wide, and are deliberately not restated here — a pass that set them
      * would be making a decision that belongs to the frame.
+     *
+     * **These tiles carry no DEM, and after ADR 0039 that is the load-bearing half of it.** The
+     * write is now conditional on the frame being displaced, so "no `depthMask(true)` at all" is a
+     * claim about a globe with no terrain and a build that made the write unconditional fails here.
+     * Its terrain twin is [aDisplacedGlobeGroundWritesDepthOnceBeforeItDrawsAnything].
      */
     @Test fun theGlobeGroundCullsAndTestsDepthWithoutWritingItOrRestatingTheWinding() {
         val binding = newBinding()
@@ -668,6 +673,94 @@ class GlobeGroundPipelineTest {
         val demUnit = binding.log.indexOfFirst { it == "activeTexture(${hex(GL_TEXTURE0 + 1)})" }
         assertTrue(demUnit >= 0, "the DEM binds to its own texture unit: ${binding.log}")
         assertEquals("bindTexture(${hex(GL_TEXTURE_2D)},44)", binding.log[demUnit + 1])
+    }
+
+    /**
+     * **ADR 0039's globe arm: the sphere's ground writes depth in a displaced frame too.**
+     *
+     * Terrain lands in both projections, so a rule honoured in one of them would be two pictures of
+     * one world — and on a sphere the stake is larger, because a globe's own far hemisphere is
+     * removed by culling rather than by depth (ADR 0038) and the near one folds over itself
+     * wherever there is relief.
+     *
+     * One mask for the whole pass, set before the first draw, exactly as [drawGround] does it: the
+     * two functions derive the frame's answer the same way, from the per-tile answer their own loops
+     * use, so they cannot disagree about what this frame's terrain is.
+     */
+    @Test fun aDisplacedGlobeGroundWritesDepthOnceBeforeItDrawsAnything() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGlobeGround(
+            binding = binding,
+            pipeline = pipeline,
+            // The coverage gap is **first**, so a build that read the frame's answer off the first
+            // tile — the cheapest wrong reading of "is this frame displaced" — writes nothing.
+            tiles = listOf(
+                ResolvedGlobeGroundTile(edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = 1L), texture = 4),
+                ResolvedGlobeGroundTile(
+                    edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = 2L),
+                    texture = 5,
+                    elevation = GroundTileDem(demTexture = 44, window = floatArrayOf(0f, 1f, 0f, 1f)),
+                ),
+            ),
+            unitSphereToClip = FloatArray(16),
+            cellsPerTileSide = 8,
+            elevation = GlobeGroundElevationFrame(
+                dem = GroundDemUniforms(
+                    decode = demDecodeCoefficients(DemEncoding.TERRARIUM),
+                    interiorSizePx = 512,
+                    exaggeration = 3.0f,
+                ),
+                radialMultiplePerMetre = 0.5f,
+            ),
+        )
+
+        val firstDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
+        assertTrue(firstDraw >= 0, "the globe ground must actually draw")
+        assertEquals(
+            1,
+            binding.log.count { it == "depthMask(true)" },
+            "one mask for the whole pass, never one per tile (ADR 0039): ${binding.log}",
+        )
+        assertTrue(
+            binding.log.indexOf("depthMask(true)") in 0 until firstDraw,
+            "the displaced globe ground must turn depth writes on before it draws: ${binding.log}",
+        )
+        assertFalse(binding.log.any { it == "depthMask(false)" }, "the pass never turns them back off")
+    }
+
+    /**
+     * ADR 0041's degraded frame on the globe: terrain declared, no tile carrying a DEM, so no relief
+     * anywhere and nothing to occlude with. It is ADR 0027's frame and writes no depth.
+     */
+    @Test fun aGlobeTerrainFrameWithNoDemOnAnyTileWritesNoDepth() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGlobeGround(
+            binding = binding,
+            pipeline = pipeline,
+            tiles = tiles(2),
+            unitSphereToClip = FloatArray(16),
+            cellsPerTileSide = 4,
+            elevation = GlobeGroundElevationFrame(
+                dem = GroundDemUniforms(
+                    decode = demDecodeCoefficients(DemEncoding.TERRARIUM),
+                    interiorSizePx = 512,
+                    exaggeration = 3.0f,
+                ),
+                radialMultiplePerMetre = 0.5f,
+            ),
+        )
+
+        assertFalse(
+            binding.log.any { it == "depthMask(true)" },
+            "a declared terrain with no DEM anywhere is a flat sphere, and writes no depth: ${binding.log}",
+        )
+        assertEquals(2, binding.log.count { it.startsWith("drawElements") }, "both tiles still draw flat")
     }
 
     /** A globe frame with no terrain never reaches the displacing program. */

@@ -12,8 +12,10 @@ import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.DEPTH_READBACK_PIXELS
 import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
 import com.rohittp.reng.runGroundCullReadbackSuite
+import com.rohittp.reng.runGroundDepthReadback
 import com.rohittp.reng.runGroundDisplacementReadback
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
@@ -265,6 +267,32 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, DISPLACEMENT_READBACK_PIXELS, DISPLACEMENT_READBACK_PIXELS)
                 binding.scissor(0, 0, DISPLACEMENT_READBACK_PIXELS, DISPLACEMENT_READBACK_PIXELS)
                 runGroundDisplacementReadback(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * **Cycle E-terrain task 9's gate, on both Apple rasterisers: ADR 0039's conditional depth write, in pixels.** A
+     * model behind a displaced ground is hidden by it, a model in front of it is not, the ground
+     * resolves against itself by depth in both projections, and a frame with **no** terrain still
+     * lets a model below its flat ground paint over it -- which is the condition rather than the
+     * write, and the half that keeps ADR 0027 intact in the 28 of 34 corpus styles that declare no
+     * terrain. `runGroundDepthReadback` says what each of its five cases discriminates.
+     */
+    @Test fun theGroundDepthReadbackPassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG ground depth readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, DEPTH_READBACK_PIXELS, DEPTH_READBACK_PIXELS)
+                binding.scissor(0, 0, DEPTH_READBACK_PIXELS, DEPTH_READBACK_PIXELS)
+                runGroundDepthReadback(binding, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }

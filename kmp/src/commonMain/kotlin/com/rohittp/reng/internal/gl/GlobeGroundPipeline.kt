@@ -648,11 +648,14 @@ internal fun globeGroundCellsPerTileSide(camera: ResolvedGlobeCamera, lod: Int):
  * [cellsPerTileSide].
  *
  * **The pass state is [drawGround]'s, arm for arm.** Blend, depth test and depth mask are
- * established here for the reasons ADR 0027 and [drawGround] already record, and the cull enable is
- * ADR 0038's globe arm: the far hemisphere is exactly the back-facing set once the grid winds
- * consistently, so `GL_CULL_FACE` removes it with no depth involvement. `drawFrame` has established
- * `frontFace(GL_CCW)` and `cullFace(GL_BACK)` scene-wide and the ground is the first pass inside it,
- * so neither the mode nor the winding is restated.
+ * established here for the reasons ADRs 0027 and 0039 and [drawGround] already record -- including
+ * the conditional write: the globe's ground writes depth exactly when this frame's ground is
+ * displaced, because terrain lands in both projections and a rule that held in one of them would be
+ * two pictures of the same world. The cull enable is ADR 0038's globe arm: the far hemisphere is
+ * exactly the back-facing set once the grid winds consistently, so `GL_CULL_FACE` removes it with no
+ * depth involvement. `drawFrame` has established `frontFace(GL_CCW)` and `cullFace(GL_BACK)`
+ * scene-wide and the ground is the first pass inside it, so neither the mode nor the winding is
+ * restated.
  *
  * **What is not here is a `ProjectionMode`.** [drawGround]'s exhaustive `when` exists because one
  * function serves both modes with one geometry; this function is only ever the globe's, and a
@@ -680,7 +683,11 @@ internal fun drawGlobeGround(
     binding.blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD)
     binding.blendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
     binding.enable(GL_DEPTH_TEST)
-    binding.depthMask(false)
+    // [drawGround]'s rule exactly, and derived the same way: each tile's own answer resolved once,
+    // the frame's answer `any` over it, so the mask and the per-tile program switch cannot disagree.
+    // A polar cap carries its own tile's DEM, so a displaced cap is a displaced frame here too.
+    val tileElevations = tiles.map { if (elevation == null) null else it.elevation }
+    binding.depthMask(tileElevations.any { it != null })
     binding.enable(GL_CULL_FACE)
 
     // [drawGround]'s arrangement exactly: the two programs interleave in [tiles] order rather than
@@ -688,8 +695,8 @@ internal fun drawGlobeGround(
     // the frame's one matrix is re-uploaded on each switch because a uniform belongs to whichever
     // program was current when it was set.
     var displacing: Boolean? = null
-    tiles.forEach { tile ->
-        val tileElevation = if (elevation == null) null else tile.elevation
+    tiles.forEachIndexed { index, tile ->
+        val tileElevation = tileElevations[index]
         val wantsDisplacement = tileElevation != null
         if (displacing != wantsDisplacement) {
             displacing = wantsDisplacement
