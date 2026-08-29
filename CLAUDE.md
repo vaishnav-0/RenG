@@ -346,6 +346,45 @@ at unequal z, which passes under either authority; a premultiplication check on 
 premultiplying is the identity; and an animation check at `t = 1.0`, which `timeSeconds % duration` maps
 back onto `t = 0`. **Assume the next one exists.**
 
+**Cycle G is complete and unreleased. RenG draws a globe.** Its authority is
+`docs/superpowers/specs/2026-08-28-cycle-g-globe-design.md`, its plan is
+`docs/superpowers/plans/2026-08-29-cycle-g-globe.md`, and the harness pass is
+`docs/research/2026-08-29-g-harness-pass.md`. `ProjectionMode.GLOBE` stopped being an
+`unsupportedProjectionModeFailure` and became a frame that plans, resolves and draws: the sphere projection
+and its latitude-matched LOD, the globe camera, far-hemisphere culling, the globe ground, placements,
+geometries and labels on a sphere. **ADRs 0037 and 0038** govern `Camera.zoom` being projection-dependent
+and the far-hemisphere cull.
+
+**It grows the public ABI by nothing at all.** `kmp/api/kmp.klib.api` is byte-identical to `main` —
+`ProjectionMode.GLOBE` was already a public constant that failed closed, so making it work moved no
+signature. A diff there would have been a defect rather than a decision.
+
+**The globe's apparent scale is measured, not asserted by eye.** At zoom 0 the silhouette is **180 logical
+pixels across horizontally and 180 vertically** against an analytic tangent-cone prediction of **180.2**,
+and undrawn falls **94.3% → 53.8% → 0.0%** across zooms 0, 2 and 5.
+
+**The trig precision decision was vindicated on a driver CI actually runs.** The probe measured
+`Apple Software Renderer` at atan 1,687 ULP, sin 170,439 and cos 117,441, which puts the naive latitude
+formulation **7,118 m** out against the half-angle form's **0.680 m**.
+
+**What Cycle G leaves owed, and it is one owner decision rather than a defect.** The globe-fixed
+formulation evaluates in `Float` on the GPU, and its positional error is **0.008 px at zoom 10, 0.979 at
+17, 2.557 at 18 and 45.8 at 22** — Mercator does not pay this because it rebases per tile in `Double`.
+Subdivision *cost* turned out not to argue for a transition at all (granularity halves to a single quad
+above zoom 11), so the question §5 deferred is live again and about precision: a Mercator handover at high
+zoom, a per-tile rebasing of the globe path, or accepting sub-pixel error to about zoom 17. **No tuned
+constant ships either way.**
+
+**The polar cap has no imagery, in any style.** Web Mercator tiles end at ±85.0511°, so a cap around each
+pole has no tile to sample and RenG draws nothing there — measured at 783 pixels of the harness's own clear
+colour enclosed by the sphere at zoom 2. Inherent to Mercator tiles on a sphere rather than anything this
+cycle did, and what should fill it is undecided.
+
+**Curvature fidelity is not claimed and stays Cycle J's.** The readback gate asserts relationships over a
+real context; the sagitta of a frame-sized quad is 0.44 logical pixels at zoom 10, so a cross-mode
+comparison taken above about zoom 12 cannot tell a globe from a tangent plane and this cycle's is bounded
+in both directions at zoom ≤ 8.
+
 Design decisions live in `CONTEXT.md` (vocabulary) and `docs/adr/` (ADRs 0001–0012 establish the
 original graphics contract, ADR 0013 governs fail-closed publication, ADRs 0014–0015 supersede
 preparation ordering and GL-deletion context behavior, ADRs 0016–0017 govern the Rentile firewall and
@@ -366,7 +405,11 @@ ground, geometries, models, map-anchored stickers, ADR 0031 stands on deprecated
 records that cinterop drops `API_DEPRECATED`, so no build will ever warn, ADR 0032 takes
 `androidx.test:runner` as the second third-party dependency after ADR 0019's, for instrumented tests only,
 and ADR 0033 gates the mobile targets asymmetrically and says what a release may claim about a target
-verified only in simulation). Read both before proposing anything that touches the public API — where this
+verified only in simulation, ADR 0034 draws labels as a fourth scene list orthogonal to `drawBasemap`,
+ADR 0035 makes fade the only cross-frame label state, ADR 0036 reports engine label exclusions as one
+aggregate diagnostic, ADR 0037 makes `Camera.zoom` projection-dependent so a globe's world size is
+`512 * 2^(zoom - log2 cos latitude)`, and ADR 0038 culls the far hemisphere rather than depth-testing
+it, the far side being exactly the back-facing set once the ground grid winds consistently). Read both before proposing anything that touches the public API — where this
 file and an ADR disagree, the newer ADR wins.
 
 ## What RenG is
