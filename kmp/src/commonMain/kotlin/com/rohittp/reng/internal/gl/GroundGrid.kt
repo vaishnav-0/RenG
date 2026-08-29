@@ -71,7 +71,20 @@ internal const val MAXIMUM_GROUND_CELLS_PER_TILE_SIDE: Int = MAXIMUM_GLOBE_GROUN
  * `index / cellsPerSide` in `Float`, so `0` and `1` are exact, and two tiles sharing an edge land
  * their shared vertices on the identical position rather than within an epsilon of it.
  */
-internal fun groundGridVertices(cellsPerSide: Int): FloatArray = globeGroundGridVertices(cellsPerSide)
+internal fun groundGridVertices(cellsPerSide: Int): FloatArray {
+    val perSide = cellsPerSide + 1
+    val vertices = FloatArray(perSide * perSide * 2)
+    var offset = 0
+    for (row in 0 until perSide) {
+        val v = row.toFloat() / cellsPerSide.toFloat()
+        for (column in 0 until perSide) {
+            vertices[offset] = column.toFloat() / cellsPerSide.toFloat()
+            vertices[offset + 1] = v
+            offset += 2
+        }
+    }
+    return vertices
+}
 
 /**
  * The grid's triangles, two per cell, wound counter-clockwise once the reading each pipeline puts on
@@ -83,7 +96,27 @@ internal fun groundGridVertices(cellsPerSide: Int): FloatArray = globeGroundGrid
  * one triangulation serve both. `drawGround` disables culling and so cannot be caught by a flip,
  * which is exactly why the winding is asserted on the numbers here rather than left to pixels.
  */
-internal fun groundGridIndices(cellsPerSide: Int): ShortArray = globeGroundGridIndices(cellsPerSide)
+internal fun groundGridIndices(cellsPerSide: Int): ShortArray {
+    val perSide = cellsPerSide + 1
+    val indices = ShortArray(cellsPerSide * cellsPerSide * 6)
+    var offset = 0
+    for (row in 0 until cellsPerSide) {
+        for (column in 0 until cellsPerSide) {
+            val northWest = row * perSide + column
+            val northEast = northWest + 1
+            val southWest = northWest + perSide
+            val southEast = southWest + 1
+            indices[offset] = northWest.toShort()
+            indices[offset + 1] = southWest.toShort()
+            indices[offset + 2] = northEast.toShort()
+            indices[offset + 3] = northEast.toShort()
+            indices[offset + 4] = southWest.toShort()
+            indices[offset + 5] = southEast.toShort()
+            offset += 6
+        }
+    }
+    return indices
+}
 
 /**
  * The grid for [cellsPerSide], built once into [grids] and reused forever after.

@@ -109,7 +109,8 @@ internal const val GLOBE_GROUND_TILE_UV_V_UNIFORM_NAME: String = "rengGlobeGroun
 /**
  * One subdivided grid: `cellsPerSide^2` quads over the unit `(u, v)` square, indexed as triangles.
  *
- * `u` runs west to east and `v` runs **north to south**, matching [GROUND_QUAD]'s convention exactly
+ * `u` runs west to east and `v` runs **north to south**, the convention [GroundGrid] states once for both
+ * grounds
  * so that the shared fragment stage samples row zero of a rendered basemap tile at the tile's north
  * edge in both modes. The grid coordinate is the texture coordinate: a Mercator raster tile's
  * texture is parameterised by Mercator `x`/`y` and so is this grid, which is what keeps the UVs
@@ -269,20 +270,8 @@ internal fun globeGroundGrid(
  * closed by construction rather than by a border ring, a skirt or half a pixel of padding — the
  * three mechanisms the field uses instead (`docs/research/2026-08-28-g-globe-prior-art.md`, Q7).
  */
-internal fun globeGroundGridVertices(cellsPerSide: Int): FloatArray {
-    val perSide = cellsPerSide + 1
-    val vertices = FloatArray(perSide * perSide * 2)
-    var offset = 0
-    for (row in 0 until perSide) {
-        val v = row.toFloat() / cellsPerSide.toFloat()
-        for (column in 0 until perSide) {
-            vertices[offset] = column.toFloat() / cellsPerSide.toFloat()
-            vertices[offset + 1] = v
-            offset += 2
-        }
-    }
-    return vertices
-}
+internal fun globeGroundGridVertices(cellsPerSide: Int): FloatArray =
+    groundGridVertices(cellsPerSide)
 
 /**
  * The grid's triangles, two per cell, wound **counter-clockwise as seen from outside the sphere**.
@@ -293,27 +282,8 @@ internal fun globeGroundGridVertices(cellsPerSide: Int): FloatArray {
  * `(i, j), (i + 1, j), (i, j + 1)` order is clockwise and would cull the near hemisphere while
  * drawing the far one — a mirror-image globe that looks plausible in a single-tile fixture.
  */
-internal fun globeGroundGridIndices(cellsPerSide: Int): ShortArray {
-    val perSide = cellsPerSide + 1
-    val indices = ShortArray(cellsPerSide * cellsPerSide * 6)
-    var offset = 0
-    for (row in 0 until cellsPerSide) {
-        for (column in 0 until cellsPerSide) {
-            val northWest = row * perSide + column
-            val northEast = northWest + 1
-            val southWest = northWest + perSide
-            val southEast = southWest + 1
-            indices[offset] = northWest.toShort()
-            indices[offset + 1] = southWest.toShort()
-            indices[offset + 2] = northEast.toShort()
-            indices[offset + 3] = northEast.toShort()
-            indices[offset + 4] = southWest.toShort()
-            indices[offset + 5] = southEast.toShort()
-            offset += 6
-        }
-    }
-    return indices
-}
+internal fun globeGroundGridIndices(cellsPerSide: Int): ShortArray =
+    groundGridIndices(cellsPerSide)
 
 /**
  * One basemap tile's edges in the shader's own coordinates: `(west, east, north, south)` as

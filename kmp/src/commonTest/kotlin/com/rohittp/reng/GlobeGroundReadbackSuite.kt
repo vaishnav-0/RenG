@@ -238,8 +238,9 @@ private fun assertAdjacentTilesLeaveNoSeam(fixture: GlobeGroundFixture) {
  * Row zero of a rendered basemap tile is its **north** edge and column zero its west, and a flip in
  * either axis mirrors every tile about its own centre line — invisible on the solid colours every
  * other case here uses, and catastrophic on a real map. `GroundPipelineTest` pins the same
- * convention for the Mercator quad by reading [com.rohittp.reng.internal.gl.GROUND_QUAD]; a grid has
- * no such table to read, so this reads pixels instead.
+ * convention for the Mercator ground in its vertex stage, which is where it moved when Cycle
+ * E-terrain replaced `GROUND_QUAD`'s four-row table with a subdivided grid; a grid has no such table
+ * to read, so this reads pixels instead.
  */
 private fun assertTheTileTextureKeepsRowZeroNorthAndColumnZeroWest(fixture: GlobeGroundFixture) {
     val frame = fixture.renderQuadrantTile()

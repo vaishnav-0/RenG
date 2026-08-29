@@ -589,8 +589,8 @@ internal class SceneContent(
     /**
      * Phase 1, at whichever of the two ground entry points this frame's projection mode names.
      *
-     * **There are two of them and a globe frame must reach the second.** [drawGround] draws the flat
-     * `GROUND_QUAD` once per tile with a per-tile matrix; [drawGlobeGround] draws one shared,
+     * **There are two of them and a globe frame must reach the second.** [drawGround] draws one shared,
+     * subdivided grid per tile with a per-tile matrix; [drawGlobeGround] draws one shared,
      * subdivided grid per tile with a per-tile `vec4` of edges and one matrix for the whole frame.
      * Routing a globe frame to the first would draw a tangent plane — which is not obviously wrong on
      * screen at high zoom, and is exactly the kind of defect that survives a look at the output — so
