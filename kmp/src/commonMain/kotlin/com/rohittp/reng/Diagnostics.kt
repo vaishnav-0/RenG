@@ -38,6 +38,8 @@ public enum class DiagnosticCode {
     BASEMAP_NOT_CONFIGURED,
     RESIDENT_GPU_TEXTURES_OVER_BUDGET,
     LABEL_CONTENT_EXCLUDED,
+    TERRAIN_COVERAGE_INCOMPLETE,
+    TERRAIN_UNAVAILABLE,
 }
 
 @ConsistentCopyVisibility
@@ -138,6 +140,46 @@ public data class Diagnostic internal constructor(
                     fieldName == null && resourceClass == null && resourceKey == null &&
                         statusCode == null && limit == null,
                 ) { "label-content-excluded diagnostics carry a severity and nothing else" }
+            }
+
+            DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE -> {
+                // ADR 0041. A warning rather than an error because the frame prepared and it drew:
+                // some of its ground is flat where the style declared relief, which is a wrong
+                // picture rather than a missing one, and that is the whole hazard the code exists to
+                // announce.
+                require(severity == DiagnosticSeverity.WARNING) {
+                    "terrain-coverage diagnostics are warnings"
+                }
+                require(stage == PipelineStage.BASEMAP_RENDER) {
+                    "terrain-coverage diagnostics occur during basemap render"
+                }
+                require(fieldName == null && resourceClass == null && resourceKey == null && statusCode == null) {
+                    "terrain-coverage diagnostics name no single tile"
+                }
+                // The count is the whole content, and carrying it as the `actual` against a `limit`
+                // of zero is what makes the two guarantees structural rather than left to the call
+                // site: no tile is expected to draw flat when a style declares terrain, so a report
+                // of a complete coverage is unconstructible rather than merely wrong.
+                require(limit == 0L && actual!! > 0L) {
+                    "terrain-coverage diagnostics carry a positive count of tiles that drew flat"
+                }
+            }
+
+            DiagnosticCode.TERRAIN_UNAVAILABLE -> {
+                require(severity == DiagnosticSeverity.WARNING) {
+                    "terrain-unavailable diagnostics are warnings"
+                }
+                require(stage == PipelineStage.BASEMAP_RENDER) {
+                    "terrain-unavailable diagnostics occur during basemap render"
+                }
+                // No count, and no identity. The whole ground drew flat, so a number would only
+                // restate the code -- and the acquisition failure this follows names at most a
+                // redacted resource RenG asked the engine for, which is not a resource the consumer
+                // supplied and not one it can act on.
+                require(
+                    fieldName == null && resourceClass == null && resourceKey == null &&
+                        statusCode == null && limit == null,
+                ) { "terrain-unavailable diagnostics carry no further context" }
             }
         }
     }

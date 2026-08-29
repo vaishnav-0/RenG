@@ -120,6 +120,59 @@ internal fun labelContentExcludedDiagnostic(severity: DiagnosticSeverity): Diagn
         stage = PipelineStage.LABEL_PREPARATION,
     )
 
+/**
+ * Some of this frame's ground tiles had no elevation and drew flat, although the style declared
+ * terrain (ADR 0041). [flatTileCount] is how many.
+ *
+ * **Once per frame, never once per tile.** ADR 0036's reasoning about aggregate label exclusions
+ * applies unchanged: a per-tile entry is internal volume crossing a public boundary, and a channel
+ * emitting forty entries for one ordinary frame teaches a consumer to stop reading it. The count is
+ * carried because a consumer's response to two missing tiles and to a hundred is different -- a
+ * handful at a coverage boundary is weather, and the whole visible set is a source whose
+ * `minimumZoom` sits above the camera.
+ *
+ * **A warning rather than a failure, and this is the one diagnostic where that costs something.**
+ * Flat ground where terrain was expected masquerades as real land: a genuine plateau and a coverage
+ * gap are the same pixels, and only this diagnostic distinguishes them. ADR 0041 accepts that as the
+ * price of not making every DEM request a new way to lose a frame -- terrain adds about a third more
+ * requests, and a frame survives only if all of them do.
+ *
+ * It names no tile. The condition is a property of the whole frame's coverage, and naming the last
+ * tile that came up empty would be arbitrary in exactly the way
+ * [residentGpuTexturesOverBudgetDiagnostic]'s is.
+ */
+internal fun terrainCoverageIncompleteDiagnostic(flatTileCount: Long): Diagnostic =
+    Diagnostic(
+        code = DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE,
+        severity = DiagnosticSeverity.WARNING,
+        stage = PipelineStage.BASEMAP_RENDER,
+        limit = 0L,
+        actual = flatTileCount,
+    )
+
+/**
+ * Terrain could not be acquired at all, so the whole ground drew flat (ADR 0041).
+ *
+ * **The frame did not fail, and that is the decision this constant carries.** Every other basemap
+ * resource fails the frame the moment acquisition fails -- measured, not assumed: one timed-out raster
+ * tile cost frame 38 of a 48-frame globe render, written out as pure clear colour. Terrain diverges
+ * because it is the only basemap resource whose absence has a fully defined rendering RenG has already
+ * shipped: the flat ground of `0.3.0`, which was the whole product for a release. Degrading to a state
+ * that shipped is not the same act as inventing a fallback, and no second resource acquires a claim on
+ * this reasoning by resembling terrain.
+ *
+ * Contextless, like [basemapNotConfiguredDiagnostic]. Both of the failure shapes behind it -- a thrown
+ * acquisition and a style whose terrain source RenG and the engine do not agree on -- produce the same
+ * picture and the same remedy, and one of them has no engine failure behind it at all. There is
+ * nothing more specific to report than "this frame has no terrain."
+ */
+internal fun terrainUnavailableDiagnostic(): Diagnostic =
+    Diagnostic(
+        code = DiagnosticCode.TERRAIN_UNAVAILABLE,
+        severity = DiagnosticSeverity.WARNING,
+        stage = PipelineStage.BASEMAP_RENDER,
+    )
+
 internal fun renGFailure(
     code: RenGErrorCode,
     stage: PipelineStage,

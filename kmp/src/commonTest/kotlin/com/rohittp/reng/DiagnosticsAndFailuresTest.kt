@@ -7,6 +7,8 @@ import com.rohittp.reng.internal.labelContentExcludedDiagnostic
 import com.rohittp.reng.internal.renGFailure
 import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
 import com.rohittp.reng.internal.resourceReloadedAfterFreeDiagnostic
+import com.rohittp.reng.internal.terrainCoverageIncompleteDiagnostic
+import com.rohittp.reng.internal.terrainUnavailableDiagnostic
 import com.rohittp.reng.internal.unroutableLabelSourceFailure
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -51,6 +53,7 @@ class DiagnosticsAndFailuresTest {
             listOf(
                 "RESOURCE_RELOADED_AFTER_FREE", "FAILURE_CONTEXT", "BASEMAP_NOT_CONFIGURED",
                 "RESIDENT_GPU_TEXTURES_OVER_BUDGET", "LABEL_CONTENT_EXCLUDED",
+                "TERRAIN_COVERAGE_INCOMPLETE", "TERRAIN_UNAVAILABLE",
             ),
             DiagnosticCode.entries.map { it.name },
         )
@@ -306,6 +309,114 @@ class DiagnosticsAndFailuresTest {
                 code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,
                 severity = DiagnosticSeverity.WARNING,
                 stage = PipelineStage.DRAW,
+            )
+        }
+    }
+
+    @Test
+    fun terrainCoverageDiagnosticCarriesOnlyItsCountAndRefusesAnythingElse() {
+        val diagnostic = terrainCoverageIncompleteDiagnostic(flatTileCount = 40L)
+
+        assertEquals(DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE, diagnostic.code)
+        assertEquals(DiagnosticSeverity.WARNING, diagnostic.severity)
+        assertEquals(PipelineStage.BASEMAP_RENDER, diagnostic.stage)
+        assertEquals(0L, diagnostic.limit, "no tile is expected to draw flat under a terrain style")
+        assertEquals(40L, diagnostic.actual, "and the actual is how many did")
+        assertEquals(null, diagnostic.fieldName)
+        assertEquals(null, diagnostic.resourceClass)
+        assertEquals(null, diagnostic.resourceKey)
+        assertEquals(null, diagnostic.statusCode)
+
+        // ADR 0041 makes this a report about a frame that drew, so an error is unconstructible; so is
+        // the stage it does not fire from, and so is a tile identity it has no business naming.
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE,
+                severity = DiagnosticSeverity.ERROR,
+                stage = PipelineStage.BASEMAP_RENDER,
+                limit = 0L,
+                actual = 1L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.DRAW,
+                limit = 0L,
+                actual = 1L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.BASEMAP_RENDER,
+                resourceKey = resourceKey(IdentityShape.EXTERNAL),
+                resourceClass = ResourceClass.STICKER_IMAGE,
+                limit = 0L,
+                actual = 1L,
+            )
+        }
+    }
+
+    @Test
+    fun aCompleteTerrainCoverageCannotBeReportedAsAnIncompleteOne() {
+        // The guarantee stated where a call site cannot get it wrong: a frame that lost nothing has no
+        // constructible report, so "emits nothing when coverage is complete" is a property of the type
+        // rather than of an `if` somewhere upstream.
+        assertFailsWith<IllegalArgumentException> { terrainCoverageIncompleteDiagnostic(flatTileCount = 0L) }
+        assertFailsWith<IllegalArgumentException> { terrainCoverageIncompleteDiagnostic(flatTileCount = -1L) }
+        assertEquals(1L, terrainCoverageIncompleteDiagnostic(flatTileCount = 1L).actual)
+
+        // And a bare coverage warning naming no number says nothing a consumer can act on.
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.BASEMAP_RENDER,
+            )
+        }
+    }
+
+    @Test
+    fun terrainUnavailableCarriesNoContextAtAllAndRefusesEveryField() {
+        val diagnostic = terrainUnavailableDiagnostic()
+
+        assertEquals(DiagnosticCode.TERRAIN_UNAVAILABLE, diagnostic.code)
+        assertEquals(DiagnosticSeverity.WARNING, diagnostic.severity)
+        assertEquals(PipelineStage.BASEMAP_RENDER, diagnostic.stage)
+        assertEquals(null, diagnostic.fieldName)
+        assertEquals(null, diagnostic.resourceClass)
+        assertEquals(null, diagnostic.resourceKey)
+        assertEquals(null, diagnostic.statusCode)
+        assertEquals(null, diagnostic.limit)
+        assertEquals(null, diagnostic.actual)
+        assertEquals(diagnostic, terrainUnavailableDiagnostic())
+
+        // A count would say something false here: no tile drew displaced, so there is no partial
+        // figure to report, and the code already says the whole ground is flat.
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.TERRAIN_UNAVAILABLE,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.BASEMAP_RENDER,
+                limit = 0L,
+                actual = 40L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.TERRAIN_UNAVAILABLE,
+                severity = DiagnosticSeverity.ERROR,
+                stage = PipelineStage.BASEMAP_RENDER,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Diagnostic(
+                code = DiagnosticCode.TERRAIN_UNAVAILABLE,
+                severity = DiagnosticSeverity.WARNING,
+                stage = PipelineStage.RESOURCE_LOOKUP,
             )
         }
     }

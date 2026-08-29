@@ -23,6 +23,8 @@ final enum class com.rohittp.reng/DiagnosticCode : kotlin/Enum<com.rohittp.reng/
     enum entry LABEL_CONTENT_EXCLUDED // com.rohittp.reng/DiagnosticCode.LABEL_CONTENT_EXCLUDED|null[0]
     enum entry RESIDENT_GPU_TEXTURES_OVER_BUDGET // com.rohittp.reng/DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET|null[0]
     enum entry RESOURCE_RELOADED_AFTER_FREE // com.rohittp.reng/DiagnosticCode.RESOURCE_RELOADED_AFTER_FREE|null[0]
+    enum entry TERRAIN_COVERAGE_INCOMPLETE // com.rohittp.reng/DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE|null[0]
+    enum entry TERRAIN_UNAVAILABLE // com.rohittp.reng/DiagnosticCode.TERRAIN_UNAVAILABLE|null[0]
 
     final val entries // com.rohittp.reng/DiagnosticCode.entries|#static{}entries[0]
         final fun <get-entries>(): kotlin.enums/EnumEntries<com.rohittp.reng/DiagnosticCode> // com.rohittp.reng/DiagnosticCode.entries.<get-entries>|<get-entries>#static(){}[0]
