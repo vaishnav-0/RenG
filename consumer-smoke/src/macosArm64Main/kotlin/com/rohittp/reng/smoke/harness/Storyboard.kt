@@ -48,9 +48,31 @@ internal fun framePlans(
     groundless: Boolean = false,
     modelUrl: String? = null,
     labelless: Boolean = false,
-): List<FramePlan> = (0 until FRAME_COUNT).map { framePlan(it, groundless, modelUrl, labelless) }
+    globe: Boolean = false,
+    baseZoom: Double = DEFAULT_BASE_ZOOM,
+): List<FramePlan> =
+    (0 until FRAME_COUNT).map { framePlan(it, groundless, modelUrl, labelless, globe, baseZoom) }
 
-private fun framePlan(index: Int, groundless: Boolean, modelUrl: String?, labelless: Boolean): FramePlan {
+/**
+ * The storyboard's own zoom, unchanged from the sweep every previous cycle used: two and a half levels
+ * crossing three integer boundaries, at a scale where a city's labels are legible.
+ *
+ * A globe wants a different one. At zoom 11.5 the sphere is far larger than the viewport, so its
+ * curvature is off-screen and a correct globe is indistinguishable from a flat map -- which is the
+ * measured sagitta result stated the other way round: 0.44 logical pixels of bow at zoom 10. `--zoom`
+ * exists so the globe runs can sit where the planet is actually visible.
+ */
+internal const val DEFAULT_BASE_ZOOM: Double = 11.5
+private const val ZOOM_SPAN: Double = 2.5
+
+private fun framePlan(
+    index: Int,
+    groundless: Boolean,
+    modelUrl: String?,
+    labelless: Boolean,
+    globe: Boolean,
+    baseZoom: Double,
+): FramePlan {
     val t = index.toDouble() / (FRAME_COUNT - 1).toDouble()
     return FramePlan(
         frameIndex = index.toLong(),
@@ -60,13 +82,13 @@ private fun framePlan(index: Int, groundless: Boolean, modelUrl: String?, labell
             latitude = ANCHOR_LATITUDE + 0.010 * t,
             unwrappedLongitude = ANCHOR_LONGITUDE + 0.016 * t,
             // Two and a half levels of detail, crossing three integer zoom boundaries.
-            zoom = 11.5 + 2.5 * t,
+            zoom = baseZoom + ZOOM_SPAN * t,
             // Three quarters of a turn, so a frame that ignores bearing is obvious.
             bearing = 270.0 * t,
             // Flat, then tilted: the pitched half is where the ground's horizon behaviour shows.
             pitch = 55.0 * smoothStep(t),
         ),
-        projectionMode = ProjectionMode.MERCATOR,
+        projectionMode = if (globe) ProjectionMode.GLOBE else ProjectionMode.MERCATOR,
         drawBasemap = !groundless && index !in NEGATIVE_FRAMES,
         drawLabels = !labelless,
         stickers = listOf(mapAnchoredPin(), screenAnchoredF()),

@@ -85,6 +85,13 @@ val runHarness by tasks.registering(Exec::class) {
     // that run from an ordinary one is how a frame's label ink gets counted instead of eyeballed.
     val labelless = providers.gradleProperty("noLabels").isPresent
     val verbose = providers.gradleProperty("verbose").isPresent
+    // `-Pglobe` renders the same camera path with `projectionMode = GLOBE`. Cycle G.
+    val globe = providers.gradleProperty("globe").isPresent
+    // `-Pzoom` overrides the storyboard's base zoom. A globe needs it: the sweep starts at 11.5, where
+    // the sphere is far larger than the viewport and its curvature is entirely off-screen, so a correct
+    // globe is indistinguishable from a flat map. The measured sagitta says the same thing -- 0.44
+    // logical pixels of bow at zoom 10 -- so a globe run wants a zoom where the planet is visible.
+    val baseZoom = providers.gradleProperty("zoom")
     doFirst {
         frames.get().asFile.mkdirs()
     }
@@ -100,6 +107,8 @@ val runHarness by tasks.registering(Exec::class) {
             if (groundless) add("--no-basemap")
             if (labelless) add("--no-labels")
             if (verbose) add("--verbose")
+            if (globe) add("--globe")
+            baseZoom.orNull?.let { add("--zoom"); add(it) }
         },
     )
 }
