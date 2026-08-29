@@ -51,9 +51,10 @@ internal fun framePlans(
     globe: Boolean = false,
     baseZoom: Double = DEFAULT_BASE_ZOOM,
     zoomSpan: Double = DEFAULT_ZOOM_SPAN,
+    staticCamera: Boolean = false,
 ): List<FramePlan> =
     (0 until FRAME_COUNT).map {
-        framePlan(it, groundless, modelUrl, labelless, globe, baseZoom, zoomSpan)
+        framePlan(it, groundless, modelUrl, labelless, globe, baseZoom, zoomSpan, staticCamera)
     }
 
 /**
@@ -85,21 +86,29 @@ private fun framePlan(
     globe: Boolean,
     baseZoom: Double,
     zoomSpan: Double,
+    staticCamera: Boolean,
 ): FramePlan {
     val t = index.toDouble() / (FRAME_COUNT - 1).toDouble()
+    // `--static-camera` holds every camera property but zoom, which is the only way to compare two
+    // projections against each other. The ordinary sweep drifts north-east and turns three quarters
+    // of a turn while it pitches, all of which is the point when the subject is map content and all
+    // of which swamps the subject here: at zoom 22 the drift alone is over a kilometre, and a
+    // pitched globe shows a horizon a Mercator frame cannot have. Freezing them leaves the
+    // difference between the two projections as the only thing moving.
+    val drift = if (staticCamera) 0.0 else t
     return FramePlan(
         frameIndex = index.toLong(),
         camera = Camera(
             // A short north-easterly drift, so consecutive frames need overlapping but not
             // identical tile sets.
-            latitude = ANCHOR_LATITUDE + 0.010 * t,
-            unwrappedLongitude = ANCHOR_LONGITUDE + 0.016 * t,
+            latitude = ANCHOR_LATITUDE + 0.010 * drift,
+            unwrappedLongitude = ANCHOR_LONGITUDE + 0.016 * drift,
             // Two and a half levels of detail, crossing three integer zoom boundaries.
             zoom = baseZoom + zoomSpan * t,
             // Three quarters of a turn, so a frame that ignores bearing is obvious.
-            bearing = 270.0 * t,
+            bearing = 270.0 * drift,
             // Flat, then tilted: the pitched half is where the ground's horizon behaviour shows.
-            pitch = 55.0 * smoothStep(t),
+            pitch = 55.0 * smoothStep(drift),
         ),
         projectionMode = if (globe) ProjectionMode.GLOBE else ProjectionMode.MERCATOR,
         drawBasemap = !groundless && index !in NEGATIVE_FRAMES,

@@ -95,6 +95,8 @@ val runHarness by tasks.registering(Exec::class) {
     // `-PzoomSpan` widens the sweep past the storyboard's 2.5 levels. Cycle G's Float precision
     // error only arrives above zoom 17, which a 2.5-level sweep from a legible base can never reach.
     val zoomSpan = providers.gradleProperty("zoomSpan")
+    // `-PstaticCamera` holds latitude, longitude, bearing and pitch so only zoom moves.
+    val staticCamera = providers.gradleProperty("staticCamera").isPresent
     doFirst {
         frames.get().asFile.mkdirs()
     }
@@ -113,6 +115,7 @@ val runHarness by tasks.registering(Exec::class) {
             if (globe) add("--globe")
             baseZoom.orNull?.let { add("--zoom"); add(it) }
             zoomSpan.orNull?.let { add("--zoom-span"); add(it) }
+            if (staticCamera) add("--static-camera")
         },
     )
 }

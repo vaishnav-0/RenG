@@ -70,6 +70,7 @@ fun main(arguments: Array<String>) {
             globe = options.globe,
             baseZoom = options.baseZoom ?: DEFAULT_BASE_ZOOM,
             zoomSpan = options.zoomSpan ?: DEFAULT_ZOOM_SPAN,
+            staticCamera = options.staticCamera,
         )
             .take(options.frameCount)
             .forEach { plan ->
@@ -184,6 +185,7 @@ private class HarnessOptions(
     val globe: Boolean,
     val baseZoom: Double?,
     val zoomSpan: Double?,
+    val staticCamera: Boolean,
     val verbose: Boolean,
 )
 
@@ -195,6 +197,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     val groundless = arguments.contains("--no-basemap")
     val labelless = arguments.contains("--no-labels")
     val globe = arguments.contains("--globe")
+    val staticCamera = arguments.contains("--static-camera")
     var baseZoom: Double? = null
     var zoomSpan: Double? = null
     val verbose = arguments.contains("--verbose")
@@ -232,7 +235,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     }
     return HarnessOptions(
         styleUrl, modelUrl, outputDirectory, frameCount, groundless, labelless, globe, baseZoom,
-        zoomSpan, verbose,
+        zoomSpan, staticCamera, verbose,
     )
 }
 
