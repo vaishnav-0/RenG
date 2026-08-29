@@ -235,6 +235,29 @@ whole path so a `FramePlan(projectionMode = GLOBE)` produces pixels.
 **Assert the output, not the wiring.** Every stage has its own unit suite by now; what is unproven is that
 they compose. The discriminating test is a `FramePlan` in and globe pixels out.
 
+**The inventory, measured 2026-08-29 rather than left to be rediscovered.** Every piece below exists,
+is tested, and has **zero production callers** — this is precisely the hole E-labels fell into, and this
+task exists because it did:
+
+| piece | production callers |
+|---|---:|
+| `selectGlobeTiles` (Task 5) | **0** |
+| `GlobeHorizon` — the limb plane and `isBeyondGlobeHorizon` (Task 6) | **0** |
+| `GlobeProjection` — `unitSphereDirection`, `projectGlobe` (Task 1) | **0** (reached only through `GlobeCamera`) |
+| `globeGroundFootprint` (Task 5) | 1 |
+| `GlobeCamera` (Task 4) | 3 |
+
+**And there is an ambiguity Task 7 flagged that this task must settle.** There are now **two** ground entry
+points: `drawGround` (`GroundPipeline.kt:191`), whose `GLOBE` arm from Task 6 enables culling but still
+draws the **mercator quad**, and `drawGlobeGround` (`GlobeGroundPipeline.kt:498`), which draws the
+subdivided sphere grid. A `GLOBE` frame must reach the second. Leaving the first's `GLOBE` arm reachable
+would draw a flat quad with backface culling on — which is not obviously wrong on screen, and is exactly the
+kind of thing that survives a look at the output.
+
+Task 5's handover, in its own words: `globeGroundFootprint(camera)` then
+`selectGlobeTiles(footprint, observeMercatorLod(plan.camera.zoom, previous).selectedLod, maximumBasemapTileInstances)`
+— **the LOD argument is the camera's plain `zoom`, never `effectiveZoom`.**
+
 *Vacuity warning:* a fixture whose camera sees no tiles draws nothing, and so does a broken wiring. Assert a
 specific non-background pixel, and assert the result **changes** when the camera moves.
 
