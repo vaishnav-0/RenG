@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.projection
 
+import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.internal.DiagnosticField
 import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.math.DoubleVector3
@@ -105,6 +106,39 @@ internal fun projectGeographicPosition(
 }
 
 /**
+ * [projectGeographicPosition] for a camera orbiting the globe.
+ *
+ * The two arms differ in exactly one step. Mercator's goes through
+ * [com.rohittp.reng.internal.planning.resolveCameraRelativeMapPosition], which scales a Mercator
+ * offset by the world size and guards each component for GPU representability because an
+ * unbounded world-copy index reaches it. The globe's goes through [globeCameraRelativePosition],
+ * and carries no such guard because it cannot fire: every camera-relative coordinate on a sphere is
+ * bounded by `2 * radius + cameraDistance`, and [Camera.zoom]'s `0..22` with Mercator's latitude
+ * clip bound the radius itself at about 3.9 x 10^9 logical pixels. A guard that no input can trip
+ * is a dead branch, and the reason it is absent belongs here rather than in a reader's guess.
+ *
+ * The Mercator domain check is shared, because the globe re-projects the coordinates the basemap
+ * tiles are cut in: a position Mercator cannot express is one the globe has no tile for either.
+ */
+internal fun projectGeographicPosition(
+    camera: ResolvedGlobeCamera,
+    position: GeographicPosition,
+): ScreenProjection {
+    val projected = validateMercatorMapPosition(position)
+    if (projected !is SpatialOutcome.Success) return ScreenProjection.OutsideSupportedDomain
+
+    return projectCameraRelativeLogicalPosition(
+        camera,
+        globeCameraRelativePosition(
+            camera = camera,
+            mercatorX = projected.value.x,
+            mercatorY = projected.value.y,
+            altitudeMetres = position.altitudeMetres,
+        ),
+    )
+}
+
+/**
  * The half of [projectGeographicPosition] that starts from an already camera-relative logical
  * position — the shape [resolveCameraRelativeMapPosition] and
  * [com.rohittp.reng.internal.planning.ResolvedPlacement.logicalPosition] both produce, so a caller
@@ -128,15 +162,51 @@ internal fun projectGeographicPosition(
 internal fun projectCameraRelativeLogicalPosition(
     camera: ResolvedMercatorCamera,
     logicalPosition: DoubleVector3,
+): ScreenProjection = projectCameraRelativeLogicalPosition(
+    viewProjection = camera.projectionMatrix * camera.viewMatrix,
+    outputPixelSize = camera.outputPixelSize,
+    logicalPosition = logicalPosition,
+)
+
+/**
+ * The same projection for a camera that orbits the globe.
+ *
+ * **This file needed no globe arm in its arithmetic, and that is a finding rather than an
+ * omission.** Cycle G's spec once said the horizon test comes from the sign of [w]; it does not,
+ * and the same correction explains why nothing here changes. [w] is `-z_view`, the distance in
+ * front of the *camera plane*, and a camera outside the sphere has the whole planet in front of it,
+ * so an antipodal position carries a large **positive** [w] and is [ScreenProjection.Projected]
+ * with a perfectly good pixel. Deciding that it is behind the planet is a limb-plane dot product
+ * against [ResolvedGlobeCamera.eyeGlobeFixed], which is a different question asked somewhere else.
+ *
+ * So the perspective divide and the viewport transform are projection-mode-independent: both modes
+ * hand this the same kind of input -- a camera-relative east/north/up logical position -- and share
+ * [cameraViewMatrix] and [cameraProjectionMatrix] besides. Only the step *before* it differs, and
+ * that step is [globeCameraRelativePosition] rather than anything in `ScreenProjection`. E-labels'
+ * whole label path therefore keeps working under Mercator byte for byte, and gains a globe by
+ * choosing its camera.
+ */
+internal fun projectCameraRelativeLogicalPosition(
+    camera: ResolvedGlobeCamera,
+    logicalPosition: DoubleVector3,
+): ScreenProjection = projectCameraRelativeLogicalPosition(
+    viewProjection = camera.projectionMatrix * camera.viewMatrix,
+    outputPixelSize = camera.outputPixelSize,
+    logicalPosition = logicalPosition,
+)
+
+internal fun projectCameraRelativeLogicalPosition(
+    viewProjection: DoubleMatrix4,
+    outputPixelSize: OutputPixelSize,
+    logicalPosition: DoubleVector3,
 ): ScreenProjection {
-    val viewProjection = camera.projectionMatrix * camera.viewMatrix
     val w = viewProjection.homogeneousRow(HOMOGENEOUS_W_ROW, logicalPosition)
     if (!(w >= NEAR_DISTANCE_LOGICAL_PIXELS)) return ScreenProjection.BehindNearPlane(w)
 
     val normalisedX = viewProjection.homogeneousRow(0, logicalPosition) / w
     val normalisedY = viewProjection.homogeneousRow(1, logicalPosition) / w
-    val pixelX = (normalisedX + 1.0) * 0.5 * camera.outputPixelSize.width.toDouble()
-    val pixelY = (1.0 - normalisedY) * 0.5 * camera.outputPixelSize.height.toDouble()
+    val pixelX = (normalisedX + 1.0) * 0.5 * outputPixelSize.width.toDouble()
+    val pixelY = (1.0 - normalisedY) * 0.5 * outputPixelSize.height.toDouble()
     if (!pixelX.isFinite() || !pixelY.isFinite()) return ScreenProjection.OutsideSupportedDomain
 
     return ScreenProjection.Projected(pixelX = pixelX, pixelY = pixelY, w = w)

@@ -150,7 +150,9 @@ private fun invalidMercatorValue(field: DiagnosticField): SpatialOutcome.Failure
 private fun canonicalWgs84LongitudeDegrees(unwrappedLongitude: Double): Double =
     unwrappedLongitude - 360.0 * mercatorCopyIndex(unwrappedLongitude)
 
-private fun Double.degreesToRadians(): Double = this * PI / 180.0
+/** Degrees to radians, shared across `internal.projection` so the camera, the Mercator
+ * projection and the globe cannot disagree about the conversion. */
+internal fun Double.degreesToRadians(): Double = this * PI / 180.0
 
 private enum class MercatorPositionFields(
     val latitude: DiagnosticField,
