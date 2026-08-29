@@ -705,7 +705,7 @@ internal class SceneContent(
                         texture = tile.texture,
                         elevation = tile.elevation?.let { demTile ->
                             MercatorGroundTileDem(
-                                dem = groundTileDemOf(demTile),
+                                dem = groundTileDemOf(demTile, tile.instance.lod),
                                 mercatorY = mercatorTileYEdges(tile.instance.lod, tile.instance.tileY),
                             )
                         },
@@ -745,7 +745,7 @@ internal class SceneContent(
                         tileY = tile.instance.tileY.toLong(),
                         unwrappedX = tile.instance.unwrappedX,
                     )
-                    val tileDem = tile.elevation?.let { groundTileDemOf(it) }
+                    val tileDem = tile.elevation?.let { groundTileDemOf(it, tile.instance.lod) }
                     buildList {
                         add(
                             ResolvedGlobeGroundTile(
@@ -804,8 +804,16 @@ internal class SceneContent(
         }
     }
 
-    /** One [SceneTileDem] narrowed to the four `Float`s [GroundTileDem] hands the shader. */
-    private fun groundTileDemOf(tile: SceneTileDem): GroundTileDem = GroundTileDem(
+    /**
+     * One [SceneTileDem] narrowed to the four `Float`s [GroundTileDem] hands the shader, plus the
+     * one metric a shaded ground needs and a displacing one does not.
+     *
+     * **[lod] is the *requested* tile's, never the DEM's source LOD.** The number answers "how many
+     * metres of ground does one grid unit of this tile span", and the grid belongs to the tile being
+     * drawn; under overzoom the source DEM is coarser and its own side would be too large by exactly
+     * `childScale`, which would flatten every slope by the same factor.
+     */
+    private fun groundTileDemOf(tile: SceneTileDem, lod: Int): GroundTileDem = GroundTileDem(
         demTexture = tile.demTexture,
         window = floatArrayOf(
             tile.window.uMinimum.toFloat(),
@@ -813,6 +821,7 @@ internal class SceneContent(
             tile.window.vMinimum.toFloat(),
             tile.window.vMaximum.toFloat(),
         ),
+        tileSideMetres = (WORLD_CIRCUMFERENCE_METRES / (1L shl lod).toDouble()).toFloat(),
     )
 
     /**
@@ -829,6 +838,7 @@ internal class SceneContent(
         return GroundTileDem(
             demTexture = tile.demTexture,
             window = floatArrayOf(tile.window[0], tile.window[1], v, v),
+            tileSideMetres = tile.tileSideMetres,
         )
     }
 

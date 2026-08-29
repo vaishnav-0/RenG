@@ -73,10 +73,83 @@ internal const val GROUND_ELEVATION_SOURCE: String =
         "        rengGroundDemGrid.y;\n" +
         "}\n"
 
+/**
+ * The one text that turns a DEM into a **surface normal**, composed into both shaded ground vertex
+ * shaders on [GROUND_ELEVATION_SOURCE]'s reasoning exactly: the globe and the Mercator ground must
+ * derive the identical normal from the identical elevation, so the formula exists once.
+ *
+ * It is composed **after** [GROUND_ELEVATION_SOURCE] and calls into it, because GLSL requires a
+ * declaration before its use and because there is nothing here that a second elevation formula could
+ * usefully differ on.
+ *
+ * ## Metres over metres, never map units over map units
+ *
+ * The rise is [rengGroundElevationMetres]' own **metres** and the run is metres of ground, so the
+ * result is the normal of the real terrain rather than of the drawn surface. On a sphere those
+ * coincide; under Mercator they do not, and the difference is not academic. Mercator's altitude
+ * scale carries a `1 / cos(latitude)` term, so a plateau at a *constant* altitude rises toward the
+ * poles in map space — differencing the drawn `z` would shade a dead-flat plateau, which is exactly
+ * the case assertShadingLeavesGroundWithNoReliefAlone refuses.
+ *
+ * ## One texel, and the ring is why the taps at a tile's edge are legal
+ *
+ * The central difference steps **one DEM texel**, not one grid cell, so the normal has the DEM's own
+ * resolution however finely or coarsely the ground happens to be subdivided. A step of one texel in
+ * *source* coordinates is `1 / interior`, which in the grid coordinates this function is handed is
+ * `1 / (interior * span)` — the window's span, because under overzoom a ground tile covers a
+ * fraction of its source DEM and its grid coordinates are compressed against it by exactly that
+ * factor.
+ *
+ * At `grid.x = 0` the west tap lands at source `-1 / interior`, which snaps to padded texel 0 — the
+ * **west ring**, a copy of the western neighbour's last column. That is the one-texel ring
+ * [padDemTexture] exists for, spent a second time: without it the normal at every tile's west and
+ * north edge would have to be computed from a one-sided difference and would disagree with the
+ * neighbour's.
+ *
+ * **The far edge is the one place a one-texel ring is not enough, and this is what it does about
+ * it.** At `grid.x = 1` the sampled texel is already the east ring, whose own eastern neighbour is
+ * in a texture this draw has never seen, so the pair is shifted one texel inward (`min` against
+ * `1 - step`) and the difference is taken across the last interior texel and the ring instead. The
+ * run then matches the rise, where clamping the tap would have halved the slope; what remains is a
+ * second-order disagreement with the neighbouring tile's own west-edge normal along one vertex line.
+ * Closing that exactly needs a two-texel ring, which is a cost the whole acquisition would pay for a
+ * shading option that is off by default, so it is recorded here rather than bought.
+ *
+ * ## Why nothing here divides by zero
+ *
+ * A polar cap wedge is handed a DEM window collapsed in `v` (`polarCapDem`), and at the pole itself
+ * `cos(latitude)` reaches zero. Either would be a division by zero in the obvious formulation. Both
+ * are answered the same way: a run that is not positive contributes **no slope**, which is the
+ * honest answer — a collapsed window carries no elevation change to measure — rather than an epsilon
+ * chosen to be small enough. `normalize` is then always applied to a vector whose `z` is exactly
+ * `1.0`, so it can never be handed the zero vector.
+ */
+internal const val GROUND_NORMAL_SOURCE: String =
+    "uniform highp float rengGroundTileSideMetres;\n" +
+        "vec3 rengGroundEnuNormal(vec2 grid, float cosineLatitude) {\n" +
+        "    float interior = rengGroundDemGrid.x;\n" +
+        "    float uSpan = abs(rengGroundDemWindow.y - rengGroundDemWindow.x);\n" +
+        "    float vSpan = abs(rengGroundDemWindow.w - rengGroundDemWindow.z);\n" +
+        "    float uStep = uSpan > 0.0 ? 1.0 / (interior * uSpan) : 0.0;\n" +
+        "    float vStep = vSpan > 0.0 ? 1.0 / (interior * vSpan) : 0.0;\n" +
+        "    vec2 centre = min(grid, vec2(1.0 - uStep, 1.0 - vStep));\n" +
+        "    float metresPerGridUnit = rengGroundTileSideMetres * cosineLatitude;\n" +
+        "    float eastRun = 2.0 * uStep * metresPerGridUnit;\n" +
+        "    float northRun = 2.0 * vStep * metresPerGridUnit;\n" +
+        "    float eastRise = rengGroundElevationMetres(centre + vec2(uStep, 0.0)) -\n" +
+        "        rengGroundElevationMetres(centre - vec2(uStep, 0.0));\n" +
+        "    float southRise = rengGroundElevationMetres(centre + vec2(0.0, vStep)) -\n" +
+        "        rengGroundElevationMetres(centre - vec2(0.0, vStep));\n" +
+        "    float eastSlope = eastRun > 0.0 ? eastRise / eastRun : 0.0;\n" +
+        "    float northSlope = northRun > 0.0 ? -southRise / northRun : 0.0;\n" +
+        "    return normalize(vec3(-eastSlope, -northSlope, 1.0));\n" +
+        "}\n"
+
 internal const val GROUND_DEM_SAMPLER_UNIFORM_NAME: String = "rengGroundDem"
 internal const val GROUND_DEM_WINDOW_UNIFORM_NAME: String = "rengGroundDemWindow"
 internal const val GROUND_DEM_DECODE_UNIFORM_NAME: String = "rengGroundDemDecode"
 internal const val GROUND_DEM_GRID_UNIFORM_NAME: String = "rengGroundDemGrid"
+internal const val GROUND_TILE_SIDE_METRES_UNIFORM_NAME: String = "rengGroundTileSideMetres"
 
 /**
  * The texture unit a DEM is sampled from, which is **not** unit 0.
@@ -168,11 +241,33 @@ internal class GroundDemUniforms(
  * `DemTileWindow`'s own convention, the XYZ scheme's row order and [GroundGrid]'s `v`; all four
  * conventions agree, and a flip in any one of them mirrors every tile about its own centre line.
  */
-internal class GroundTileDem(val demTexture: Int, window: FloatArray) {
+internal class GroundTileDem(
+    val demTexture: Int,
+    window: FloatArray,
+    /**
+     * How many metres of ground one grid unit of this tile spans **at the equator**, which is
+     * `WORLD_CIRCUMFERENCE_METRES / 2^lod` and depends on nothing but the tile's LOD.
+     *
+     * **One number serves both projections**, which is not a coincidence and is worth stating.
+     * Mercator's tile is `C / 2^lod` of equatorial arc wide by construction; a globe tile spans
+     * `2 * PI / 2^lod` of longitude on a sphere of radius `C / (2 * PI)`, which is the same number.
+     * Both then narrow it to real ground metres by the same `cos(latitude)`, per vertex, inside
+     * [GROUND_NORMAL_SOURCE] — the conformality of Mercator is why the east and the north spacing
+     * are equal and why one scalar is enough.
+     *
+     * Read only by a **shaded** ground program: it is what turns an elevation difference into a
+     * slope, and an unshaded program never computes one, so its uniform location is `-1` and this
+     * value is never uploaded.
+     */
+    val tileSideMetres: Float,
+) {
     val window: FloatArray = window.copyOf()
 
     init {
         require(window.size == 4) { "a DEM window carries a west, an east, a north and a south bound" }
+        require(tileSideMetres > 0.0f && tileSideMetres.isFinite()) {
+            "a ground tile spans a positive, finite number of equatorial metres"
+        }
     }
 }
 
@@ -225,12 +320,22 @@ internal class GlobeGroundElevationFrame(
     }
 }
 
-/** Where [GROUND_ELEVATION_SOURCE]'s four uniforms landed in one linked program. */
+/**
+ * Where [GROUND_ELEVATION_SOURCE]'s four uniforms landed in one linked program, plus
+ * [GROUND_NORMAL_SOURCE]'s one.
+ *
+ * **[tileSideMetres] is `-1` in an unshaded program and that is the whole of how the two are told
+ * apart on the draw path.** A program compiled without [GROUND_NORMAL_SOURCE] never declares the
+ * uniform, so `glGetUniformLocation` answers `-1`, so the guard every other uniform here already
+ * carries skips the upload. Terrain shading therefore costs `drawGround` and `drawGlobeGround` no
+ * branch of their own and cannot be got wrong per tile: it is fixed when the program is compiled.
+ */
 internal class GroundElevationUniformLocations(
     val demSampler: Int,
     val window: Int,
     val decode: Int,
     val grid: Int,
+    val tileSideMetres: Int,
 )
 
 internal fun resolveGroundElevationUniforms(
@@ -241,6 +346,7 @@ internal fun resolveGroundElevationUniforms(
     window = binding.getUniformLocation(program, GROUND_DEM_WINDOW_UNIFORM_NAME),
     decode = binding.getUniformLocation(program, GROUND_DEM_DECODE_UNIFORM_NAME),
     grid = binding.getUniformLocation(program, GROUND_DEM_GRID_UNIFORM_NAME),
+    tileSideMetres = binding.getUniformLocation(program, GROUND_TILE_SIDE_METRES_UNIFORM_NAME),
 )
 
 /**
@@ -265,12 +371,18 @@ internal fun bindGroundElevationFrame(
     }
 }
 
-/** Uploads one tile's window and binds its padded DEM to [GROUND_DEM_TEXTURE_UNIT]. */
+/**
+ * Uploads one tile's window and its equatorial side, and binds its padded DEM to
+ * [GROUND_DEM_TEXTURE_UNIT].
+ */
 internal fun bindGroundElevationTile(
     binding: GlBinding,
     locations: GroundElevationUniformLocations,
     tile: GroundTileDem,
 ) {
+    if (locations.tileSideMetres >= 0) {
+        binding.uniform1f(locations.tileSideMetres, tile.tileSideMetres)
+    }
     if (locations.window >= 0) {
         binding.uniform4f(
             locations.window,

@@ -70,6 +70,7 @@ import com.rohittp.reng.internal.model.ModelIndices
 import com.rohittp.reng.internal.model.ResolvedMaterial
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
+import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
 import com.rohittp.reng.internal.projection.globeMetresToLogicalPixels
 import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import com.rohittp.reng.internal.terrain.DemEncoding
@@ -527,7 +528,11 @@ private class DepthFixture(
         texture = colour,
         elevation = dem?.let {
             MercatorGroundTileDem(
-                dem = GroundTileDem(demTexture = it, window = WHOLE_TILE_WINDOW),
+                dem = GroundTileDem(
+                    demTexture = it,
+                    window = WHOLE_TILE_WINDOW,
+                    tileSideMetres = tileSideMetres(FIXTURE_LOD),
+                ),
                 mercatorY = mercatorTileYEdges(FIXTURE_LOD, FIXTURE_TILE_Y),
             )
         },
@@ -541,7 +546,11 @@ private class DepthFixture(
                 unwrappedX = (index % 2).toLong(),
             ),
             texture = colour,
-            elevation = GroundTileDem(demTexture = dem, window = WHOLE_TILE_WINDOW),
+            elevation = GroundTileDem(
+                demTexture = dem,
+                window = WHOLE_TILE_WINDOW,
+                tileSideMetres = tileSideMetres(GLOBE_FIXTURE_LOD),
+            ),
         )
     }
 
@@ -588,6 +597,14 @@ private class DepthReadbackTarget(
  * `runGroundDisplacementReadback`'s has none, so every depth write in it is discarded by the
  * framebuffer before it can mean anything.
  */
+/**
+ * The tile's own equatorial side, read only by a **shaded** ground program. Every render here runs
+ * the unshaded ones, so this is honest bookkeeping rather than a number under test; terrain shading
+ * is `runGroundShadingReadback`'s.
+ */
+private fun tileSideMetres(lod: Int): Float =
+    (WORLD_CIRCUMFERENCE_METRES / (1L shl lod).toDouble()).toFloat()
+
 private fun createDepthReadbackTarget(binding: GlBinding): DepthReadbackTarget {
     val names = IntArray(1)
     binding.genTextures(1, names)

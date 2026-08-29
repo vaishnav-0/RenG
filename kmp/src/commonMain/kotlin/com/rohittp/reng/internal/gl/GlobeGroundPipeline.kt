@@ -141,7 +141,7 @@ internal const val GLOBE_GROUND_RADIAL_PER_METRE_UNIFORM_NAME: String =
  * cull depends on — is [GLOBE_GROUND_VERTEX_SOURCE]'s, unchanged. Displacement does not change
  * winding, so the far-hemisphere cull survives it.
  */
-internal const val TERRAIN_GLOBE_GROUND_VERTEX_SOURCE: String =
+private fun terrainGlobeGroundVertexSource(shading: Boolean): String =
     "#version 300 es\n" +
         "precision highp float;\n" +
         "layout(location = 0) in vec2 rengGlobeGroundGrid;\n" +
@@ -150,7 +150,9 @@ internal const val TERRAIN_GLOBE_GROUND_VERTEX_SOURCE: String =
         "uniform vec2 rengGlobeGroundTileUvV;\n" +
         "uniform float rengGlobeGroundRadialPerMetre;\n" +
         GROUND_ELEVATION_SOURCE +
+        (if (shading) GROUND_NORMAL_SOURCE else "") +
         "out vec2 rengGroundUv;\n" +
+        (if (shading) "out vec3 rengGroundNormalEnu;\n" else "") +
         "void main() {\n" +
         "    float longitude = mix(rengGlobeGroundTileEdges.x, rengGlobeGroundTileEdges.y, " +
         "rengGlobeGroundGrid.x);\n" +
@@ -167,11 +169,42 @@ internal const val TERRAIN_GLOBE_GROUND_VERTEX_SOURCE: String =
         "rengGlobeGroundRadialPerMetre;\n" +
         "    rengGroundUv = vec2(rengGlobeGroundGrid.x, mix(rengGlobeGroundTileUvV.x, " +
         "rengGlobeGroundTileUvV.y, rengGlobeGroundGrid.y));\n" +
+        (
+            if (shading) {
+                "    rengGroundNormalEnu = rengGroundEnuNormal(rengGlobeGroundGrid, cosineLatitude);\n"
+            } else {
+                ""
+            }
+            ) +
         "    gl_Position = rengGlobeGroundUnitSphereToClip * vec4(direction * radial, 1.0);\n" +
         "}\n"
 
+internal val TERRAIN_GLOBE_GROUND_VERTEX_SOURCE: String = terrainGlobeGroundVertexSource(shading = false)
+
+/**
+ * [TERRAIN_GLOBE_GROUND_VERTEX_SOURCE] with [GROUND_NORMAL_SOURCE] composed in, for a renderer whose
+ * configuration asked for terrain shading. See `terrainGroundVertexSource` for why one builder emits
+ * both and why the unshaded text is the same characters rather than merely equivalent.
+ *
+ * **`cosineLatitude` is handed over as it stands, with no `cosh` and no reciprocal**, and that
+ * asymmetry with the Mercator shader is the same one
+ * [com.rohittp.reng.internal.projection.globeMetresToLogicalPixels] already warns about from the
+ * other side. Mercator's tile is measured in equatorial metres and its ground metres are smaller by
+ * `cos(latitude)`, which the Mercator shader reaches as `1 / cosh(PI * (1 - 2y))`; a sphere's
+ * parallel is literally `cos(latitude)` times the equator, and the value is sitting in a local
+ * already. Passing Mercator's `cosh` term here would be exactly 2x wrong at latitude 60 and
+ * perfectly right at the equator, where a fixture naturally gets written.
+ */
+internal val TERRAIN_SHADED_GLOBE_GROUND_VERTEX_SOURCE: String =
+    terrainGlobeGroundVertexSource(shading = true)
+
 internal val TERRAIN_GLOBE_GROUND_SHADER_PAIR: ShaderPair =
     ShaderPair(vertexSource = TERRAIN_GLOBE_GROUND_VERTEX_SOURCE, fragmentSource = GROUND_FRAGMENT_SOURCE)
+
+internal val TERRAIN_SHADED_GLOBE_GROUND_SHADER_PAIR: ShaderPair = ShaderPair(
+    vertexSource = TERRAIN_SHADED_GLOBE_GROUND_VERTEX_SOURCE,
+    fragmentSource = GROUND_SHADED_FRAGMENT_SOURCE,
+)
 
 /**
  * The globe ground's displacing program and every uniform location it needs, compiled beside the
@@ -233,11 +266,13 @@ internal sealed interface GlobeGroundPipelineResult {
     data class Failed(val failure: FailureDescriptor) : GlobeGroundPipelineResult
 }
 
+/** [terrainShading] picks the displacing source, on [createGroundPipeline]'s reasoning exactly. */
 internal fun createGlobeGroundPipeline(
     binding: GlBinding,
     dialect: ShaderDialect,
     cache: GlProgramCache,
     deriver: ResourceKeyDeriver = ResourceKeyDeriver(),
+    terrainShading: Boolean = false,
 ): GlobeGroundPipelineResult {
     val key = deriver.internalPipeline(InternalPipelineRole.GLOBE_GROUND, GLOBE_GROUND_SHADER_PAIR).key
     val vertexPlan = scanShaderProfile(GLOBE_GROUND_VERTEX_SOURCE)
@@ -252,13 +287,26 @@ internal fun createGlobeGroundPipeline(
         is GlProgramResult.Failed -> return GlobeGroundPipelineResult.Failed(result.failure)
     }
 
+    val terrainPair = if (terrainShading) {
+        TERRAIN_SHADED_GLOBE_GROUND_SHADER_PAIR
+    } else {
+        TERRAIN_GLOBE_GROUND_SHADER_PAIR
+    }
     val terrainKey = deriver
-        .internalPipeline(InternalPipelineRole.TERRAIN_GLOBE_GROUND, TERRAIN_GLOBE_GROUND_SHADER_PAIR)
+        .internalPipeline(InternalPipelineRole.TERRAIN_GLOBE_GROUND, terrainPair)
         .key
-    val terrainVertexPlan = scanShaderProfile(TERRAIN_GLOBE_GROUND_VERTEX_SOURCE)
+    val terrainVertexPlan = scanShaderProfile(terrainPair.vertexSource)
         ?: return GlobeGroundPipelineResult.Failed(glOperationFailure(PipelineStage.GPU_RESOURCE, terrainKey))
+    val terrainFragmentPlan = if (terrainShading) {
+        scanShaderProfile(terrainPair.fragmentSource)
+            ?: return GlobeGroundPipelineResult.Failed(
+                glOperationFailure(PipelineStage.GPU_RESOURCE, terrainKey),
+            )
+    } else {
+        fragmentPlan
+    }
     val terrainProgram = when (
-        val result = cache.getOrCompile(binding, dialect, terrainKey, terrainVertexPlan, fragmentPlan)
+        val result = cache.getOrCompile(binding, dialect, terrainKey, terrainVertexPlan, terrainFragmentPlan)
     ) {
         is GlProgramResult.Linked -> result.program
         is GlProgramResult.Failed -> return GlobeGroundPipelineResult.Failed(result.failure)

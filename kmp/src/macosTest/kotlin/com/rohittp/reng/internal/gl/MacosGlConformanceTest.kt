@@ -14,9 +14,11 @@ import com.rohittp.reng.runGlobeFrameReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.DEPTH_READBACK_PIXELS
 import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
+import com.rohittp.reng.SHADING_READBACK_PIXELS
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runGroundDepthReadback
 import com.rohittp.reng.runGroundDisplacementReadback
+import com.rohittp.reng.runGroundShadingReadback
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runVertexTextureFetchProbeSuite
@@ -255,6 +257,30 @@ class MacosGlConformanceTest {
      * developer's whole macOS signal otherwise comes from one driver. See
      * `runGroundDisplacementReadback` for what each of its five cases discriminates.
      */
+
+    /**
+     * Cycle E-terrain task 11's gate: does `RendererConfiguration.terrainShading` change a slope's
+     * ink, leave ground with no relief byte-identically alone, and change nothing at all when it is
+     * off. `runGroundShadingReadback` says what each of its seven cases discriminates.
+     */
+    @Test fun theGroundShadingReadbackPassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG ground shading readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, SHADING_READBACK_PIXELS, SHADING_READBACK_PIXELS)
+                binding.scissor(0, 0, SHADING_READBACK_PIXELS, SHADING_READBACK_PIXELS)
+                runGroundShadingReadback(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
     @Test fun theGroundDisplacementReadbackPassesOnBothAppleRasterisers() {
         listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
             val fixture = CglCoreProfileContext.createOrNull(renderer)

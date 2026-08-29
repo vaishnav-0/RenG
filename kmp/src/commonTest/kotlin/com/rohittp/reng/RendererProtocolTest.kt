@@ -49,6 +49,39 @@ class RendererProtocolTest {
         assertEquals(256, defaults.maximumPreparationBatchSize)
         assertEquals(8, defaults.maximumConcurrentResourceOperations)
         assertSame(DiagnosticSink.None, defaults.diagnosticSink)
+        assertEquals(false, defaults.terrainShading)
+    }
+
+    /**
+     * **Terrain shading is off unless a consumer asks for it, and the default is the assertion.**
+     *
+     * Off is what the styles asked for: of the 34 RenG is verified against, the 3 that wanted relief
+     * shading declared a `hillshade` layer and the 6 that declare `terrain` declined it — two
+     * perfectly disjoint sets. A default of `true` would put light on every displaced map that never
+     * requested any, which is the divergence RenG's firewall posture exists to prevent, so this is a
+     * decision under test rather than a convention.
+     */
+    @Test
+    fun terrainShadingIsOffUnlessTheConsumerAsksAndRoundTripsWhenItDoes() {
+        val outputPixelSize = OutputPixelSize(64, 64)
+        val transport = Transport { error("test transport must not execute") }
+        val store = TestStore()
+
+        assertEquals(
+            false,
+            RendererConfiguration(outputPixelSize, transport, store).terrainShading,
+            "terrain shading must be opt-in: a consumer who says nothing gets the unlit ground " +
+                "ADR 0026 specifies and three published releases drew",
+        )
+        assertEquals(
+            true,
+            RendererConfiguration(
+                outputPixelSize,
+                transport,
+                store,
+                terrainShading = true,
+            ).terrainShading,
+        )
     }
 
     @Test

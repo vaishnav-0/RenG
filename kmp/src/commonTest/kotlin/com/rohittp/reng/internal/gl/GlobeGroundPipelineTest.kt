@@ -628,7 +628,11 @@ class GlobeGroundPipelineTest {
                 ResolvedGlobeGroundTile(
                     edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = 1L),
                     texture = 4,
-                    elevation = GroundTileDem(demTexture = 44, window = floatArrayOf(0f, 1f, 0f, 1f)),
+                    elevation = GroundTileDem(
+                        demTexture = 44,
+                        window = floatArrayOf(0f, 1f, 0f, 1f),
+                        tileSideMetres = 10_018_754.2f,
+                    ),
                 ),
                 ResolvedGlobeGroundTile(
                     edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = 2L),
@@ -702,7 +706,11 @@ class GlobeGroundPipelineTest {
                 ResolvedGlobeGroundTile(
                     edges = globeGroundTileEdges(lod = 2, tileY = 1, unwrappedX = 2L),
                     texture = 5,
-                    elevation = GroundTileDem(demTexture = 44, window = floatArrayOf(0f, 1f, 0f, 1f)),
+                    elevation = GroundTileDem(
+                        demTexture = 44,
+                        window = floatArrayOf(0f, 1f, 0f, 1f),
+                        tileSideMetres = 10_018_754.2f,
+                    ),
                 ),
             ),
             unitSphereToClip = FloatArray(16),

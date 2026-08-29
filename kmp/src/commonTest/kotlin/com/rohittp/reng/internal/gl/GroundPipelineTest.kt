@@ -511,6 +511,7 @@ class GroundPipelineTest {
                 // A quarter of the source tile: not the whole of it, and not centred, so a window
                 // dropped or transposed on the way to the shader is visible in the uploaded values.
                 window = floatArrayOf(0.25f, 0.5f, 0.5f, 0.75f),
+                tileSideMetres = 1_252_344.27f,
             ),
             mercatorY = mercatorTileYEdges(lod = 5, tileY = 16),
         ),

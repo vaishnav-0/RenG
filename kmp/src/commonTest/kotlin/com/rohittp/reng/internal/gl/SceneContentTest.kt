@@ -34,6 +34,7 @@ import com.rohittp.reng.internal.planning.resolveGeometry
 import com.rohittp.reng.internal.planning.resolvePlacement
 import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
+import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
 import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import com.rohittp.reng.internal.projection.resolveMercatorCamera
 import kotlin.test.Test
@@ -1349,12 +1350,21 @@ class SceneContentTest {
      * happens in this layer and nowhere else, which is why the *values* are asserted rather than the
      * fact of an upload: a transposed window — `u` and `v` swapped — reads a real DEM at a plausible
      * wrong place, and no assertion about a call having happened can see it.
+     *
+     * **The tile's own equatorial side is derived in this layer too, and it is the one number a
+     * shaded ground turns an elevation difference into a slope with.** It is asserted here because
+     * `runGroundShadingReadback` builds its own tiles and would not see a wrong derivation: a
+     * mutation halving this survived that whole suite. The fixture's DEM is a *quarter of a quarter*
+     * of a source tile two zoom levels coarser, so a build that read the **source** DEM's side
+     * instead of the requested tile's — the obvious way to get this wrong — is four times too large
+     * and flattens every slope by the same factor.
      */
     @Test
     fun aTerrainFramesPerTileWindowReachesTheGroundPassNarrowedOnce() {
         val binding = RecordingGlBinding().withDeclaredNames(
             GROUND_DEM_WINDOW_UNIFORM_NAME to 30,
             GROUND_DEM_GRID_UNIFORM_NAME to 31,
+            GROUND_TILE_SIDE_METRES_UNIFORM_NAME to 32,
         )
         val pipeline = newGroundPipeline(binding)
         val scene = Scene(
@@ -1392,6 +1402,15 @@ class SceneContentTest {
         assertTrue(
             binding.log.contains("uniform2f(31,256.0,2.0)"),
             "the source's interior size and the style's exaggeration: ${binding.log}",
+        )
+        // 2^4 written out rather than derived from the tile's own field, so the exponent is a
+        // statement this test makes and not one it copies from the code under test.
+        val requestedTileSide = (WORLD_CIRCUMFERENCE_METRES / 16.0).toFloat()
+        val sourceTileSide = (WORLD_CIRCUMFERENCE_METRES / 4.0).toFloat()
+        assertTrue(
+            binding.log.contains("uniform1f(32,$requestedTileSide)"),
+            "one grid unit of the **requested** LOD 4 tile is $requestedTileSide equatorial metres, " +
+                "not the source DEM's $sourceTileSide: ${binding.log}",
         )
     }
 

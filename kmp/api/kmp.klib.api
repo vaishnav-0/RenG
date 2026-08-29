@@ -577,7 +577,7 @@ final class com.rohittp.reng/RenGException : kotlin/RuntimeException { // com.ro
 }
 
 final class com.rohittp.reng/RendererConfiguration { // com.rohittp.reng/RendererConfiguration|null[0]
-    constructor <init>(com.rohittp.reng/OutputPixelSize, com.rohittp.reng/Transport, com.rohittp.reng/Store, com.rohittp.reng/ResourceLocator? = ..., com.rohittp.reng/ResourceLimits = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/Int = ..., com.rohittp.reng/DiagnosticSink = ...) // com.rohittp.reng/RendererConfiguration.<init>|<init>(com.rohittp.reng.OutputPixelSize;com.rohittp.reng.Transport;com.rohittp.reng.Store;com.rohittp.reng.ResourceLocator?;com.rohittp.reng.ResourceLimits;kotlin.Int;kotlin.Int;kotlin.Int;com.rohittp.reng.DiagnosticSink){}[0]
+    constructor <init>(com.rohittp.reng/OutputPixelSize, com.rohittp.reng/Transport, com.rohittp.reng/Store, com.rohittp.reng/ResourceLocator? = ..., com.rohittp.reng/ResourceLimits = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/Int = ..., com.rohittp.reng/DiagnosticSink = ..., kotlin/Boolean = ...) // com.rohittp.reng/RendererConfiguration.<init>|<init>(com.rohittp.reng.OutputPixelSize;com.rohittp.reng.Transport;com.rohittp.reng.Store;com.rohittp.reng.ResourceLocator?;com.rohittp.reng.ResourceLimits;kotlin.Int;kotlin.Int;kotlin.Int;com.rohittp.reng.DiagnosticSink;kotlin.Boolean){}[0]
 
     final val basemapStyle // com.rohittp.reng/RendererConfiguration.basemapStyle|{}basemapStyle[0]
         final fun <get-basemapStyle>(): com.rohittp.reng/ResourceLocator? // com.rohittp.reng/RendererConfiguration.basemapStyle.<get-basemapStyle>|<get-basemapStyle>(){}[0]
@@ -595,6 +595,8 @@ final class com.rohittp.reng/RendererConfiguration { // com.rohittp.reng/Rendere
         final fun <get-resourceLimits>(): com.rohittp.reng/ResourceLimits // com.rohittp.reng/RendererConfiguration.resourceLimits.<get-resourceLimits>|<get-resourceLimits>(){}[0]
     final val store // com.rohittp.reng/RendererConfiguration.store|{}store[0]
         final fun <get-store>(): com.rohittp.reng/Store // com.rohittp.reng/RendererConfiguration.store.<get-store>|<get-store>(){}[0]
+    final val terrainShading // com.rohittp.reng/RendererConfiguration.terrainShading|{}terrainShading[0]
+        final fun <get-terrainShading>(): kotlin/Boolean // com.rohittp.reng/RendererConfiguration.terrainShading.<get-terrainShading>|<get-terrainShading>(){}[0]
     final val transport // com.rohittp.reng/RendererConfiguration.transport|{}transport[0]
         final fun <get-transport>(): com.rohittp.reng/Transport // com.rohittp.reng/RendererConfiguration.transport.<get-transport>|<get-transport>(){}[0]
 }

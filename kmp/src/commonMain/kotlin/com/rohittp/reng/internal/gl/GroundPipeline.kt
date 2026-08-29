@@ -49,6 +49,51 @@ internal const val GROUND_FRAGMENT_SOURCE: String =
         "    rengGroundColour = texture(rengGroundTexture, rengGroundUv);\n" +
         "}\n"
 
+/**
+ * The ground's fragment stage **with terrain shading on**: the same texel, multiplied by ADR 0026's
+ * one light applied to the normal the vertex stage derived from the DEM.
+ *
+ * Shared by both projections for [GROUND_FRAGMENT_SOURCE]'s own reason — the globe and the Mercator
+ * ground must sample the identical texture identically, and the cycle's cross-mode agreement gate
+ * asserts it — and a second copy would make a drift a silent edit rather than a visible one.
+ *
+ * ## Three properties of the expression, each deliberate
+ *
+ * **The light's numbers are derived, never transcribed.** [SCENE_LIGHT_DIRECTION_ENU_GLSL],
+ * [SCENE_LIGHT_FLAT_INCIDENCE_GLSL] and [SCENE_LIGHT_RELIEF_GAIN_GLSL] are built from ADR 0026's
+ * Kotlin constants, on `demDecodeCoefficients`' argument exactly: a formula written twice is a
+ * formula that can drift, and a test can only catch a drift already written.
+ *
+ * **`1.0 + (incidence - flat) * gain` rather than `ambient + diffuse * incidence`.** The two are
+ * algebraically the same light divided by what it does to flat ground, and this arrangement is what
+ * makes ground with no relief come out **exactly** unchanged: a flat normal is `(0, 0, 1)` exactly,
+ * so `incidence` is the light's own `z` to the bit, so the subtraction is `0.0` and the factor is
+ * `1.0` with no rounding anywhere. Written the other way it would be one ulp from one, and "terrain
+ * shading changes only the pixels that have relief" would be a tolerance rather than a fact.
+ *
+ * **The result is clamped against the texel's own alpha**, because a slope facing the light reaches
+ * about 1.24 and the ground is composited premultiplied (`GL_ONE, GL_ONE_MINUS_SRC_ALPHA`), where a
+ * colour above its own alpha is not a valid premultiplied triple. On an opaque tile — every rendered
+ * basemap tile with an opaque style background — the clamp is what the framebuffer would do anyway,
+ * so it costs nothing and removes the question. There is no lower clamp because the factor's minimum
+ * is about 0.43 and cannot reach zero.
+ */
+internal val GROUND_SHADED_FRAGMENT_SOURCE: String =
+    "#version 300 es\n" +
+        "precision highp float;\n" +
+        "uniform sampler2D rengGroundTexture;\n" +
+        "in vec2 rengGroundUv;\n" +
+        "in vec3 rengGroundNormalEnu;\n" +
+        "layout(location = 0) out vec4 rengGroundColour;\n" +
+        "void main() {\n" +
+        "    vec4 tile = texture(rengGroundTexture, rengGroundUv);\n" +
+        "    float incidence = max(dot(normalize(rengGroundNormalEnu), " +
+        SCENE_LIGHT_DIRECTION_ENU_GLSL + "), 0.0);\n" +
+        "    float shade = 1.0 + (incidence - " + SCENE_LIGHT_FLAT_INCIDENCE_GLSL + ") * " +
+        SCENE_LIGHT_RELIEF_GAIN_GLSL + ";\n" +
+        "    rengGroundColour = vec4(min(tile.rgb * shade, vec3(tile.a)), tile.a);\n" +
+        "}\n"
+
 internal val GROUND_SHADER_PAIR: ShaderPair =
     ShaderPair(vertexSource = GROUND_VERTEX_SOURCE, fragmentSource = GROUND_FRAGMENT_SOURCE)
 
@@ -92,15 +137,26 @@ internal const val GROUND_ELEVATION_SCALE_UNIFORM_NAME: String = "rengGroundElev
  * tiles sharing a line of latitude are handed the identical `mercatorY` endpoint and `mix` returns
  * its endpoints exactly, so the two evaluate `cosh` on the identical argument instead.
  *
- * ## What is deliberately not here
+ * ## What [shading] adds, and what stays out either way
  *
- * No depth write here: ADR 0039's write is conditional on the *frame* being displaced, so it belongs
- * to [drawGround] -- which is the only place that knows which of a frame's tiles carry a DEM -- and
- * not to a shader compiled once per renderer. No shading: ADR 0026 leaves the ground unlit and
- * terrain shading is task 11's opt-in. The UV, the winding and the position of an undisplaced vertex are
- * [GROUND_VERTEX_SOURCE]'s, character for character.
+ * With [shading] false this emits the source three published releases' flat ground is compared
+ * against, character for character; with it true it emits that source plus [GROUND_NORMAL_SOURCE],
+ * one `out vec3`, and one statement. Terrain shading is a **renderer** option
+ * (`RendererConfiguration.terrainShading`), fixed for a renderer's whole life, so which of the two
+ * is compiled is decided once at setup and no frame can vary it. ADR 0026 leaves the ground unlit
+ * and that stays the default.
+ *
+ * `1 / cos(latitude)` reaches the normal as `1 / cosh(PI * (1 - 2y))`, the reciprocal of the same
+ * per-vertex term the displacement uses, because the run of a tap is real ground metres and Mercator
+ * measures its tile in equatorial ones. It is the same latitude factor, applied to the horizontal
+ * where the displacement applies it to the vertical.
+ *
+ * No depth write here either way: ADR 0039's write is conditional on the *frame* being displaced, so
+ * it belongs to [drawGround] -- which is the only place that knows which of a frame's tiles carry a
+ * DEM -- and not to a shader compiled once per renderer. The UV, the winding and the position of an
+ * undisplaced vertex are [GROUND_VERTEX_SOURCE]'s, character for character.
  */
-internal const val TERRAIN_GROUND_VERTEX_SOURCE: String =
+private fun terrainGroundVertexSource(shading: Boolean): String =
     "#version 300 es\n" +
         "precision highp float;\n" +
         "layout(location = 0) in vec2 rengGroundGrid;\n" +
@@ -108,18 +164,50 @@ internal const val TERRAIN_GROUND_VERTEX_SOURCE: String =
         "uniform vec2 rengGroundMercatorY;\n" +
         "uniform float rengGroundElevationScale;\n" +
         GROUND_ELEVATION_SOURCE +
+        (if (shading) GROUND_NORMAL_SOURCE else "") +
         "out vec2 rengGroundUv;\n" +
+        (if (shading) "out vec3 rengGroundNormalEnu;\n" else "") +
         "void main() {\n" +
         "    float mercatorY = mix(rengGroundMercatorY.x, rengGroundMercatorY.y, rengGroundGrid.y);\n" +
         "    float up = rengGroundElevationMetres(rengGroundGrid) * rengGroundElevationScale *\n" +
         "        cosh(3.141592653589793 * (1.0 - 2.0 * mercatorY));\n" +
         "    vec2 position = vec2(rengGroundGrid.x - 0.5, 0.5 - rengGroundGrid.y);\n" +
         "    rengGroundUv = rengGroundGrid;\n" +
+        (
+            if (shading) {
+                "    rengGroundNormalEnu = rengGroundEnuNormal(rengGroundGrid, 1.0 /\n" +
+                    "        cosh(3.141592653589793 * (1.0 - 2.0 * mercatorY)));\n"
+            } else {
+                ""
+            }
+            ) +
         "    gl_Position = rengGroundModelViewProjection * vec4(position, up, 1.0);\n" +
         "}\n"
 
+internal val TERRAIN_GROUND_VERTEX_SOURCE: String = terrainGroundVertexSource(shading = false)
+
+/**
+ * [TERRAIN_GROUND_VERTEX_SOURCE] with [GROUND_NORMAL_SOURCE] composed in and one varying added, for
+ * a renderer whose configuration asked for terrain shading.
+ *
+ * **The unshaded text is not merely equivalent, it is the same characters**, which is what keeps
+ * "off draws what three releases drew" a statement about which program ran. Both come out of one
+ * builder that *adds* to the unshaded body rather than restructuring it, so there is no arrangement
+ * of this file in which the two drift.
+ *
+ * `cosh` is evaluated twice, once for the displacement and once for `1 / cos(latitude)`, rather than
+ * hoisted into a local. Hoisting would have changed the unshaded text, and every GLSL compiler in
+ * the world eliminates the common subexpression.
+ */
+internal val TERRAIN_SHADED_GROUND_VERTEX_SOURCE: String = terrainGroundVertexSource(shading = true)
+
 internal val TERRAIN_GROUND_SHADER_PAIR: ShaderPair =
     ShaderPair(vertexSource = TERRAIN_GROUND_VERTEX_SOURCE, fragmentSource = GROUND_FRAGMENT_SOURCE)
+
+internal val TERRAIN_SHADED_GROUND_SHADER_PAIR: ShaderPair = ShaderPair(
+    vertexSource = TERRAIN_SHADED_GROUND_VERTEX_SOURCE,
+    fragmentSource = GROUND_SHADED_FRAGMENT_SOURCE,
+)
 
 /**
  * The Mercator ground's displacing program and every uniform location it needs.
@@ -189,11 +277,22 @@ internal sealed interface GroundPipelineResult {
     data class Failed(val failure: FailureDescriptor) : GroundPipelineResult
 }
 
+/**
+ * [terrainShading] picks which of the two displacing sources is compiled, and picking it **here** is
+ * the whole of how the option is spent.
+ *
+ * `RendererConfiguration.terrainShading` is a property of the renderer rather than of a `FramePlan`,
+ * so the choice is made once, at setup, and `drawGround` needs no branch, no uniform and no way to
+ * get it wrong per tile. Off — the default — the flat program and the displacing program are the two
+ * this file has compiled since task 6, byte for byte, so a frame drawn with shading off is not
+ * merely expected to match the unshaded picture, it runs the identical program.
+ */
 internal fun createGroundPipeline(
     binding: GlBinding,
     dialect: ShaderDialect,
     cache: GlProgramCache,
     deriver: ResourceKeyDeriver = ResourceKeyDeriver(),
+    terrainShading: Boolean = false,
 ): GroundPipelineResult {
     val key = deriver.internalPipeline(InternalPipelineRole.GROUND, GROUND_SHADER_PAIR).key
     val vertexPlan = scanShaderProfile(GROUND_VERTEX_SOURCE)
@@ -208,11 +307,18 @@ internal fun createGroundPipeline(
         is GlProgramResult.Failed -> return GroundPipelineResult.Failed(result.failure)
     }
 
-    val terrainKey = deriver.internalPipeline(InternalPipelineRole.TERRAIN_GROUND, TERRAIN_GROUND_SHADER_PAIR).key
-    val terrainVertexPlan = scanShaderProfile(TERRAIN_GROUND_VERTEX_SOURCE)
+    val terrainPair = if (terrainShading) TERRAIN_SHADED_GROUND_SHADER_PAIR else TERRAIN_GROUND_SHADER_PAIR
+    val terrainKey = deriver.internalPipeline(InternalPipelineRole.TERRAIN_GROUND, terrainPair).key
+    val terrainVertexPlan = scanShaderProfile(terrainPair.vertexSource)
         ?: return GroundPipelineResult.Failed(glOperationFailure(PipelineStage.GPU_RESOURCE, terrainKey))
+    val terrainFragmentPlan = if (terrainShading) {
+        scanShaderProfile(terrainPair.fragmentSource)
+            ?: return GroundPipelineResult.Failed(glOperationFailure(PipelineStage.GPU_RESOURCE, terrainKey))
+    } else {
+        fragmentPlan
+    }
     val terrainProgram = when (
-        val result = cache.getOrCompile(binding, dialect, terrainKey, terrainVertexPlan, fragmentPlan)
+        val result = cache.getOrCompile(binding, dialect, terrainKey, terrainVertexPlan, terrainFragmentPlan)
     ) {
         is GlProgramResult.Linked -> result.program
         is GlProgramResult.Failed -> return GroundPipelineResult.Failed(result.failure)

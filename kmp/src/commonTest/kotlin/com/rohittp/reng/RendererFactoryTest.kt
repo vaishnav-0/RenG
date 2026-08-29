@@ -93,6 +93,36 @@ class RendererFactoryTest {
         assertFalse(rendered.contains("GL_", ignoreCase = false))
     }
 
+    // ---- Terrain shading reaches the compiler ------------------------------------------------------
+
+    /**
+     * **`RendererConfiguration.terrainShading` has to reach the program the ground is drawn with, and
+     * the value of this test is that nothing else in the codebase would notice if it did not.**
+     *
+     * The option is spent in exactly one place — which of two displacing sources
+     * `createGroundPipeline` compiles at setup — and everything downstream of that is a uniform
+     * location that came back negative. So a flag that arrived at `RendererConfiguration` and was
+     * never passed on would produce a renderer that accepted the option, reported it back, drew an
+     * unshaded ground, and failed no unit test at all. That is the shape E-labels found twice: a
+     * path fully built and wired to nothing.
+     *
+     * The instrument is the compiled shader text itself, because setup is the only moment the choice
+     * is made and the recording binding is where it lands.
+     */
+    @Test
+    fun theTerrainShadingOptionReachesTheProgramSetupCompiles() {
+        listOf(false, true).forEach { shading ->
+            val binding = validGlesBinding()
+            createRenderer(testConfiguration(terrainShading = shading), binding, fixedProbe())
+            assertEquals(
+                shading,
+                binding.shaderSources.values.any { it.contains("rengGroundEnuNormal") },
+                "a renderer configured with terrainShading=$shading compiled the wrong ground " +
+                    "program: ${binding.shaderSources.values.count()} shaders were compiled",
+            )
+        }
+    }
+
     // ---- Purity: no consumer exchange at setup ---------------------------------------------------
 
     @Test
@@ -1001,12 +1031,14 @@ class RendererFactoryTest {
         store: Store = NoOpStore(),
         basemapStyle: ResourceLocator? = null,
         diagnosticSink: DiagnosticSink = DiagnosticSink.None,
+        terrainShading: Boolean = false,
     ): RendererConfiguration = RendererConfiguration(
         outputPixelSize = OutputPixelSize(64, 64),
         transport = transport,
         store = store,
         basemapStyle = basemapStyle,
         diagnosticSink = diagnosticSink,
+        terrainShading = terrainShading,
     )
 
     /** A GLES 3.20 context report matching [com.rohittp.reng.internal.gl.GlLifecycleDriverTest]'s own default fixture. */

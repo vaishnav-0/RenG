@@ -8,9 +8,11 @@ import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.DEPTH_READBACK_PIXELS
 import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
+import com.rohittp.reng.SHADING_READBACK_PIXELS
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runGroundDepthReadback
 import com.rohittp.reng.runGroundDisplacementReadback
+import com.rohittp.reng.runGroundShadingReadback
 import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
@@ -118,6 +120,27 @@ class LinuxGlConformanceTest {
      * pixels, and does a DEM with no relief leave it exactly alone. `runGroundDisplacementReadback`
      * says what each of its five cases discriminates.
      */
+    /**
+     * Cycle E-terrain task 11's gate on llvmpipe: does terrain shading change a slope's ink, leave
+     * ground with no relief byte-identically alone, and change nothing at all when it is off.
+     * `runGroundShadingReadback` says what each of its seven cases discriminates.
+     */
+    @Test fun theGroundShadingReadbackPassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, SHADING_READBACK_PIXELS, SHADING_READBACK_PIXELS)
+            binding.scissor(0, 0, SHADING_READBACK_PIXELS, SHADING_READBACK_PIXELS)
+            runGroundShadingReadback(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
     @Test fun theGroundDisplacementReadbackPassesOnARealEsContext() {
         val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
         try {

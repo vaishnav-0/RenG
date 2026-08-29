@@ -5,6 +5,7 @@ import com.rohittp.reng.internal.math.DoubleVector3
 import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.roundToLong
 import kotlin.math.sin
 
 /**
@@ -107,3 +108,80 @@ internal fun sceneLightDirectionCameraSpace(camera: ResolvedFrameCamera): FloatA
     val cameraSpace = viewBasis * SCENE_LIGHT_DIRECTION_ENU
     return floatArrayOf(cameraSpace.x.toFloat(), cameraSpace.y.toFloat(), cameraSpace.z.toFloat())
 }
+
+
+/**
+ * [value] as a GLSL float literal at a fixed nine decimal places.
+ *
+ * **Deterministic across every published target, which `Double.toString` is not.** Kotlin's own
+ * formatting is free to choose a different shortest round-tripping decimal on the JVM and on Native,
+ * and a shader whose *text* differs between two targets derives a different `ResourceKey` under ADR
+ * 0018 for the identical program. This builds the digits out of a rounded `Long` instead, so the
+ * same constant produces the same characters everywhere.
+ *
+ * Nine places is far more than the roughly seven decimal digits a GLSL `highp float` can hold, so
+ * nothing is lost to the truncation that is not lost to the narrowing anyway.
+ */
+internal fun glslFloatLiteral(value: Double): String {
+    require(value.isFinite()) { "a GLSL float literal is finite" }
+    val scaled = (value * 1_000_000_000.0).roundToLong()
+    val magnitude = if (scaled < 0L) -scaled else scaled
+    val sign = if (scaled < 0L) "-" else ""
+    return "$sign${magnitude / 1_000_000_000L}." +
+        (magnitude % 1_000_000_000L).toString().padStart(9, '0')
+}
+
+/**
+ * [SCENE_LIGHT_DIRECTION_ENU] as a GLSL constructor, for a shader that lights a surface in the
+ * surface's **own** east/north/up frame rather than in camera space.
+ *
+ * [sceneLightDirectionCameraSpace] is the other half of ADR 0026 and exists because a model is one
+ * object at one place, so its whole shading is resolved against the camera anchor's frame once. The
+ * ground is not one place: it is the map, and its local north differs across a globe frame. So the
+ * ground lights per surface point against that point's own local frame, which is the *cartographic*
+ * reading the ADR already commits to — [SCENE_LIGHT_AZIMUTH_DEGREES] is a compass bearing, compass
+ * bearings are local, and the number was taken from `hillshade-illumination-direction`, which is
+ * computed per tile against local north. Under Mercator every local frame is parallel and the two
+ * readings coincide exactly; on a sphere they do not, and the local one is the one that keeps the
+ * whole planet lit from the north-west instead of turning the light into a time of day.
+ */
+internal val SCENE_LIGHT_DIRECTION_ENU_GLSL: String =
+    "vec3(" + glslFloatLiteral(SCENE_LIGHT_DIRECTION_ENU.x) + ", " +
+        glslFloatLiteral(SCENE_LIGHT_DIRECTION_ENU.y) + ", " +
+        glslFloatLiteral(SCENE_LIGHT_DIRECTION_ENU.z) + ")"
+
+/**
+ * The incidence a surface with **no relief** has under [SCENE_LIGHT_DIRECTION_ENU]: the light's own
+ * up component, because a flat ground's normal is `(0, 0, 1)` exactly.
+ *
+ * Written as the same literal the direction's `z` is written as, deliberately: a shader that
+ * subtracts this from a flat surface's own `dot(normal, light)` gets exactly `0.0` rather than an
+ * ulp, which is what makes "terrain shading leaves ground with no relief byte-identical" a fact
+ * about IEEE arithmetic instead of a tolerance.
+ */
+internal val SCENE_LIGHT_FLAT_INCIDENCE_GLSL: String =
+    glslFloatLiteral(SCENE_LIGHT_DIRECTION_ENU.z)
+
+/**
+ * How much a surface's own colour moves per unit of incidence away from the flat datum:
+ * `diffuse / (ambient + diffuse * flatIncidence)`.
+ *
+ * **This is ADR 0026's light divided by what it does to flat ground, and the division is the
+ * decision worth reading twice.** Applied raw, ADR 0026's `ambient + diffuse * incidence` renders a
+ * dead-flat map at 0.81 of its own colour, so switching terrain shading on would darken every pixel
+ * of every style — including the 28 of 34 that declare no `terrain` at all — which is precisely the
+ * "light the style never requested" this option's default exists to avoid. Normalising by the flat
+ * value keeps the light, the azimuth, the elevation and the ambient term exactly as the ADR fixes
+ * them and moves only the datum: flat ground is left alone and relief is what changes.
+ *
+ * It is also what hillshading does — a highlight and a shadow either side of the unshaded map — and
+ * ADR 0026 took its azimuth from `hillshade-illumination-direction` so the two would agree.
+ *
+ * The resulting factor spans about `[0.43, 1.24]`, so it is never negative and needs no lower clamp;
+ * the upper end is why the shaded fragment stage clamps against the texel's own alpha rather than
+ * letting a highlight break the premultiplied invariant.
+ */
+internal val SCENE_LIGHT_RELIEF_GAIN_GLSL: String = glslFloatLiteral(
+    SCENE_LIGHT_DIFFUSE.toDouble() /
+        (SCENE_LIGHT_AMBIENT.toDouble() + SCENE_LIGHT_DIFFUSE.toDouble() * SCENE_LIGHT_DIRECTION_ENU.z),
+)

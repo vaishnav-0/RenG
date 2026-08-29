@@ -599,16 +599,25 @@ internal fun createInternalGlState(
     binding: GlBinding,
     profile: RenderContextProfile,
     programs: GlProgramCache,
-    outputPixelSize: OutputPixelSize,
+    // The whole configuration rather than the two fields it reads, deliberately: the ground's
+    // displacing program is compiled shaded or unshaded from `terrainShading` here and nowhere else,
+    // and a second setup parameter is a second thing a caller can forget to pass on.
+    configuration: RendererConfiguration,
 ): InternalGlStateResult {
     val deriver = ResourceKeyDeriver()
-    val surfaceDescriptor = offscreenSurfaceDescriptorFor(outputPixelSize)
+    val surfaceDescriptor = offscreenSurfaceDescriptorFor(configuration.outputPixelSize)
     val surfaceKey = deriver.offscreenSurface(surfaceDescriptor).key
 
     val surfaceResult = createOffscreenSurface(binding, profile, surfaceKey, surfaceDescriptor)
     val compositeResult = createCompositePipeline(binding, profile.dialect, programs, deriver)
     val stickerResult = createStickerPipeline(binding, profile.dialect, programs, deriver)
-    val groundResult = createGroundPipeline(binding, profile.dialect, programs, deriver)
+    val groundResult = createGroundPipeline(
+        binding,
+        profile.dialect,
+        programs,
+        deriver,
+        terrainShading = configuration.terrainShading,
+    )
     val labelResult = createLabelPipeline(binding, profile.dialect, programs, deriver)
     val iconResult = createIconPipeline(binding, profile.dialect, programs, deriver)
 
@@ -1885,7 +1894,7 @@ internal class RenGRenderer(
                     "a successful adoption must have recorded a profile"
                 }
                 when (
-                    val recreated = createInternalGlState(binding, profile, programs, configuration.outputPixelSize)
+                    val recreated = createInternalGlState(binding, profile, programs, configuration)
                 ) {
                     is InternalGlStateResult.Created -> {
                         offscreenSurface = recreated.state.offscreenSurface
@@ -2120,7 +2129,12 @@ internal class RenGRenderer(
         // few lines above.
         val globeGround = if (resolvedCamera is ResolvedGlobeCamera && sceneGroundTiles.isNotEmpty()) {
             globeGroundPipeline ?: when (
-                val result = createGlobeGroundPipeline(binding, profile.dialect, programs)
+                val result = createGlobeGroundPipeline(
+                    binding,
+                    profile.dialect,
+                    programs,
+                    terrainShading = configuration.terrainShading,
+                )
             ) {
                 is GlobeGroundPipelineResult.Created -> result.pipeline.also { globeGroundPipeline = it }
                 is GlobeGroundPipelineResult.Failed -> return result.failure

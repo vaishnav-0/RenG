@@ -48,6 +48,7 @@ import com.rohittp.reng.internal.gl.globeGroundTileEdges
 import com.rohittp.reng.internal.gl.mercatorTileYEdges
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
+import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
 import com.rohittp.reng.internal.projection.globeMetresToLogicalPixels
 import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import com.rohittp.reng.internal.terrain.DemEncoding
@@ -499,7 +500,11 @@ private class DisplacementFixture(
                     texture = colour,
                     elevation = dem?.let {
                         MercatorGroundTileDem(
-                            dem = GroundTileDem(demTexture = it, window = WHOLE_TILE_WINDOW),
+                            dem = GroundTileDem(
+                                demTexture = it,
+                                window = WHOLE_TILE_WINDOW,
+                                tileSideMetres = tileSideMetres(lod),
+                            ),
                             mercatorY = mercatorTileYEdges(lod, tileY),
                         )
                     },
@@ -527,7 +532,13 @@ private class DisplacementFixture(
                         unwrappedX = (index % 2).toLong(),
                     ),
                     texture = colour,
-                    elevation = dem?.let { GroundTileDem(demTexture = it, window = WHOLE_TILE_WINDOW) },
+                    elevation = dem?.let {
+                        GroundTileDem(
+                            demTexture = it,
+                            window = WHOLE_TILE_WINDOW,
+                            tileSideMetres = tileSideMetres(GLOBE_FIXTURE_LOD),
+                        )
+                    },
                 )
             },
             unitSphereToClip = composeGlobeGroundUnitSphereToClip(globeCamera),
@@ -772,6 +783,14 @@ private const val FIXTURE_SAMPLE_COLUMN: Int = DISPLACEMENT_READBACK_PIXELS / 2
 
 /** The whole source tile: no overzoom, so the requested tile is the DEM tile. */
 private val WHOLE_TILE_WINDOW: FloatArray = floatArrayOf(0.0f, 1.0f, 0.0f, 1.0f)
+
+/**
+ * The tile's own equatorial side, which only a **shaded** ground reads — every render here runs the
+ * unshaded programs, so this is honest bookkeeping rather than a number under test. Terrain shading
+ * is `runGroundShadingReadback`'s.
+ */
+private fun tileSideMetres(lod: Int): Float =
+    (WORLD_CIRCUMFERENCE_METRES / (1L shl lod).toDouble()).toFloat()
 
 /**
  * `clip.x = x`, `clip.y = y + 2^-12 * z`, `clip.z = 0`, `clip.w = 1`, column-major.

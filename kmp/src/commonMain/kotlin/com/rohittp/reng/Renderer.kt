@@ -15,6 +15,13 @@ public sealed interface RenderTarget {
     public val framebufferName: FramebufferName
 }
 
+/**
+ * Everything a renderer is fixed by for its whole life: where it draws, what it draws through, and
+ * the handful of options that are properties of the renderer rather than of any one [FramePlan].
+ *
+ * **A plain class rather than a `data class`, deliberately**, so a new option costs one constructor
+ * parameter and one property and no `copy`/`componentN` fallout on the public ABI.
+ */
 public class RendererConfiguration(
     outputPixelSize: OutputPixelSize,
     transport: Transport,
@@ -25,6 +32,7 @@ public class RendererConfiguration(
     maximumPreparationBatchSize: Int = 256,
     maximumConcurrentResourceOperations: Int = 8,
     diagnosticSink: DiagnosticSink = DiagnosticSink.None,
+    terrainShading: Boolean = false,
 ) {
     public val outputPixelSize: OutputPixelSize
     public val transport: Transport
@@ -35,6 +43,35 @@ public class RendererConfiguration(
     public val maximumPreparationBatchSize: Int
     public val maximumConcurrentResourceOperations: Int
     public val diagnosticSink: DiagnosticSink
+
+    /**
+     * Whether the displaced ground is shaded from a normal derived from the elevation data, **off by
+     * default**.
+     *
+     * **Off is the default because it is what the styles asked for.** MapLibre does not shade terrain
+     * either: it displaces, and relief shading comes from a `hillshade` layer the basemap engine
+     * draws into the tile image. Of the 34 styles RenG is verified against, the 3 that wanted relief
+     * shading declared `hillshade` and the 6 that declare `terrain` declined it — two perfectly
+     * disjoint sets. Inventing light a style never requested is the divergence RenG's firewall
+     * posture exists to prevent, so off, the ground stays unlit exactly as ADR 0026 says and draws
+     * the pixels three published releases drew.
+     *
+     * **It exists at all because two of those six styles are pure vector** — 10 and 55 fill layers,
+     * no raster layer — and a flat fill reads as flat however far it moves. The other four carry
+     * satellite imagery whose pixels already contain relief shading.
+     *
+     * On, the ground is lit by ADR 0026's one directional light — azimuth 335 degrees, elevation 45
+     * degrees, with its ambient term — rather than by a second lighting concept, and **normalised so
+     * that ground with no relief is left exactly alone**: turning this on changes the pixels of
+     * slopes and of nothing else. It is a property of the renderer rather than of a [FramePlan], so
+     * it cannot vary frame to frame — the ground's displacing program is compiled with or without it
+     * at setup, which is what makes "off draws the same bytes" a fact about which program ran rather
+     * than an argument about floating point.
+     *
+     * This is **not** the style's own `lights` block. That compiles to a flat colour multiplier
+     * independent of `terrain` entirely; it tints, and it cannot make relief visible.
+     */
+    public val terrainShading: Boolean
 
     init {
         require(maximumBasemapTileInstances in 1..4096) {
@@ -56,6 +93,7 @@ public class RendererConfiguration(
         this.maximumPreparationBatchSize = maximumPreparationBatchSize
         this.maximumConcurrentResourceOperations = maximumConcurrentResourceOperations
         this.diagnosticSink = diagnosticSink
+        this.terrainShading = terrainShading
     }
 }
 

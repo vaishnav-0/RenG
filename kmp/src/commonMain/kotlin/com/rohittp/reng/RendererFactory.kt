@@ -73,7 +73,7 @@ internal fun createRenderer(
 
     val programs = GlProgramCache()
     val glState = when (
-        val result = createInternalGlState(binding, profile, programs, configuration.outputPixelSize)
+        val result = createInternalGlState(binding, profile, programs, configuration)
     ) {
         is InternalGlStateResult.Created -> result.state
         is InternalGlStateResult.Failed -> throw result.failure.toException()
