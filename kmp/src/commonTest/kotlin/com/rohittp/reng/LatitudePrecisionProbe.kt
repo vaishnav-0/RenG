@@ -128,7 +128,15 @@ import kotlin.test.assertTrue
  *   here says anything about the fragment stage.
  * - **It measures latitude only.** The longitude half still calls `sin` and `cos` on the real
  *   pipeline; this probe reports what those two built-ins cost in ULP, but not what a longitude error
- *   costs on screen.
+ *   costs on screen. On `Apple Software Renderer` those two figures are 170,439 and 117,441 ULP,
+ *   which is a number somebody should follow up rather than a number this file acts on.
+ * - **Its magnitude case cannot resolve a formulation error smaller than the specification's own
+ *   `exp` allowance**, and that is arithmetic rather than an oversight: a conforming driver may
+ *   legally be 8.7 metres out, so [MAXIMUM_SPECIFIED_LATITUDE_ERROR_METRES] cannot be tightened past
+ *   it without inventing a number. Measured against deliberate breakage: scaling this file's own
+ *   `sin phi` by `1 + 1e-6` — worst 3.2 metres, since `d phi / d sin phi` peaks at `sin phi cos phi`
+ *   = 0.5 — passes, and `1 + 1e-5` at 31.6 metres fails. Anything under about ten metres of
+ *   *latitude* belongs to a gate with a stored reference, which is Cycle J's.
  * - **It is not built on the code it guards.** The program compiled here is this file's own, the
  *   half-angle expression is written out again rather than imported from `GlobeGroundPipeline`, and
  *   the `Double` reference is `atan(sinh psi)` rather than `unitSphereDirection` — so a regression in
@@ -231,8 +239,13 @@ private fun assertTheDriverReturnsTheExactInputsItWasGiven(
  *
  * - **The half-angle formulation does not move one bit**, at either injected magnitude. True by
  *   construction — that path contains no trigonometric call to perturb — and the spike says as much.
- *   It is asserted so that an edit reintroducing `atan`, `sin` or `cos` into the latitude path shows
- *   up here as a red test rather than as a silent loss of the guarantee.
+ *   What it establishes is that the injection is **scoped to the naive path**, which is what makes
+ *   the contrast between the two columns mean anything at all. It is deliberately *not* a guard
+ *   against a future edit reintroducing trigonometry: rewriting the half-angle channel here as
+ *   `sin(2 * atan(t) - PI / 2)` leaves this assertion green, because the raw built-ins the rewrite
+ *   calls are not the wrapped ones the injection reaches. That mutation is caught — by
+ *   [assertTheHalfAnglePathIsMonotonicWhereTheFormatResolvesIt], through the nine resolved inversions
+ *   the naive formulation genuinely has on `Apple M3 Max`.
  * - **One ULP already makes the naive path invert more often.** This is MapLibre #7419's reported
  *   symptom, on this driver, without a badly broken driver: one ULP is nothing, and it is enough.
  * - **[CONTROL_TRIG_ULPS] ULP inverts the naive path at separations the format resolves, and puts it
