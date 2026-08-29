@@ -4,11 +4,13 @@ import com.rohittp.reng.BASEMAP_READBACK_PIXELS
 import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
 import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.LABEL_INTEGRATION_PIXELS
+import com.rohittp.reng.LATITUDE_PROBE_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
+import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -257,6 +259,34 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
                 binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
                 runGlobeGroundReadbackSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * Cycle G task 11's probe, on both Apple rasterisers this machine can offer.
+     *
+     * Both rather than one, because the whole subject is what a *driver* does to a transcendental
+     * function and these are two different implementations of them — the Metal path and Apple's CPU
+     * rasteriser, which is also the only driver a hosted GitHub macOS runner has. Neither is a Mali,
+     * which is the family MapLibre measured 200–300 metres of latitude error on and the family RenG
+     * has never run on; ADR 0033 is why no real mobile GPU appears here at all. The probe prints its
+     * measured numbers per driver rather than concluding anything about the ones it cannot reach.
+     */
+    @Test fun theLatitudePrecisionProbePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG latitude precision probe: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+                binding.scissor(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+                runLatitudePrecisionProbeSuite(binding, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }

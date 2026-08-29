@@ -3,10 +3,12 @@ package com.rohittp.reng.internal.gl
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
 import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
+import com.rohittp.reng.LATITUDE_PROBE_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -118,6 +120,31 @@ class LinuxGlConformanceTest {
             binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
             binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
             runGlobeGroundReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 11's probe on llvmpipe, which is the only driver in CI that is neither Apple's nor
+     * a simulator's.
+     *
+     * It prints what it measures rather than asserting a budget on it, and nothing here is expected
+     * to stand down: the two cases that can stand down do so only on a driver whose `exp` is outside
+     * its own specified bound or is not monotone, and both Apple rasterisers measured `exp` at 4 and
+     * 1 ULP with no inversions. If llvmpipe differs, the printed line is the finding.
+     */
+    @Test fun theLatitudePrecisionProbePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+            binding.scissor(0, 0, LATITUDE_PROBE_PIXELS, LATITUDE_PROBE_PIXELS)
+            runLatitudePrecisionProbeSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }
