@@ -92,6 +92,9 @@ val runHarness by tasks.registering(Exec::class) {
     // globe is indistinguishable from a flat map. The measured sagitta says the same thing -- 0.44
     // logical pixels of bow at zoom 10 -- so a globe run wants a zoom where the planet is visible.
     val baseZoom = providers.gradleProperty("zoom")
+    // `-PzoomSpan` widens the sweep past the storyboard's 2.5 levels. Cycle G's Float precision
+    // error only arrives above zoom 17, which a 2.5-level sweep from a legible base can never reach.
+    val zoomSpan = providers.gradleProperty("zoomSpan")
     doFirst {
         frames.get().asFile.mkdirs()
     }
@@ -109,6 +112,7 @@ val runHarness by tasks.registering(Exec::class) {
             if (verbose) add("--verbose")
             if (globe) add("--globe")
             baseZoom.orNull?.let { add("--zoom"); add(it) }
+            zoomSpan.orNull?.let { add("--zoom-span"); add(it) }
         },
     )
 }

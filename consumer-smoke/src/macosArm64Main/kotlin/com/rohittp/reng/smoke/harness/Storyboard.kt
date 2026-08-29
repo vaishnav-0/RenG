@@ -50,8 +50,11 @@ internal fun framePlans(
     labelless: Boolean = false,
     globe: Boolean = false,
     baseZoom: Double = DEFAULT_BASE_ZOOM,
+    zoomSpan: Double = DEFAULT_ZOOM_SPAN,
 ): List<FramePlan> =
-    (0 until FRAME_COUNT).map { framePlan(it, groundless, modelUrl, labelless, globe, baseZoom) }
+    (0 until FRAME_COUNT).map {
+        framePlan(it, groundless, modelUrl, labelless, globe, baseZoom, zoomSpan)
+    }
 
 /**
  * The storyboard's own zoom, unchanged from the sweep every previous cycle used: two and a half levels
@@ -63,7 +66,16 @@ internal fun framePlans(
  * exists so the globe runs can sit where the planet is actually visible.
  */
 internal const val DEFAULT_BASE_ZOOM: Double = 11.5
-private const val ZOOM_SPAN: Double = 2.5
+/**
+ * How many zoom levels the sweep crosses. Two and a half is the storyboard's own, chosen so a run
+ * crosses three integer LOD boundaries at a scale where a city is legible.
+ *
+ * `--zoom-span` widens it because one thing this project needs to *see* is not a feature: the
+ * globe-fixed formulation evaluates in `Float` on the GPU, and its positional error is 0.008 logical
+ * pixels at zoom 10, 0.979 at 17, 2.557 at 18 and 45.8 at 22. Watching that arrive needs a sweep
+ * twelve levels wide, which no storyboard written for map content would ever ask for.
+ */
+internal const val DEFAULT_ZOOM_SPAN: Double = 2.5
 
 private fun framePlan(
     index: Int,
@@ -72,6 +84,7 @@ private fun framePlan(
     labelless: Boolean,
     globe: Boolean,
     baseZoom: Double,
+    zoomSpan: Double,
 ): FramePlan {
     val t = index.toDouble() / (FRAME_COUNT - 1).toDouble()
     return FramePlan(
@@ -82,7 +95,7 @@ private fun framePlan(
             latitude = ANCHOR_LATITUDE + 0.010 * t,
             unwrappedLongitude = ANCHOR_LONGITUDE + 0.016 * t,
             // Two and a half levels of detail, crossing three integer zoom boundaries.
-            zoom = baseZoom + ZOOM_SPAN * t,
+            zoom = baseZoom + zoomSpan * t,
             // Three quarters of a turn, so a frame that ignores bearing is obvious.
             bearing = 270.0 * t,
             // Flat, then tilted: the pitched half is where the ground's horizon behaviour shows.

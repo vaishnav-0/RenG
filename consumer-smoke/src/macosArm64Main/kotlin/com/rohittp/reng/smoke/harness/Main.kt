@@ -69,6 +69,7 @@ fun main(arguments: Array<String>) {
             labelless = options.labelless,
             globe = options.globe,
             baseZoom = options.baseZoom ?: DEFAULT_BASE_ZOOM,
+            zoomSpan = options.zoomSpan ?: DEFAULT_ZOOM_SPAN,
         )
             .take(options.frameCount)
             .forEach { plan ->
@@ -182,6 +183,7 @@ private class HarnessOptions(
     val labelless: Boolean,
     val globe: Boolean,
     val baseZoom: Double?,
+    val zoomSpan: Double?,
     val verbose: Boolean,
 )
 
@@ -194,6 +196,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     val labelless = arguments.contains("--no-labels")
     val globe = arguments.contains("--globe")
     var baseZoom: Double? = null
+    var zoomSpan: Double? = null
     val verbose = arguments.contains("--verbose")
     // Advance by one for a valueless flag and by two for an option that consumed its value. A fixed
     // `index += 2` reads only even positions, so a single flag ahead of a value option hides that
@@ -210,6 +213,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
             "--out" -> { outputDirectory = value ?: outputDirectory; true }
             "--frames" -> { frameCount = value?.toIntOrNull() ?: frameCount; true }
             "--zoom" -> { baseZoom = value?.toDoubleOrNull() ?: baseZoom; true }
+            "--zoom-span" -> { zoomSpan = value?.toDoubleOrNull() ?: zoomSpan; true }
             else -> false
         }
         index += if (consumedValue) 2 else 1
@@ -227,7 +231,8 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
         return null
     }
     return HarnessOptions(
-        styleUrl, modelUrl, outputDirectory, frameCount, groundless, labelless, globe, baseZoom, verbose,
+        styleUrl, modelUrl, outputDirectory, frameCount, groundless, labelless, globe, baseZoom,
+        zoomSpan, verbose,
     )
 }
 
