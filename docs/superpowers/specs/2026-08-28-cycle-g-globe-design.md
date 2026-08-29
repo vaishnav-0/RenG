@@ -150,6 +150,19 @@ the in-source reason that raster otherwise shows "visible warping and deformatio
 levels". That is roughly 2,300 triangles per ground tile — but from a **shared, cached** grid buffer with
 per-tile uniforms, not per-tile CPU work. Mapbox uses one 64×64 grid for the entire globe.
 
+**Measured 2026-08-29 by Task 7, and it changes what the deferred decision is about.** The subdivision cost
+is not what argues for a transition — granularity derived from the camera lands at 64 cells a side at zoom
+0, halving every second zoom to a **single quad above zoom 11**, so the high-zoom cost the transition was
+meant to avoid does not arise. What does arise is **precision**: the globe-fixed path narrows to `Float` for
+the GPU, and its positional error is **0.008 px at zoom 10, 0.979 at zoom 17, 2.557 at zoom 18 and 45.8 at
+zoom 22.** Mercator does not pay this because it rebases per tile in `Double`; the globe-fixed formulation
+cannot.
+
+So the transition question is live again, and about a different thing than §5 assumed. Options are a
+mercator handover at high zoom, a per-tile rebasing of the globe path, or accepting sub-pixel error to about
+zoom 17 and visible error beyond it. **This still ships no tuned constant** — the number now exists, and the
+decision is the owner's.
+
 **This is deliberately the same discipline as E5 and G5: no tuned constant ships before a measurement.** The
 X2 fix had to retrofit exactly that lesson, where two defaults chosen without measurement disagreed by 4×.
 
