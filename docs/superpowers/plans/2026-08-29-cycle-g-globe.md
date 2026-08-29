@@ -24,6 +24,10 @@ a decision to accept. `VERSION_NAME` stays `0.4.0`, frozen.
   and check `$?`. This cost E-labels two merges reported green while not compiling.
 - **An absent measurement is evidence.** Unmoved test counts and missing JUnit XML both mean the tests did
   not run, not that results are stale.
+- **A readback suite's "skip" is not a JUnit skip.** When a probe distrusts a driver, the affected case
+  prints `SKIPPED [...]` and the enclosing test still **passes**, so the XML's `skipped` attribute stays 0.
+  Reading `skipped=0` as "nothing stood down" is wrong — grep the output for the printed line. On the iOS
+  simulator, `[the ground covers the frame]` stands down on every run while the attribute reads zero.
 - **Report which single case caught each mutation.** A mutation caught by every case is weaker evidence
   than one caught by exactly one; the latter is what proves a case is not inert.
 - **RenG stays in logical pixels.** Not ECEF metres — the depth buffer's resolvable step is 0.025 logical
