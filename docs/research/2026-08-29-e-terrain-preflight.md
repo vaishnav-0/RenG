@@ -52,8 +52,83 @@ substitution: when the DEM source's `maximumZoom` is below the requested zoom, t
 ancestor and the caller must sample a sub-rectangle of it. That is a real piece of arithmetic RenG does not
 have today.
 
-A parallel investigation of Rentile's implementation is recorded separately; this section is only what the
-API surface alone proves.
+### What Rentile's implementation actually does, read from its source at `87ccba2`
+
+**`requestedTile` vs `sourceTile` is overzoom, and nothing is lost.** They diverge through
+`CompiledRasterSource.sampleFor` (`rentile/.../internal/raster/RasterResource.kt:34-54`), in exactly two
+cases: a request above the source's `maximumZoom`, and a non-canonical `x` (a world-wrapped tile). It is
+**not** substitution — `acquireTerrainTiles` calls the acquirer directly
+(`.../internal/DefaultBasemapRasterizer.kt:668`) and the ancestor-substitution machinery is reachable only
+from a different path. Rentile computes `childScale`, `childX` and `childY` and then **throws them away**:
+`RasterSample` carries them, `ValidatedDemTile` does not. RenG can recompute them exactly —
+`childScale = 1 shl (requested.z - source.z)`, `childX = floorMod(requested.x, 1 shl requested.z) %
+childScale`, `childY = requested.y % childScale` — checked against Rentile's own fixture
+(`RasterResourceTest.kt:19-51`). The requested tile occupies `u ∈ [childX/childScale,
+(childX+1)/childScale]` of the source, `v` **increasing southward**. **Overzoom depth is unbounded** below
+the profile's `maximumOutputZoom = 22`, so a `maxzoom: 12` DEM reaches `childScale = 1024` at zoom 22 —
+the entire ground tile inside one DEM texel, with no diagnostic.
+
+**"Validated" is weaker than the type name suggests.** Rentile checks HTTP status, encoded size, that Skia
+decodes it, dimensions against limits, and a SHA-256 digest
+(`.../internal/raster/RasterResourceAcquirer.kt:128-258`). It does **not** check that the bytes are a PNG
+(`Image.makeFromEncoded` is multi-format, and Rentile's own `isPng` helper is used only on an unrelated
+path), does **not** compare the image's dimensions to the descriptor's `tileSizePx`, and does **not** check
+terrain encoding. **So `ValidatedDemTile.bytes` is not guaranteed PNG, not guaranteed `tileSizePx`, and not
+guaranteed opaque.**
+
+**And RenG's own check has a hole.** `validatesDemTerrainEncoding` runs on the firewall's **write** path
+only; `passesClassSpecificReadValidation` returns `true` for `BASEMAP_DEM_TILE` through its `else` branch
+(`internal/firewall/OperationRegistry.kt:748-764`), so **bytes served from the consumer's Store reach
+Rentile having passed nothing of RenG's**. Opacity is not pedantic here: Rentile decodes DEM pixels into a
+**premultiplied** N32 bitmap (`DefaultBasemapRasterizer.kt:1671`), so any alpha below 255 silently scales
+R/G/B before any elevation formula reads them.
+
+**The elevation formulas, quoted rather than remembered** (`DefaultBasemapRasterizer.kt:1706-1709`), in
+metres:
+
+```
+MAPBOX    : -10000.0 + (red * 65536 + green * 256 + blue) * 0.1
+TERRARIUM : red * 256.0 + green + blue / 256.0 - 32768.0
+```
+
+Rentile decodes elevation in that one private place and **exposes it nowhere** — no public API converts DEM
+bytes to heights. RenG's decode is RenG's to write, and these two lines are what to check it against.
+
+**The DEM grid is edge-*exclusive*, and this is the cycle's hardest problem.** Two adjacent DEM tiles do
+**not** duplicate a row or column; pixel `-1` of tile B *is* pixel `W-1` of tile A
+(`DefaultBasemapRasterizer.kt:1693-1700`), and the world is one continuous grid of area samples with pixel
+`i` centred at `(i + 0.5)/N` (`:1720-1722`). So two adjacent ground tiles displaced from their own DEM
+tiles **will disagree at the shared edge** unless RenG samples the same world position from both sides —
+which means reading one texel of the *neighbouring* DEM tile. **`acquireTerrainTiles` provides no border
+and does not fetch neighbours**, while Rentile's own hillshade planner explicitly expands to the 3×3
+neighbourhood because it needs exactly that (`:851-855`). RenG's `tileTimeRoutes` already preregisters the
+3×3 for `raster-dem` sources (`BasemapStyleManifest.kt:1073-1087`), so the routes exist but the acquisition
+does not.
+
+**Four smaller traps, each confirmed in source rather than inferred.**
+
+- **`TerrainSourceDescriptor.sourceId` is a digest**, `sha256Hex` of the style's source id
+  (`StyleCompiler.kt:1770`). Comparing it to `BasemapStyleManifest.terrainSourceId` requires hashing first.
+- **Tiles below `minimumZoom` or outside the source's `bounds` vanish silently** — `mapNotNull`, no
+  diagnostic, no exception — and `TerrainSourceDescriptor` exposes no `bounds` with which to predict it.
+  Results must be matched by `requestedTile`, never by index or count.
+- **One failing DEM tile fails the whole call** (`throwAcquisitionFailures`, `:1370-1384`). There is no
+  per-tile degradation, and RenG's own contract forbids retries.
+- **`ValidatedDemTile` is a `data class` whose `equals` compares `bytes` by reference** (`Api.kt:583-590`),
+  unlike `LabelGlyphAtlas`, which overrides for exactly this reason. `distinct()`, a `Set` or a `Map` key
+  will not behave as content equality.
+
+**`terrain.exaggeration` is read by nothing in Rentile.** `compileTerrainSource` reads `terrain.source` and
+no other key (`StyleCompiler.kt:564-585`); the only exaggeration in the codebase is a *hillshade layer*
+paint property. RenG must parse it from the style itself — and the corpus above says every style that
+declares it sets `1`, so a fixture at `1` proves nothing.
+
+**`groundRadianceDescriptor` is not about terrain at all.** It is compiled from the style's top-level
+`lights` array (`internal/style/GroundLight.kt:23-52`) and is entirely independent of `terrain`: a style
+with lights and no terrain yields one, and a style with terrain and no lights yields `null`. Its range is
+neither 0..1 nor 0..255 — the value is gamma re-encoded over a **sum**, giving `[0, 2^(1/2.2)] ≈ [0,
+1.366]`, **unclamped**, so multiplying a ground colour by it can exceed 1. With Rentile's defaults it is
+≈ **0.969**, near-white but not white, which is worth knowing before someone reads a faint tint as a bug.
 
 ## 3. The corpus: 6 of 34 styles need displacement
 
@@ -155,19 +230,17 @@ background shows through.
 
 Stated plainly, because the next step is grilling and these are what it has to resolve.
 
-- **Seam behaviour between adjacent DEM tiles.** Whether two horizontally adjacent DEM tiles duplicate the
-  elevation along their shared edge, or whether the last column of one and the first of the next are
-  different positions. RenG must displace two adjacent ground tiles to identical heights along a shared
-  edge or a crack opens. Not determined from RenG's code, because RenG has never touched DEM pixels.
-- **Overzoom arithmetic.** What sub-rectangle of an ancestor tile a `requestedTile` maps to, and whether
-  Rentile documents a maximum depth.
+- **How to close the edge-exclusive seam.** The grid convention is now known; the *answer* is not. Fetching
+  the 3×3 neighbourhood multiplies DEM acquisition ninefold; a one-texel border cannot be asked for; and
+  clamping instead produces a terrace at every tile edge. This is the cycle's largest open design question.
 - **Whether the two ground pipelines converge or stay separate.** The globe and Mercator grounds are
   separate pipelines today for reasons `GlobeGroundPipeline.kt` argues; terrain is the first feature both
   need identically.
 - **Precision.** ADR 0037's erratum accepted a `Float` positional error reaching 50 px at the frame edge at
   zoom 22. Elevation adds a third axis to that, and nothing here measures it.
-- **Whether terrain changes the lit/unlit rule.** ADR 0026 leaves the ground unlit. A displaced ground with
-  no shading reads as flat regardless of its geometry, and `groundRadianceDescriptor` exists — but whether
-  it is a radiance term for lighting or a flat fill has not been established from Rentile's source.
+- **Whether terrain changes the lit/unlit rule.** ADR 0026 leaves the ground unlit, and a displaced ground
+  with no shading reads as flat regardless of its geometry. `groundRadianceDescriptor` is now understood —
+  a `lights`-derived, unclamped `[0, 1.366]` triple — but whether RenG shades terrain at all, and with what,
+  is undecided. Note that it says nothing about terrain, so it does not answer this by itself.
 - **What terrain does to labels and placements.** E-labels places on a flat ground; a displaced ground
   moves every anchor. Not investigated.
