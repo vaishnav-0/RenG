@@ -240,8 +240,16 @@ internal fun geometryGrid(
 
     return assembleGeometryGrid(
         cellsPerSide = cellsPerSide,
-        admitsCell = { westX, eastX, northY, southY ->
-            footprint.mayAdmitMercatorCell(westX, eastX, northY, southY)
+        // The descent hands out the cell's own `(u, v)` corners, so they are lerped into Mercator
+        // coordinates here: the footprint decides in the frame the basemap tiles are cut in, which
+        // is what lets a geometry and the ground beneath it be culled by one machine.
+        admitsCell = { westU, eastU, northV, southV ->
+            footprint.mayAdmitMercatorCell(
+                minimumX = lerp(bounds.westX, bounds.eastX, westU),
+                maximumX = lerp(bounds.westX, bounds.eastX, eastU),
+                minimumY = lerp(bounds.northY, bounds.southY, northV).coerceIn(bounds.northY, bounds.southY),
+                maximumY = lerp(bounds.northY, bounds.southY, southV).coerceIn(bounds.northY, bounds.southY),
+            )
         },
         nodePosition = { u, v ->
             val position = globeCameraRelativePosition(
@@ -327,6 +335,7 @@ private fun geometryVisibilityFootprint(
  */
 private fun assembleGeometryGrid(
     cellsPerSide: Int,
+    /** Whether the cell whose grid coordinates are `(westU, eastU, northV, southV)` may be seen. */
     admitsCell: (Double, Double, Double, Double) -> Boolean,
     nodePosition: (Double, Double) -> SpatialOutcome<DoubleVector3>,
 ): SpatialOutcome<GeometryGrid> {
