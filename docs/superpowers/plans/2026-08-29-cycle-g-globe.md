@@ -30,6 +30,14 @@ a decision to accept. `VERSION_NAME` stays `0.4.0`, frozen.
   simulator, `[the ground covers the frame]` stands down on every run while the attribute reads zero.
 - **Report which single case caught each mutation.** A mutation caught by every case is weaker evidence
   than one caught by exactly one; the latter is what proves a case is not inert.
+- **A mutation that does not compile is not a caught mutation.** Task 5 scored one as caught when the build
+  had failed and nothing ran; rewritten so it compiled, it was caught by ten cases — but it might not have
+  been. Confirm the build succeeded *and* the suite ran before reading a red result as evidence.
+- **A surviving mutation has three possible meanings, and they need different answers.** The test is weak
+  (add a case), the code is dead (delete it — Task 5 removed a guard the exact filter already covered and
+  Task 6 removed a redundant finiteness check), or the mutant is *equivalent* and cannot be caught by
+  anything (say so and explain why, as Task 2 did for its algebraically identical arms). Guessing between
+  them is how a vacuous check gets written.
 - **RenG stays in logical pixels.** Not ECEF metres — the depth buffer's resolvable step is 0.025 logical
   pixels against 2.4 × 10⁶ metres at earth radius. This is settled by arithmetic, not preference.
 - Typed failures carry redacted diagnostics; never forward an adapter's or the engine's message.
