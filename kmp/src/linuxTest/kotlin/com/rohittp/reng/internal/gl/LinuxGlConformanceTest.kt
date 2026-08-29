@@ -2,9 +2,11 @@ package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
 import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
+import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
+import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -95,6 +97,27 @@ class LinuxGlConformanceTest {
             binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             runGroundCullReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 7's gate on llvmpipe: the globe ground's own geometry, its seams and the
+     * granularity the camera implies. The suite prints its silhouette and convergence numbers for
+     * whichever rasteriser it lands on, and the same case on macOS runs against both Apple ones.
+     */
+    @Test fun theGlobeGroundReadbackSuitePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
+            binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
+            runGlobeGroundReadbackSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

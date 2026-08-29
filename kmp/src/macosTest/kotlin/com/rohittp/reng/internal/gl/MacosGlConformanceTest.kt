@@ -1,10 +1,12 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
+import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
 import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.LABEL_INTEGRATION_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -226,6 +228,35 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
                 binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
                 runGroundCullReadbackSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * Cycle G task 7's gate: the globe ground's own geometry, on both Apple rasterisers this machine
+     * can offer.
+     *
+     * Both rather than one, and deliberately so. `measureLargeQuadRasterisation` records that
+     * `Apple Software Renderer` drops quads reaching far outside the viewport — the shape every
+     * Mercator ground tile has — and a globe ground patch is the opposite shape: one cell of a
+     * subdivided grid, a few pixels across and entirely on-screen. Whether that driver's verdict
+     * differs between the two modes is a measurement rather than a deduction, so this runs the suite
+     * on both and the suite prints its silhouette and convergence numbers for each.
+     */
+    @Test fun theGlobeGroundReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG globe ground readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
+                binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
+                runGlobeGroundReadbackSuite(binding, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }

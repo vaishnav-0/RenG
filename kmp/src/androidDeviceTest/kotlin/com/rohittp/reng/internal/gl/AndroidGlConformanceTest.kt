@@ -2,9 +2,11 @@ package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
 import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
+import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
+import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -134,6 +136,22 @@ class AndroidGlConformanceTest {
             binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             runGroundCullReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 7's gate on Android's driver: the globe ground's own geometry, its seams and the
+     * granularity the camera implies. Manual, like everything in this source set (ADR 0033).
+     */
+    @Test fun theGlobeGroundReadbackSuitePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
+            binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
+            runGlobeGroundReadbackSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }
