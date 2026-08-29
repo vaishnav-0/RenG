@@ -73,6 +73,15 @@ internal class GeometryPipeline(
     val program: Int,
     val vertexArray: Int,
     val vertexBuffer: Int,
+    /**
+     * The element array buffer every [drawGeometry] call refills with [GeometryGrid.triangleIndices].
+     *
+     * It exists because a `Geometry` is no longer four vertices: RenG subdivides it and projects the
+     * grid's vertices on the CPU so the view-projection stays linear and a consumer's shader pair
+     * survives a globe unchanged (ADR 0008's 2026-08-29 erratum). Its binding is recorded in
+     * [vertexArray] at creation, which is why nothing rebinds it at draw time.
+     */
+    val indexBuffer: Int,
     val positionAttributeLocation: Int,
     val texCoordAttributeLocation: Int,
     val modelViewProjectionLocation: Int,
@@ -117,9 +126,15 @@ internal fun createGeometryPipeline(
     val vertexArray = names[0]
     binding.genBuffers(1, names)
     val vertexBuffer = names[0]
+    binding.genBuffers(1, names)
+    val indexBuffer = names[0]
 
     binding.bindVertexArray(vertexArray)
     binding.bindBuffer(GL_ARRAY_BUFFER, vertexBuffer)
+    // Bound while the vertex array is bound and never unbound: an element array buffer binding is
+    // vertex-array state, so re-binding the VAO at draw time restores it. `globeGroundGrid` does the
+    // same thing for the same reason.
+    binding.bindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer)
 
     // ADR 0008: bind only the attributes this program actually declares. Unlike an unset uniform,
     // enabling a negative vertex attrib index is a genuine GL error rather than a harmless no-op,
@@ -156,6 +171,7 @@ internal fun createGeometryPipeline(
             program = program,
             vertexArray = vertexArray,
             vertexBuffer = vertexBuffer,
+            indexBuffer = indexBuffer,
             positionAttributeLocation = positionLocation,
             texCoordAttributeLocation = texCoordLocation,
             modelViewProjectionLocation = binding.getUniformLocation(program, UNIFORM_MODEL_VIEW_PROJECTION),
@@ -172,18 +188,29 @@ internal fun deleteGeometryPipeline(
     pipeline: GeometryPipeline,
 ) {
     binding.deleteVertexArrays(1, intArrayOf(pipeline.vertexArray))
-    binding.deleteBuffers(1, intArrayOf(pipeline.vertexBuffer))
+    // Both buffers explicitly, for the reason `deleteUploadedPrimitive` already records: deleting a
+    // VAO frees the VAO object alone, never the buffers whose bindings it recorded.
+    binding.deleteBuffers(2, intArrayOf(pipeline.vertexBuffer, pipeline.indexBuffer))
     cache.remove(pipeline.key)?.let { binding.deleteProgram(it) }
 }
 
 /**
  * Draws one geometry instance using an already-created [pipeline].
  *
- * [cameraRelativeCornersXyz] must already be resolved through the camera-relative path — see
- * `internal.planning.resolveGeometry` and `internal.projection.resolveMercatorCamera` — in
- * clockwise-from-top-left order (top-left, top-right, bottom-right, bottom-left), three floats
- * each. This function never reads a raw latitude/longitude/altitude and never computes a vertex
- * position itself, so it cannot be the place that discards Cycle B's camera-relative precision.
+ * [grid] must already be resolved and projected through the camera-relative path — see
+ * [geometryGrid] — and carries `x, y, z, u, v` per vertex plus the triangle indices over them. This
+ * function never reads a raw latitude/longitude/altitude and never computes a vertex position
+ * itself, so it cannot be the place that discards Cycle B's camera-relative precision.
+ *
+ * **A grid rather than four corners, in both projection modes.** A Mercator-to-sphere map is
+ * nonlinear and so cannot be a matrix, so RenG subdivides a `Geometry` and projects its vertices on
+ * the CPU, leaving [modelViewProjection] linear and a consumer's shader pair working unchanged in
+ * both modes (ADR 0008's 2026-08-29 erratum, and the design spec's section 6). Two consequences are
+ * recorded there rather than repaired: a shader reading `gl_VertexID` no longer sees 0 through 3 —
+ * it sees an index into a grid whose size and ordering RenG chooses and may change between versions,
+ * and a consumer wanting corner identity should read [ATTRIBUTE_TEXTURE_COORDINATE], which
+ * subdivision interpolates correctly by construction — and `aPosition.z` carries pure altitude under
+ * Mercator but altitude *and* the sphere's curvature on a globe.
  *
  * [boundsWestSouthEastNorthDegrees] is the *separate*, informational `uGeometryBounds` payload
  * documented on [UNIFORM_GEOMETRY_BOUNDS]. It travels only to that one uniform and is never folded
@@ -231,7 +258,7 @@ internal fun deleteGeometryPipeline(
 internal fun drawGeometry(
     binding: GlBinding,
     pipeline: GeometryPipeline,
-    cameraRelativeCornersXyz: FloatArray,
+    grid: GeometryGrid,
     modelViewProjection: FloatArray,
     resolutionWidthPixels: Float,
     resolutionHeightPixels: Float,
@@ -240,9 +267,6 @@ internal fun drawGeometry(
     consumerUniforms: Map<String, ShaderValue> = emptyMap(),
     consumerTextures: Map<String, Int> = emptyMap(),
 ) {
-    require(cameraRelativeCornersXyz.size == GEOMETRY_CORNER_FLOAT_COUNT) {
-        "a geometry requires exactly four camera-relative xyz corners"
-    }
     require(modelViewProjection.size == GEOMETRY_MVP_FLOAT_COUNT) {
         "a model-view-projection matrix requires exactly sixteen elements"
     }
@@ -263,12 +287,10 @@ internal fun drawGeometry(
     binding.useProgram(pipeline.program)
     binding.bindVertexArray(pipeline.vertexArray)
     binding.bindBuffer(GL_ARRAY_BUFFER, pipeline.vertexBuffer)
-    binding.bufferData(
-        GL_ARRAY_BUFFER,
-        GEOMETRY_VERTEX_BUFFER_BYTES,
-        buildInterleavedVertexBytes(cameraRelativeCornersXyz),
-        GL_DYNAMIC_DRAW,
-    )
+    val vertexBytes = littleEndianBytes(grid.interleavedVertices)
+    binding.bufferData(GL_ARRAY_BUFFER, vertexBytes.size, vertexBytes, GL_DYNAMIC_DRAW)
+    val indexBytes = littleEndianUnsignedShortBytes(grid.triangleIndices)
+    binding.bufferData(GL_ELEMENT_ARRAY_BUFFER, indexBytes.size, indexBytes, GL_DYNAMIC_DRAW)
 
     if (pipeline.modelViewProjectionLocation >= 0) {
         binding.uniformMatrix4fv(pipeline.modelViewProjectionLocation, 1, false, modelViewProjection)
@@ -305,7 +327,7 @@ internal fun drawGeometry(
         }
     }
 
-    binding.drawArrays(GL_TRIANGLE_STRIP, 0, GEOMETRY_VERTEX_COUNT)
+    binding.drawElements(GL_TRIANGLES, grid.triangleIndices.size, GL_UNSIGNED_SHORT, 0)
 }
 
 /**
@@ -327,37 +349,26 @@ private fun bindConsumerUniform(binding: GlBinding, location: Int, value: Shader
 }
 
 /**
- * Reorders the resolver's clockwise-from-top-left corners into bottom-left, bottom-right,
- * top-left, top-right — the same triangle-strip layout [COMPOSITE_QUAD] already uses — and pairs
- * each with a texture coordinate so the top edge (north) reads `v=0` and the bottom edge (south)
- * reads `v=1`.
+ * One grid vertex's index run, little-endian, as `GL_UNSIGNED_SHORT` expects.
+ *
+ * A 16-bit index is what caps [MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE] at 128 for the globe ground
+ * and for a geometry grid alike: 129 x 129 is 16,641 vertices where 257 x 257 would overflow.
  */
-private fun buildInterleavedVertexBytes(cameraRelativeCornersXyz: FloatArray): ByteArray {
-    fun corner(index: Int): FloatArray =
-        cameraRelativeCornersXyz.copyOfRange(index * 3, index * 3 + GEOMETRY_POSITION_COMPONENT_COUNT)
-
-    val topLeft = corner(0)
-    val topRight = corner(1)
-    val bottomRight = corner(2)
-    val bottomLeft = corner(3)
-
-    val interleaved = floatArrayOf(
-        bottomLeft[0], bottomLeft[1], bottomLeft[2], 0.0f, 1.0f,
-        bottomRight[0], bottomRight[1], bottomRight[2], 1.0f, 1.0f,
-        topLeft[0], topLeft[1], topLeft[2], 0.0f, 0.0f,
-        topRight[0], topRight[1], topRight[2], 1.0f, 0.0f,
-    )
-    return littleEndianBytes(interleaved)
+private fun littleEndianUnsignedShortBytes(values: ShortArray): ByteArray {
+    val bytes = ByteArray(values.size * Short.SIZE_BYTES)
+    values.forEachIndexed { index, value ->
+        val bits = value.toInt()
+        bytes[index * 2] = (bits and 0xff).toByte()
+        bytes[index * 2 + 1] = ((bits ushr 8) and 0xff).toByte()
+    }
+    return bytes
 }
 
-private const val GEOMETRY_VERTEX_COUNT: Int = 4
 private const val GEOMETRY_POSITION_COMPONENT_COUNT: Int = 3
 private const val GEOMETRY_TEXCOORD_COMPONENT_COUNT: Int = 2
-private const val GEOMETRY_VERTEX_COMPONENT_COUNT: Int =
+internal const val GEOMETRY_VERTEX_COMPONENT_COUNT: Int =
     GEOMETRY_POSITION_COMPONENT_COUNT + GEOMETRY_TEXCOORD_COMPONENT_COUNT
 private const val GEOMETRY_STRIDE_BYTES: Int = GEOMETRY_VERTEX_COMPONENT_COUNT * Float.SIZE_BYTES
 private const val GEOMETRY_TEXCOORD_OFFSET_BYTES: Int = GEOMETRY_POSITION_COMPONENT_COUNT * Float.SIZE_BYTES
-private const val GEOMETRY_VERTEX_BUFFER_BYTES: Int = GEOMETRY_STRIDE_BYTES * GEOMETRY_VERTEX_COUNT
-private const val GEOMETRY_CORNER_FLOAT_COUNT: Int = GEOMETRY_VERTEX_COUNT * GEOMETRY_POSITION_COMPONENT_COUNT
 private const val GEOMETRY_BOUNDS_FLOAT_COUNT: Int = 4
 private const val GEOMETRY_MVP_FLOAT_COUNT: Int = 16

@@ -35,9 +35,9 @@ class GeometryPipelineTest {
         val binding = RecordingGlBinding().withNoDeclaredNames()
         val pipeline = createPipeline(binding)
 
-        drawGeometry(binding, pipeline, testCorners(), IDENTITY_4X4, 800f, 600f, testBounds(), frameIndex = 7L)
+        drawGeometry(binding, pipeline, testGrid(), IDENTITY_4X4, 800f, 600f, testBounds(), frameIndex = 7L)
 
-        assertTrue(binding.log.any { it.startsWith("drawArrays") }, "it must still draw")
+        assertTrue(binding.log.any { it.startsWith("drawElements") }, "it must still draw")
         assertTrue(binding.log.none { it.startsWith("uniform") }, "and set nothing it cannot set")
     }
 
@@ -56,7 +56,7 @@ class GeometryPipelineTest {
         val binding = RecordingGlBinding().withDeclaredNames(UNIFORM_FRAME_INDEX to 4)
         val pipeline = createPipeline(binding)
 
-        drawGeometry(binding, pipeline, testCorners(), IDENTITY_4X4, 800f, 600f, testBounds(), frameIndex = 7L)
+        drawGeometry(binding, pipeline, testGrid(), IDENTITY_4X4, 800f, 600f, testBounds(), frameIndex = 7L)
 
         assertEquals(listOf("uniform1ui(4,7)"), binding.log.filter { it.startsWith("uniform") })
     }
@@ -77,7 +77,7 @@ class GeometryPipelineTest {
         binding.log.clear()
 
         drawGeometry(
-            binding, pipeline, testCorners(), IDENTITY_4X4,
+            binding, pipeline, testGrid(), IDENTITY_4X4,
             resolutionWidthPixels = 800f, resolutionHeightPixels = 600f,
             boundsWestSouthEastNorthDegrees = floatArrayOf(1f, 2f, 3f, 4f),
             frameIndex = 7L,
@@ -102,7 +102,7 @@ class GeometryPipelineTest {
         val pipeline = createPipeline(binding)
 
         drawGeometry(
-            binding, pipeline, testCorners(), IDENTITY_4X4, 800f, 600f, testBounds(),
+            binding, pipeline, testGrid(), IDENTITY_4X4, 800f, 600f, testBounds(),
             frameIndex = 0x1_0000_0007L,
         )
 
@@ -116,7 +116,7 @@ class GeometryPipelineTest {
         val binding = RecordingGlBinding().withDeclaredNames(UNIFORM_FRAME_INDEX to 4)
         val pipeline = createPipeline(binding)
 
-        drawGeometry(binding, pipeline, testCorners(), IDENTITY_4X4, 800f, 600f, testBounds(), frameIndex = -1L)
+        drawGeometry(binding, pipeline, testGrid(), IDENTITY_4X4, 800f, 600f, testBounds(), frameIndex = -1L)
 
         assertEquals(listOf("uniform1ui(4,-1)"), binding.log.filter { it.startsWith("uniform") })
     }
@@ -124,30 +124,39 @@ class GeometryPipelineTest {
     // --- uGeometryBounds is informational only: it must never leak into aPosition ------------
 
     @Test
-    fun theVertexBufferCarriesTheReorderedCornersAndUvsNeverTheBounds() {
+    fun theVertexBufferCarriesTheGridsVerticesAndUvsNeverTheBounds() {
         val binding = RecordingGlBinding().withDeclaredNames(ATTRIBUTE_POSITION to 0, UNIFORM_GEOMETRY_BOUNDS to 4)
         val pipeline = createPipeline(binding)
-        val corners = floatArrayOf(
-            1f, 2f, 3f, // top-left
-            4f, 5f, 6f, // top-right
-            7f, 8f, 9f, // bottom-right
-            10f, 11f, 12f, // bottom-left
+        val grid = GeometryGrid(
+            cellsPerSide = 1,
+            interleavedVertices = floatArrayOf(
+                1f, 2f, 3f, 0f, 0f, // north-west
+                4f, 5f, 6f, 1f, 0f, // north-east
+                10f, 11f, 12f, 0f, 1f, // south-west
+                7f, 8f, 9f, 1f, 1f, // south-east
+            ),
+            triangleIndices = shortArrayOf(0, 2, 3, 0, 3, 1),
         )
         val bounds = floatArrayOf(100f, 200f, 300f, 400f)
 
-        drawGeometry(binding, pipeline, corners, IDENTITY_4X4, 1f, 1f, bounds, frameIndex = 0L)
+        drawGeometry(binding, pipeline, grid, IDENTITY_4X4, 1f, 1f, bounds, frameIndex = 0L)
 
         assertEquals(listOf("uniform4f(4,100.0,200.0,300.0,400.0)"), binding.log.filter { it.startsWith("uniform") })
 
         val uploaded = decodeLittleEndianFloats(requireNotNull(binding.bufferDataPayloads[GL_ARRAY_BUFFER]))
-        val expected = floatArrayOf(
-            10f, 11f, 12f, 0f, 1f, // bottom-left
-            7f, 8f, 9f, 1f, 1f, // bottom-right
-            1f, 2f, 3f, 0f, 0f, // top-left
-            4f, 5f, 6f, 1f, 0f, // top-right
-        )
-        assertContentEquals(expected, uploaded)
+        assertContentEquals(grid.interleavedVertices, uploaded)
         assertTrue(bounds.none { boundsValue -> uploaded.any { it == boundsValue } }, "bounds must never appear in vertex data")
+
+        val indexPayload = requireNotNull(binding.bufferDataPayloads[GL_ELEMENT_ARRAY_BUFFER])
+        assertContentEquals(
+            byteArrayOf(0, 0, 2, 0, 3, 0, 0, 0, 3, 0, 1, 0),
+            indexPayload,
+            "the triangle indices reach GL as little-endian unsigned shorts",
+        )
+        assertTrue(
+            binding.log.contains("drawElements(0x4,6,0x1403,0)"),
+            "a grid draws its own index run as triangles: ${binding.log}",
+        )
     }
 
     @Test
@@ -174,29 +183,25 @@ class GeometryPipelineTest {
             shaderPair = minimalShaderPair(),
         )
         val resolved = (resolveGeometry(geometry, camera) as SpatialOutcome.Success).value
-        val cornersFloat = FloatArray(12)
-        resolved.cornersClockwiseFromTopLeft.forEachIndexed { index, corner ->
-            cornersFloat[index * 3] = corner.x.toFloat()
-            cornersFloat[index * 3 + 1] = corner.y.toFloat()
-            cornersFloat[index * 3 + 2] = corner.z.toFloat()
-        }
+        val grid = (geometryGrid(geometry, camera) as SpatialOutcome.Success).value
 
         val binding = RecordingGlBinding().withDeclaredNames(ATTRIBUTE_POSITION to 0)
         val pipeline = createPipeline(binding)
 
         drawGeometry(
-            binding, pipeline, cornersFloat, IDENTITY_4X4,
+            binding, pipeline, grid, IDENTITY_4X4,
             resolutionWidthPixels = 1024f, resolutionHeightPixels = 768f,
             boundsWestSouthEastNorthDegrees = floatArrayOf(0f, 0f, 0f, 0f),
             frameIndex = 0L,
         )
 
         val uploaded = decodeLittleEndianFloats(requireNotNull(binding.bufferDataPayloads[GL_ARRAY_BUFFER]))
-        // Layout is bottom-left, bottom-right, top-left, top-right; stride 5 floats (xyz + uv).
+        // The grid's first vertex is its north-west node, which under Mercator is the resolved
+        // top-left corner and nothing recomputed from it; stride 5 floats (xyz + uv).
         val topLeftResolved = resolved.cornersClockwiseFromTopLeft[0]
-        assertEquals(topLeftResolved.x.toFloat(), uploaded[10])
-        assertEquals(topLeftResolved.y.toFloat(), uploaded[11])
-        assertEquals(topLeftResolved.z.toFloat(), uploaded[12])
+        assertEquals(topLeftResolved.x.toFloat(), uploaded[0])
+        assertEquals(topLeftResolved.y.toFloat(), uploaded[1])
+        assertEquals(topLeftResolved.z.toFloat(), uploaded[2])
     }
 
     // --- Task 7: consumer uniforms dispatch by type, bound only when declared -----------------
@@ -210,7 +215,7 @@ class GeometryPipelineTest {
         binding.log.clear()
 
         drawGeometry(
-            binding, pipeline, testCorners(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+            binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
             consumerUniforms = mapOf(
                 "uScalar" to ShaderValue.Scalar(1f),
                 "uVec2" to ShaderValue.Vec2(1f, 2f),
@@ -242,7 +247,7 @@ class GeometryPipelineTest {
         binding.log.clear()
 
         drawGeometry(
-            binding, pipeline, testCorners(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+            binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
             consumerUniforms = mapOf("uUnused" to ShaderValue.Scalar(1f)),
         )
 
@@ -265,7 +270,7 @@ class GeometryPipelineTest {
         binding.log.clear()
 
         drawGeometry(
-            binding, pipeline, testCorners(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+            binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
             consumerTextures = linkedMapOf("uMaskB" to 202, "uMaskA" to 101),
         )
 
@@ -284,7 +289,7 @@ class GeometryPipelineTest {
         binding.log.clear()
 
         drawGeometry(
-            binding, pipeline, testCorners(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+            binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
             consumerTextures = mapOf("uUnused" to 101),
         )
 
@@ -302,7 +307,7 @@ class GeometryPipelineTest {
 
         assertFailsWithIllegalArgument {
             drawGeometry(
-                binding, pipeline, testCorners(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+                binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
                 consumerTextures = tooMany,
             )
         }
@@ -321,7 +326,7 @@ class GeometryPipelineTest {
         binding.log.clear()
 
         drawGeometry(
-            binding, pipeline, testCorners(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+            binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
             consumerTextures = mapOf("uMask" to 101),
         )
 
@@ -389,11 +394,12 @@ class GeometryPipelineTest {
     // --- argument validation ------------------------------------------------------------------
 
     @Test
-    fun drawGeometryRejectsAWrongCornerCount() {
-        val binding = RecordingGlBinding()
-        val pipeline = createPipeline(binding)
+    fun aGridRejectsAPartialVertexOrAPartialTriangle() {
         assertFailsWithIllegalArgument {
-            drawGeometry(binding, pipeline, FloatArray(11), IDENTITY_4X4, 1f, 1f, testBounds(), 0L)
+            GeometryGrid(cellsPerSide = 1, interleavedVertices = FloatArray(11), triangleIndices = shortArrayOf(0, 1, 2))
+        }
+        assertFailsWithIllegalArgument {
+            GeometryGrid(cellsPerSide = 1, interleavedVertices = FloatArray(20), triangleIndices = shortArrayOf(0, 1))
         }
     }
 
@@ -402,7 +408,7 @@ class GeometryPipelineTest {
         val binding = RecordingGlBinding()
         val pipeline = createPipeline(binding)
         assertFailsWithIllegalArgument {
-            drawGeometry(binding, pipeline, testCorners(), IDENTITY_4X4, 1f, 1f, FloatArray(3), 0L)
+            drawGeometry(binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, FloatArray(3), 0L)
         }
     }
 
@@ -425,11 +431,15 @@ private fun minimalShaderPair(): ShaderPair = ShaderPair(
     fragmentSource = "#version 300 es\nprecision highp float;\nout vec4 rengOut;\nvoid main() {\n    rengOut = vec4(1.0);\n}\n",
 )
 
-private fun testCorners(): FloatArray = floatArrayOf(
-    0f, 1f, 0f,
-    1f, 1f, 0f,
-    1f, 0f, 0f,
-    0f, 0f, 0f,
+private fun testGrid(): GeometryGrid = GeometryGrid(
+    cellsPerSide = 1,
+    interleavedVertices = floatArrayOf(
+        0f, 1f, 0f, 0f, 0f,
+        1f, 1f, 0f, 1f, 0f,
+        0f, 0f, 0f, 0f, 1f,
+        1f, 0f, 0f, 1f, 1f,
+    ),
+    triangleIndices = shortArrayOf(0, 2, 3, 0, 3, 1),
 )
 
 private fun testBounds(): FloatArray = floatArrayOf(-1.0f, -1.0f, 1.0f, 1.0f)

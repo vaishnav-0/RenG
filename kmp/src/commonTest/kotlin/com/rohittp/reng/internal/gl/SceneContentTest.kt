@@ -279,7 +279,9 @@ class SceneContentTest {
 
         SceneContent(camera, scene, stickerPipeline, newGroundPipeline()).draw(binding)
 
-        val geometryDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
+        // A geometry is a subdivided, CPU-projected grid as of Cycle G task 9, so it is the only
+        // `drawElements` in this fixture; the two stickers are the `drawArrays` pair.
+        val geometryDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
         val depthDisabled = binding.log.indexOfFirst { it == "disable(${hex(GL_DEPTH_TEST)})" }
         val mapStickerBind = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},$mapTexture)" }
         val screenStickerBind = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},$screenTexture)" }
@@ -309,11 +311,14 @@ class SceneContentTest {
      * **The fixture carries a label batch, and ADR 0034 is what put it there.** Labels are not a
      * member of the map regime, so ADRs 0027 and 0030 do not describe them — but this invariant is
      * over the *whole scene*, so it does: a label pass that enabled a depth write would take the
-     * count of `depthMask(true)` calls to two and fail here, which is the intended binding. The
-     * model pass's draw and the label pass's are both `glDrawElements` and are told apart by their
-     * index type: `GL_UNSIGNED_SHORT` for the model fixture, `GL_UNSIGNED_INT` for every label
-     * batch. Reading them as one kind of draw would assert ADR 0030's "must write depth" over the
-     * one pass that must not.
+     * count of `depthMask(true)` calls to two and fail here, which is the intended binding.
+     *
+     * **Three passes now issue `glDrawElements`, and telling them apart is load-bearing.** Cycle G
+     * task 9 made a `Geometry` a subdivided grid, so its draw is indexed like the model pass's and
+     * carries the identical `GL_UNSIGNED_SHORT` index type — a fixture that read them as one kind of
+     * draw would assert ADR 0030's "must write depth" over a pass ADR 0027 says must not. So the
+     * geometry pass is identified by its own program, which is the only thing that distinguishes it,
+     * and the label pass by its `GL_UNSIGNED_INT` indices.
      *
      * That last claim is deliberately checked at the model pass's own exit rather than at the first
      * sticker draw. [drawStickers] sets `depthMask(false)` for itself, so a check taken at the
@@ -352,6 +357,7 @@ class SceneContentTest {
 
         // `drawFrame` leaves the mask on for its depth clear, so that is the state a scene inherits.
         var depthWrites = true
+        var currentProgram = -1
         var flatDraws = 0
         var modelDraws = 0
         var labelDraws = 0
@@ -359,7 +365,10 @@ class SceneContentTest {
             when {
                 call == "depthMask(true)" -> depthWrites = true
                 call == "depthMask(false)" -> depthWrites = false
-                call.startsWith("drawArrays") -> {
+                call.startsWith("useProgram(") ->
+                    currentProgram = call.removePrefix("useProgram(").removeSuffix(")").toInt()
+                call.startsWith("drawArrays") ||
+                    (call.startsWith("drawElements") && currentProgram == geometryPipeline.program) -> {
                     flatDraws += 1
                     assertFalse(
                         depthWrites,
@@ -399,11 +408,13 @@ class SceneContentTest {
         // sets the mask before it binds any program, so the ground and the geometry -- and only
         // those two -- have already drawn by the time it fires.
         val writesOn = binding.log.indexOf("depthMask(true)")
-        val modelDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
+        val geometryDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
+        val modelDraw = binding.log.indices.first { it > geometryDraw && binding.log[it].startsWith("drawElements") }
         assertTrue(writesOn in 0 until modelDraw, "the one depth-write enable precedes the model's own draw")
         assertEquals(
             2,
-            binding.log.subList(0, writesOn).count { it.startsWith("drawArrays") },
+            binding.log.subList(0, writesOn)
+                .count { it.startsWith("drawArrays") || it.startsWith("drawElements") },
             "the enable falls after the ground and the geometry and before every sticker: ${binding.log}",
         )
 
@@ -425,15 +436,22 @@ class SceneContentTest {
     /**
      * ADR 0025's map-regime order with ADR 0030's models inserted before the stickers, because a
      * map-anchored sticker is a marker and a marker paints over the scene it marks. Each pass is
-     * located by its own `useProgram`, not by its draw call: the ground, a `Geometry` and a sticker
-     * all issue a bit-identical `drawArrays(GL_TRIANGLE_STRIP, 0, 4)`, so a draw-call index cannot
-     * tell three of the four passes apart.
+     * located by its own `useProgram`, not by its draw call: the ground and a sticker both issue a
+     * bit-identical `drawArrays(GL_TRIANGLE_STRIP, 0, 4)`, so a draw-call index cannot tell those two
+     * passes apart. A `Geometry` no longer joins them — Cycle G task 9 made it an indexed grid — but
+     * its draw is then bit-identical in shape to the model pass's, so locating a pass by its program
+     * remains the only rule that works for all four.
      *
      * `mapOrder` here is the planner's own `[StickerAt(0), ModelAt(0)]` — stickers-then-models by
      * declaration, which is what `MercatorSpatialPlan.mapEntries` actually produces. That is the
      * point: the list is a regime-membership answer, not a draw order, and a `SceneContent` that
      * consumed it verbatim would draw the sticker first and fail here. ADR 0030's phase order has to
      * be applied *over* the planner's answer rather than taken from it.
+     *
+     * The ground and a sticker still issue a bit-identical `drawArrays(GL_TRIANGLE_STRIP, 0, 4)`; a
+     * `Geometry` no longer does, because Cycle G task 9 made it an indexed grid. Locating each pass
+     * by its own `useProgram` was already the rule here and stays the rule, since a draw call still
+     * cannot tell the ground from a sticker.
      */
     @Test
     fun theMapRegimeDrawsGroundThenGeometriesThenModelsThenMapAnchoredStickers() {
@@ -1029,7 +1047,7 @@ class SceneContentTest {
         SceneContent(camera, scene, stickerPipeline, groundPipeline).draw(binding)
 
         val groundBind = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},$groundTexture)" }
-        val geometryDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
+        val geometryDraw = binding.log.indexOfFirst { it.startsWith("drawElements") }
         val mapStickerBind = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},$mapTexture)" }
         val depthDisabled = binding.log.indexOfFirst { it == "disable(${hex(GL_DEPTH_TEST)})" }
         val screenStickerBind = binding.log.indexOfFirst { it == "bindTexture(${hex(GL_TEXTURE_2D)},$screenTexture)" }
@@ -1149,10 +1167,10 @@ class SceneContentTest {
         SceneContent(camera, scene, newStickerPipeline(RecordingGlBinding()), newGroundPipeline()).draw(binding)
 
         val uploaded = decodeLittleEndianFloats(requireNotNull(binding.bufferDataPayloads[GL_ARRAY_BUFFER]))
-        // Layout is bottom-left, bottom-right, top-left, top-right; stride 5 floats (xyz + uv).
-        assertEquals(expectedTopLeft.x.toFloat(), uploaded[10])
-        assertEquals(expectedTopLeft.y.toFloat(), uploaded[11])
-        assertEquals(expectedTopLeft.z.toFloat(), uploaded[12])
+        // The grid's first vertex is its north-west node; stride 5 floats (xyz + uv).
+        assertEquals(expectedTopLeft.x.toFloat(), uploaded[0])
+        assertEquals(expectedTopLeft.y.toFloat(), uploaded[1])
+        assertEquals(expectedTopLeft.z.toFloat(), uploaded[2])
     }
 
     // --- the MVP composer: the largest piece of unwritten work this task supplies --------------
