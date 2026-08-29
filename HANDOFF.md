@@ -1,8 +1,16 @@
-# RenG handoff — 2026-08-23
+# RenG handoff — 2026-08-23, with a 2026-08-29 correction block
 
 The recovery point for whoever picks RenG up next. **RenG draws a map.** `createRenderer` is published
-API, `VERSION_NAME` is `0.3.0`, and the released library renders a real Rentile ground from a
-caller-supplied style.
+API and the released library renders a real Rentile ground from a caller-supplied style.
+
+> **What has moved since this document was written, as of 2026-08-29.** Four cycles have landed and none
+> is released: **F-2** (models), **H** (mobile bring-up), the **X2** residency fix, **E-labels** (map
+> text) and **G** (the globe projection). `VERSION_NAME` is **`0.4.0`** and frozen there until E-terrain
+> and J are done — one release at the end, not one per cycle. The Rentile pin is **`0.6.0`**, not the
+> `0.5.0` the section below still names. Cycle **I was withdrawn** on 2026-08-28. Where this document and
+> `CLAUDE.md` disagree, **`CLAUDE.md` is the newer and wins**; the sections below are kept as the record of
+> what was true on 2026-08-23. Never quote a version or a commit from prose here — read `gradle.properties`,
+> `gradle/libs.versions.toml` and git.
 
 **Three releases are public and all three are proven, not assumed.**
 
@@ -192,7 +200,7 @@ consumer can find out.** Surfacing it is a design decision — forwarding `code`
 > above it as history. Note also that there is **no symbol-layer style fixture anywhere under `kmp/src/`**,
 > so RenG's own suite detects neither the old behaviour nor the new one.
 
-## The Rentile pin is `0.5.0`
+## The Rentile pin is `0.5.0` — **superseded: it is `0.6.0` since the E-labels preflight**
 
 Bumped in `0f385c7` from `0.2.0`. RenG adopts the pin and **none** of the feature: it still never calls
 `acquireLabelCandidates`, never enumerates `GLYPH_RANGE`, and still passes `TileSubstitutionPolicy.Disabled`
@@ -552,7 +560,10 @@ something cites it.
   with a clamped delay, and it rethrows cancellation unchanged. And `RawResourceKey.toString()` prints its
   identifier in the clear, so a Rentile key must never reach a RenG diagnostic.
 
-## What remains: F-2, E-labels, E-terrain, H, G, I, J
+## What remains: F-2, E-labels, E-terrain, H, G, I, J — **superseded: only E-terrain and J remain**
+
+F-2, H, E-labels and G are all complete and unreleased; I was withdrawn on 2026-08-28. The
+ordering reasoning below is kept because it explains how the letters came to mean what they mean.
 
 **Order, as it stands after two reorders.** The 2026-08-19 reorder split Cycle F into **F-1** (stickers,
 geometries, the renderer factory — the MVP, released in `0.2.0`) and **F-2** (models), and split Cycle E so
