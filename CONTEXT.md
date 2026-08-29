@@ -39,6 +39,25 @@ image resolution. Bearing is finite clockwise degrees from true north in `[0, 36
 in `[0, 90)`, where `0` looks straight down and increasing values tilt toward the horizon. RenG uses a
 fixed `45`-degree vertical field of view. Map-occluded projection uses a fixed one-logical-pixel near
 plane and reverse-Z infinite-far depth.
+
+**Zoom is projection-dependent, and it is the one public field whose meaning a globe changes without
+changing its type.** Mercator's world size is `512 * 2^zoom` at every latitude. A globe's is
+`512 * 2^(zoom − log2 cos latitude)` — the sphere scaled up by `1 / cos(latitude)`, so that the on-screen
+ground scale at the camera's *own* latitude is the one Mercator would have shown at that zoom. The factor is
+exactly `1` at the equator and `7.19` at latitude 82, so the same zoom names a different sphere at every
+latitude and a consumer toggling **Projection Mode** sees the picture change: the two modes agree at the view
+centre and nowhere else, and disagree visibly at every zoom low enough for curvature to read. What the
+convention buys is tile cost. A globe scaled by `zoom` alone draws a Mercator tile only `cos(latitude)` of its
+flat on-screen size and needs `1/cos²` times as many to cover one screen — modelled at 4 tiles going to 132
+for a 960×540 viewport at latitude 82, zoom 6, and 24 going to 686 for a 1179×2556 one at latitude 82,
+zoom 8, the second past the **Tile Budget**'s default, so the frame fails closed rather than merely rendering
+slowly. The latitude-matched sphere returns both to their Mercator counts and peaks near `4x` around zoom 3–5,
+where the whole globe is on screen. Consistent tile cost was chosen over consistent zoom semantics because the
+alternative makes frames *fail* rather than look different; MapLibre ships this convention and Mapbox instead
+matches Mercator at a fixed 45 degrees, stable in the middle and wrong at both ends. The LOD rule in
+**Frame History** is unchanged and shared by both modes: the globe's `1 / cos` scale and a Mercator tile's
+`cos` shrink on the sphere cancel exactly at the camera's own latitude, which is the latitude one per-frame
+LOD is chosen at, so both modes select from the camera's `zoom` and never from the scaled exponent.
 _Avoid_: Viewport, viewpoint, map camera, view state
 
 **Projection Mode**:

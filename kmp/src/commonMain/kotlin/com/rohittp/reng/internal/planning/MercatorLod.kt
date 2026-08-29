@@ -17,6 +17,16 @@ internal data class LodObservation(val selectedLod: Int)
  * screenPixelsPerTexel = 2^(zoom - selectedLod)
  * ```
  *
+ * **This rule is shared with `ProjectionMode.GLOBE`, and that is a result rather than an
+ * assumption.** The identity above holds on the plane only because a Mercator tile's output-pixel
+ * width does not depend on latitude; on a sphere it does, by `cos(latitude)`. G1 restores it by
+ * scaling the globe by `1 / cos(latitude)` instead — [latitudeMatchedGlobeZoom] — so the two factors
+ * cancel at the camera's own latitude, which is the latitude a single per-frame LOD is chosen at.
+ * The premise is executable as [basemapTileSideLogicalPixels] and is asserted at latitudes where
+ * neither factor is near 1. What a globe camera must *not* do is observe its LOD at
+ * [latitudeMatchedGlobeZoom]: that is a scale exponent, and reading it here selects a LOD several
+ * levels too fine and multiplies the tile count instead of holding it.
+ *
  * Above 1.0 the tile is magnified and every antialiased road edge in it is smeared by the sampler
  * before the eye ever sees it; below 1.0 it is minified and the raster carries more detail than the
  * screen can show. Measured on the visual harness at 960x540 over a real MapTiler style, the
