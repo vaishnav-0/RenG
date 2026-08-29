@@ -17,7 +17,9 @@ import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
+import com.rohittp.reng.TERRAIN_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.runTerrainFrameReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runVertexTextureFetchProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -247,6 +249,35 @@ class LinuxGlConformanceTest {
             fixture.destroy()
         }
     }
+    }
+
+    /**
+     * **Cycle E-terrain task 12's gate on llvmpipe: terrain through the *public* API.**
+     *
+     * Tasks 8, 9 and 11 each drive `drawGround` and `drawGlobeGround` directly with a DEM texture
+     * the test uploaded itself, so all three would go on passing against a build where no
+     * `FramePlan` ever reached a DEM. This is the case that puts a style declaring `terrain` in one
+     * end and reads displaced ground pixels out of the other, and the first anywhere to assert in
+     * pixels that two adjacent displaced tiles leave no crack between them.
+     *
+     * llvmpipe matters here for the reason it matters to the globe frame suite: it is a software
+     * rasteriser that rasterises large quads correctly, so the crack count it reports is RenG's
+     * rather than a fill rule's. See `runTerrainFrameReadbackSuite` for what each case claims.
+     */
+    @Test fun theTerrainFrameReadbackSuitePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+            binding.scissor(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+            runTerrainFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
     }
 
     /**

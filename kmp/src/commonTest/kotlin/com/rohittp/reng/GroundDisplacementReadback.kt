@@ -181,19 +181,17 @@ private fun assertAFlatDemDrawsExactlyWhatTerrainOffDraws(fixture: DisplacementF
         cellsPerTileSide = FIXTURE_CELLS,
         exaggeration = FIXTURE_EXAGGERATION,
     )
-    assertContentEquals(
-        terrainOff.bytes,
-        flat.bytes,
-        "a DEM whose every texel decodes to zero metres must draw the flat ground byte-identically; " +
-            "${terrainOff.differenceFrom(flat)} pixels differ",
+    assertFramesIdentical(
+        terrainOff,
+        flat,
+        "a DEM whose every texel decodes to zero metres must draw the flat ground byte-identically",
     )
 
     val undisplacedQuad = fixture.renderMercator(dem = null, cellsPerTileSide = 1)
-    assertContentEquals(
-        undisplacedQuad.bytes,
-        flat.bytes,
-        "a flat DEM must also match the single-cell quad a frame with no terrain draws; " +
-            "${undisplacedQuad.differenceFrom(flat)} pixels differ",
+    assertFramesIdentical(
+        undisplacedQuad,
+        flat,
+        "a flat DEM must also match the single-cell quad a frame with no terrain draws",
     )
 }
 
@@ -308,12 +306,11 @@ private fun assertOnlyThePaddedInteriorIsSampled(
 ) {
     val flat = fixture.renderMercator(dem = flatDem, exaggeration = 1.0f)
     val ringOnly = fixture.renderMercator(dem = ringOnlyDem, exaggeration = 1.0f)
-    assertContentEquals(
-        flat.bytes,
-        ringOnly.bytes,
+    assertFramesIdentical(
+        flat,
+        ringOnly,
         "elevation living only in the padded ring's north row and west column must not reach the " +
-            "ground: the grid vertex at u = 0 is padded texel 1, not texel 0. " +
-            "${flat.differenceFrom(ringOnly)} pixels differ",
+            "ground: the grid vertex at u = 0 is padded texel 1, not texel 0",
     )
 }
 
@@ -342,11 +339,10 @@ private fun assertTheGlobeDisplacesRadiallyByTheDeclaredFraction(
 ) {
     val terrainOff = fixture.renderGlobe(dem = null)
     val flat = fixture.renderGlobe(dem = flatDem, exaggeration = GLOBE_EXAGGERATION)
-    assertContentEquals(
-        terrainOff.bytes,
-        flat.bytes,
-        "a globe frame whose DEM is uniformly zero must draw the undisplaced sphere byte-identically; " +
-            "${terrainOff.differenceFrom(flat)} pixels differ",
+    assertFramesIdentical(
+        terrainOff,
+        flat,
+        "a globe frame whose DEM is uniformly zero must draw the undisplaced sphere byte-identically",
     )
 
     val base = flat.silhouetteDiameters()
@@ -632,6 +628,50 @@ private class DisplacementFrame(val bytes: ByteArray) {
         }
         return differing
     }
+
+    /** `(column, row)` of the first disagreeing pixel, or `null` when there is none. */
+    fun firstDifferenceFrom(other: DisplacementFrame): Pair<Int, Int>? {
+        for (index in 0 until DISPLACEMENT_READBACK_PIXELS * DISPLACEMENT_READBACK_PIXELS) {
+            val offset = index * 4
+            if ((0..2).any { bytes[offset + it] != other.bytes[offset + it] }) {
+                return (index % DISPLACEMENT_READBACK_PIXELS) to (index / DISPLACEMENT_READBACK_PIXELS)
+            }
+        }
+        return null
+    }
+}
+
+/**
+ * Byte-for-byte, and the **count is asserted before the arrays are**, which is a diagnostic decision
+ * bought with a real failure rather than a preference.
+ *
+ * `assertContentEquals` over a 256 x 256 RGBA frame renders both 262,144-byte arrays into its
+ * failure message. Measured during task 11's mutation pass: Gradle's Kotlin/Native test listener
+ * refuses a service message over 1 MB, **loses the event, and fails the build with
+ * `Cannot process output: too long teamcity service message` instead of the assertion** -- a broken
+ * build that reports nothing about what broke, which is worse than a red assertion in exactly the
+ * situation a red assertion is most needed. The count fires first with a message a human can read;
+ * the array comparison stays underneath it as the exact claim, unreachable in practice and correct
+ * in principle, because [DisplacementFrame.differenceFrom] compares three channels of every pixel.
+ *
+ * Alpha is the one channel it does not compare, and that is [DisplacementFrame.differenceFrom]'s
+ * own long-standing choice rather than something introduced here: this suite's target is opaque
+ * RGBA8 and nothing it draws writes a non-opaque alpha. The `assertContentEquals` beneath covers it
+ * regardless.
+ */
+private fun assertFramesIdentical(
+    expected: DisplacementFrame,
+    actual: DisplacementFrame,
+    message: String,
+) {
+    val differing = expected.differenceFrom(actual)
+    assertEquals(
+        0,
+        differing,
+        "$message; $differing of ${DISPLACEMENT_READBACK_PIXELS * DISPLACEMENT_READBACK_PIXELS} " +
+            "pixels differ, the first at ${expected.firstDifferenceFrom(actual)}",
+    )
+    assertContentEquals(expected.bytes, actual.bytes, message)
 }
 
 private fun createDisplacementTarget(binding: GlBinding): Int {

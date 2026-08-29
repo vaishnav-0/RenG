@@ -11,7 +11,9 @@ import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
+import com.rohittp.reng.TERRAIN_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.runTerrainFrameReadbackSuite
 import com.rohittp.reng.DEPTH_READBACK_PIXELS
 import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
 import com.rohittp.reng.SHADING_READBACK_PIXELS
@@ -459,6 +461,40 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
                 binding.scissor(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
                 runGeometrySubdivisionReadbackSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * **Cycle E-terrain task 12's gate, on both Apple rasterisers: terrain through the *public* API.**
+     *
+     * Tasks 8, 9 and 11 each call `drawGround` and `drawGlobeGround` directly with a hand-built tile
+     * list and a DEM texture the test uploaded itself, so all three would go on passing against a
+     * build where no `FramePlan` ever reached a DEM at all. This is the first case in the tree that
+     * puts a style declaring `terrain` in one end and reads displaced ground pixels out of the other,
+     * and it is where the seam between two adjacent displaced tiles is asserted in pixels for the
+     * first time. See `runTerrainFrameReadbackSuite` for what each of its four cases discriminates
+     * and, more importantly, what it does not claim.
+     *
+     * Both rasterisers, and the fixture is built so that neither has an excuse: its ground tiles are
+     * 512 logical pixels inside a 768-pixel frame rather than the far-off-screen quads
+     * `measureLargeQuadRasterisation` records `Apple Software Renderer` dropping, and every claim is
+     * either a difference between two frames of the same fixture or a colour-boundary column.
+     */
+    @Test fun theTerrainFrameReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG terrain frame readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+                binding.scissor(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+                runTerrainFrameReadbackSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }

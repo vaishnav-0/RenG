@@ -17,7 +17,9 @@ import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
+import com.rohittp.reng.TERRAIN_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.runTerrainFrameReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runVertexTextureFetchProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -263,6 +265,29 @@ class AndroidGlConformanceTest {
             fixture.destroy()
         }
     }
+    }
+
+    /**
+     * **Cycle E-terrain task 12's gate on Android's driver: terrain through the *public* API.**
+     * Manual, like everything in this source set (ADR 0033).
+     *
+     * A vertex texture fetch is the mechanism the whole cycle rests on, and Android is the family
+     * `VertexTextureFetchProbe` was wired for and has never run against a real GPU. This suite is the
+     * end-to-end consequence of that probe: a style declaring `terrain` in one end, displaced ground
+     * pixels out of the other, with the seam between two adjacent displaced tiles asserted in pixels.
+     *
+     * See `runTerrainFrameReadbackSuite` for what each of its four cases discriminates.
+     */
+    @Test fun theTerrainFrameReadbackSuitePassesOnARealEsContext() {
+        val fixture = PbufferEglContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+            binding.scissor(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+            runTerrainFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
     }
 
     /**

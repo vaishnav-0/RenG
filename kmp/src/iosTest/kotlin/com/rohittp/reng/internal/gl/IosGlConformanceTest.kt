@@ -17,7 +17,9 @@ import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
+import com.rohittp.reng.TERRAIN_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeGroundReadbackSuite
+import com.rohittp.reng.runTerrainFrameReadbackSuite
 import com.rohittp.reng.runLatitudePrecisionProbeSuite
 import com.rohittp.reng.runVertexTextureFetchProbeSuite
 import com.rohittp.reng.runModelReadbackSuite
@@ -318,6 +320,29 @@ class IosGlConformanceTest {
             binding.viewport(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
             binding.scissor(0, 0, GLOBE_FRAME_READBACK_PIXELS, GLOBE_FRAME_READBACK_PIXELS)
             runGlobeFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * **Cycle E-terrain task 12's gate on EAGL: terrain through the *public* API.**
+     *
+     * The simulator runs `Apple Software Renderer`, the rasteriser whose treatment of quads reaching
+     * far outside the viewport cost `0.3.0` a publication. This suite's fixture is deliberately not
+     * that shape -- its ground tiles are 512 logical pixels inside a 768-pixel frame -- so whether
+     * this driver agrees with the two Apple rasterisers on macOS is a measurement rather than a
+     * prediction, and the suite opens by printing what `measureLargeQuadRasterisation` says about it.
+     *
+     * See `runTerrainFrameReadbackSuite` for what each of its four cases discriminates.
+     */
+    @Test fun theTerrainFrameReadbackSuitePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+            binding.scissor(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
+            runTerrainFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

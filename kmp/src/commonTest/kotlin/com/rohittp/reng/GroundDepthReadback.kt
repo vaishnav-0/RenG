@@ -123,6 +123,14 @@ import kotlin.test.assertTrue
  * Nothing about fidelity, nothing about seams, nothing about how terrain *looks*: pixel verification
  * remains Cycle J's.
  *
+ * **No whole-frame array comparison, and that is why this suite needs no difference-count helper.**
+ * Task 11 flagged this file alongside `runGroundDisplacementReadback` as carrying the latent
+ * `assertContentEquals`-over-a-frame shape that overflows Gradle's 1 MB TeamCity service message and
+ * loses the assertion. Task 12 checked: every assertion below is a **count** of pixels carrying a
+ * colour, with a hand-written message, so the largest failure message here is a few hundred bytes.
+ * The displacement suite genuinely had the shape and now asserts its difference count first; this one
+ * never did.
+ *
  * ## The synthetic matrix, and why elevation moves depth and nothing else
  *
  * [GROUND_MATRIX] maps the ground tile's unit square onto the whole frame and its map-space `z` —
