@@ -180,11 +180,15 @@ class GlobeGroundPipelineTest {
     }
 
     /**
-     * The edges two neighbours share are the **same `Float`**, in both axes. Not "within a
-     * tolerance": a tolerance would let an ULP of longitude through, and an ULP of a longitude near
-     * `PI` is `R * 1.9 x 10^-7` logical pixels of crack, which stops being sub-pixel at about zoom
-     * 17. The `origin + span * u` spelling of the same shader would fail exactly this and nothing
-     * else in this file.
+     * The edges two neighbours share are the **same `Float`**, in both axes, so their grids put
+     * vertices in the same place rather than an ULP apart.
+     *
+     * Exact rather than within a tolerance, because a tolerance is what a crack hides in. What this
+     * does *not* pin is the shader's spelling: measured, computing the east edge as
+     * `west + span` in `Double` gives a different `Double` for 196 of 1,144 sampled tiles and the
+     * identical `Float` for all of them, so this case is blind to that mutation and stayed green
+     * under it. The spelling that matters is the one evaluated in `highp float` on the GPU, and
+     * [theShaderReconstructsEachAxisFromItsOwnEndpoints] is what pins that.
      */
     @Test fun adjacentTilesAreHandedTheirSharedEdgeBitwiseIdentical() {
         val lod = 5
@@ -197,6 +201,34 @@ class GlobeGroundPipelineTest {
                 assertEquals(here[3], south[2], "the shared parallel at y=$tileY")
             }
         }
+    }
+
+    /**
+     * The shader reconstructs each axis with `mix` between the tile's two edges, never as an origin
+     * plus a span times the grid coordinate.
+     *
+     * **A source-inspection case, because no fixture can reach this one.** `mix(x, y, a)` is defined
+     * as `x(1 - a) + y * a`, which returns `y` exactly at `a = 1`, so two tiles that were handed the
+     * same edge put their shared vertices in the same place. `origin + span * u` performs the
+     * multiply-add in `highp float` against a longitude near `PI` instead, and lands up to
+     * `2.384 x 10^-7` radians from the neighbour's own west edge — 0.02 logical pixels of crack at
+     * zoom 10, 5.09 at zoom 18. Every zoom where a readback fixture can put the whole globe in a
+     * frame is at the harmless end of that, so a pixel gate would report the wrong spelling as
+     * green right up to the zooms nobody can photograph in a test.
+     */
+    @Test fun theShaderReconstructsEachAxisFromItsOwnEndpoints() {
+        assertTrue(
+            GLOBE_GROUND_VERTEX_SOURCE.contains(
+                "mix(rengGlobeGroundTileEdges.x, rengGlobeGroundTileEdges.y, rengGlobeGroundGrid.x)",
+            ),
+            "longitude must be mixed between the tile's west and east edges",
+        )
+        assertTrue(
+            GLOBE_GROUND_VERTEX_SOURCE.contains(
+                "mix(rengGlobeGroundTileEdges.z, rengGlobeGroundTileEdges.w, rengGlobeGroundGrid.y)",
+            ),
+            "isometric latitude must be mixed between the tile's north and south edges",
+        )
     }
 
     /**

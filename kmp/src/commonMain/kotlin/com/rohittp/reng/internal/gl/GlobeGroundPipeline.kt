@@ -313,12 +313,19 @@ internal fun globeGroundGridIndices(cellsPerSide: Int): ShortArray {
  *
  * This is the CPU half of the expression [com.rohittp.reng.internal.projection.unitSphereDirection]
  * evaluates: `psi = PI * (1 - 2y)` and `lambda = PI * (2x - 1)`, in `Double`, from the tile's own
- * exact rational coordinates. The shader is handed the two endpoints of each axis rather than an
- * origin and a span, and that is the difference between a closed seam and an open one. `origin +
- * span * u` at `u = 1` rounds relative to a longitude near `PI`, so two tiles would disagree about
- * their shared meridian by an ULP of `PI` — about `R * 1.9 x 10^-7` logical pixels, which is
- * sub-pixel only below roughly zoom 17. Endpoints agree **bitwise**, because
- * `(unwrappedX + 1) / 2^lod` and the neighbour's `unwrappedX / 2^lod` are the same `Double`.
+ * exact rational coordinates. Two neighbours are handed the identical `Float` for the edge they
+ * share, because `(unwrappedX + 1) / 2^lod` and the neighbour's `unwrappedX / 2^lod` are the same
+ * `Double`.
+ *
+ * **Two endpoints per axis rather than an origin and a span, and the reason is the shader rather
+ * than this function.** Spelling the same thing `origin + span * u` on the CPU would be harmless:
+ * over 1,144 sampled tiles across every LOD the two `Double` results differ 196 times and the
+ * narrowed `Float` results differ **never**. Spelling it that way in the *shader* is not harmless,
+ * because there the multiply-add happens in `highp float` against a longitude near `PI`: at `u = 1`
+ * it lands up to `2.384 x 10^-7` radians away from the neighbour's own west edge, which is 0.02
+ * logical pixels of crack at zoom 10 and **5.09 at zoom 18**. `mix(west, east, u)` returns its
+ * endpoints exactly, so the shared vertices coincide instead — no border ring, no skirt and no half
+ * pixel of padding, which are the three mechanisms the field uses instead.
  *
  * **[unwrappedX] is wrapped here, exactly as [unitSphereDirection] wraps its Mercator `x`**: a
  * sphere has no world copies, so a tile in copy 3 draws where copy 0's does. The east edge is then
