@@ -170,10 +170,11 @@ All six targets still publish at every release; which of them anyone has actuall
 release notes rather than being discovered by an Android consumer, and **ADR 0033 is where that promise now
 lives**.
 
-**Measured on this checkout:** `testAndroidHostTest` **1,298**, `macosArm64Test` **1,351**,
-`iosSimulatorArm64Test` **1,335** — 0 failures, 0 errors and 0 skips on each, summed from Gradle's own
+**Measured on this checkout:** `testAndroidHostTest` **1,457**, `macosArm64Test` **1,516**,
+`iosSimulatorArm64Test` **1,500** — 0 failures, 0 errors and 0 skips on each, summed from Gradle's own
 JUnit XML rather than from scrollback. 138 Python tests pass, and `check_repository_policy.py` passes.
-(Cycle H closed at 1,123 / 1,159 / 1,145; X2 took it to 1,134 / 1,174 / 1,160; E-labels added the rest.)
+(Cycle H closed at 1,123 / 1,159 / 1,145; X2 took it to 1,134 / 1,174 / 1,160; E-labels took it to
+1,298 / 1,351 / 1,335; Cycle G added the rest, of which its readback gate is 1 and the polar cap 4.)
 
 **Read a gate's verdict from `BUILD SUCCESSFUL` or an unpiped `$?`, never from an exit code through a
 pipe.** `./gradlew … | tail` reports *tail's* status, so a failing build looks green. That cost this cycle
@@ -375,10 +376,18 @@ above zoom 11), so the question §5 deferred is live again and about precision: 
 zoom, a per-tile rebasing of the globe path, or accepting sub-pixel error to about zoom 17. **No tuned
 constant ships either way.**
 
-**The polar cap has no imagery, in any style.** Web Mercator tiles end at ±85.0511°, so a cap around each
-pole has no tile to sample and RenG draws nothing there — measured at 783 pixels of the harness's own clear
-colour enclosed by the sphere at zoom 2. Inherent to Mercator tiles on a sphere rather than anything this
-cycle did, and what should fill it is undecided.
+**The poles are closed by stretching the edge texel row, and that is the one defect the videos found.**
+Web Mercator tiles end at ±85.0511°, so the cap above them has no tile — a hole a flat map can never show,
+because the region is not in frame at all. Measured at **783** pixels of the harness's clear colour enclosed
+by the sphere at zoom 2, a notch widening from 14 to 56 px across 24 rows. A top- or bottom-row tile now
+also paints the cap beyond it: the shader's own `sin(latitude) = (t² − 1)/(t² + 1)` reaches the pole with no
+branch, because at `ψ = 20` the `t²` term is 2.35 × 10¹⁷ and both the −1 and the +1 round away in `highp
+float`, leaving exactly 1.0 and a 4.1 × 10⁻⁹ radian residual — 2.6 cm. The cap reuses its tile's longitude
+`Float`s **untouched** rather than recomputing equal ones, for the reason `globeGroundTileEdges` already
+measures: an equal-but-different longitude is 5.09 logical pixels of crack at zoom 18. After: **19** pixels,
+and all 19 are imagery — the region around them is dark forest green straddling the sentinel, a few landing
+exactly on `(0, 96, 32)`. **The harness's clear colour is not as unique as its KDoc claims**; satellite
+imagery produces it.
 
 **Curvature fidelity is not claimed and stays Cycle J's.** The readback gate asserts relationships over a
 real context; the sagitta of a frame-sized quad is 0.44 logical pixels at zoom 10, so a cross-mode
