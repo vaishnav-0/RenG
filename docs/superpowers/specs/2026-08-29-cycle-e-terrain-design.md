@@ -100,7 +100,11 @@ formula exists once as text. `GROUND_FRAGMENT_SOURCE` is already shared between 
 argument applied to the vertex half.
 
 **Granularity is derived from elevation error**, as the globe's is derived from curvature deviation, and the
-two must yield **one granularity per frame**. Sampling a DEM per texel is not an option: at X2's measured
+two must yield **one granularity per frame**. One consequence is worth stating because it surprised this
+cycle's own gate: since the rule is a work budget that never inspects the data, a **flat** DEM still asks
+for a fine grid where a terrainless frame asks for a coarse one — and subdividing a plane is the identity
+while subdividing a sphere is not. A flat DEM is therefore byte-identical to terrain-off only with
+granularity held fixed, not at the API level. Sampling a DEM per texel is not an option: at X2's measured
 167-tile worst case a 256-texel DEM sampled per texel is **11,030,183 vertices**.
 
 ## 6. Altitude gains a mode, and its default is the glossary's

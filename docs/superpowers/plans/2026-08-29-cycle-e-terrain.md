@@ -50,9 +50,15 @@ a specific failure.
 - **`exaggeration` is `1` in all six corpus styles.** A fixture at `1` cannot tell an honoured
   exaggeration from an ignored one — it is a symmetry point of exactly the kind F-2 found seven of. Every
   exaggeration assertion uses a value that is not 1.
-- **A flat DEM is the strongest negative available.** A DEM whose every texel decodes to the same height
-  must render **byte-identical** to terrain being off. If it does not, displacement is leaking somewhere it
-  should not, and no positive test will tell you.
+- **A flat DEM is the strongest negative available — and it is byte-identical only at one level.** A DEM
+  whose every texel decodes to the same height must render **byte-identical** to terrain being off *when
+  granularity is held fixed*, which is where Task 8 proved it. **At the API level it is not**, and Task 12
+  measured why: `terrainCellsPerTileSide` is a work budget that never looks at the data, so a flat DEM asks
+  for 64 cells a side where a terrainless frame draws 1 in Mercator and 8 on the globe. **Subdividing a
+  plane is the identity; subdividing a sphere is not.** Measured plain-vs-flat: **0 / 30** on Apple M3 Max,
+  **0 / 242** on `Apple Software Renderer`, **1 / 242** on the iOS simulator — against a raised-DEM signal
+  of 61,063 / 92,032. So the API-level negative is a small budget with a large floor stated against it, and
+  the single Mercator pixel appeared on a real run rather than in theory.
 
 ---
 
