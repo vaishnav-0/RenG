@@ -84,8 +84,17 @@ zoom 8 takes 24 to **686** — past `maximumBasemapTileInstances`' 512, so the f
 than rendering slowly. Under the chosen convention both return to their mercator counts, peaking at ~4×
 around zoom 3–5.
 
-**The accepted cost is public-facing**: `Camera.zoom` becomes projection-dependent, so a consumer toggling
-`projectionMode` sees the map jump scale. That belongs in `CONTEXT.md`'s **Camera** entry.
+**Corrected during execution — `z_eff` sizes the sphere and does *not* feed LOD selection.** A Mercator tile
+at latitude φ covers a ground square `cos φ` the side of an equatorial one, so its on-screen size is
+`512·2^(z_eff − lod)·cos φ = 512·2^(zoom − lod)`: **the latitude factors cancel exactly** at the camera's own
+latitude, which is where one per-frame LOD is chosen. `observeMercatorLod` therefore needs **no globe arm**.
+Feeding it `z_eff` is the reading the formula invites and is *worse* than the naive convention — LOD 9
+instead of 6, 154 modelled tiles against 136.
+
+**The accepted cost is public-facing but narrower than first stated**: the on-screen ground scale at the
+**view centre** is identical in both modes, so the map jumps away from the centre and at zooms where
+curvature reads, not at the centre. `CONTEXT.md`'s **Camera** entry carries the precise form, and ADR 0037
+gained an erratum.
 
 `LodObservation(selectedLod: Int)` keeps one LOD per frame — per-tile LOD was rejected as out of proportion.
 

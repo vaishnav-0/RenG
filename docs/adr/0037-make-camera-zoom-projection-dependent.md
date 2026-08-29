@@ -84,3 +84,38 @@ a commitment against it.
 conventions — naive and latitude-matched — agree exactly at the equator, which is the latitude a tile-count
 fixture naturally gets written at. A case that fails without this decision is a tile count taken at a
 non-trivial latitude; anything written at latitude 0 passes under either reading and proves nothing.
+
+## Erratum, 2026-08-29: `z_eff` is the scale exponent, and the LOD rule is untouched
+
+This ADR's accepted-cost paragraph says a consumer panning north at constant `zoom` "raises `z_eff`, which
+raises the selected LOD, which asks the engine for finer tiles". **That does not happen, and implementing it
+would have been a defect rather than a cost.** Found while implementing the convention and verified
+independently.
+
+`z_eff` is the **scale exponent** — it sizes the sphere, whose equatorial circumference is
+`512 · 2^z_eff` logical pixels, which is Mercator's world size grown by `1/cos φ`. It is not an input to LOD
+selection. On a sphere a Mercator tile at latitude φ covers a ground square only `cos φ` the side of an
+equatorial one, so a tile's *on-screen* size is
+
+```
+512 · 2^(z_eff − lod) · cos φ  =  512 · 2^(zoom − lod)
+```
+
+**The two latitude factors cancel exactly**, at the camera's own latitude — which is the latitude at which
+one per-frame LOD is chosen. So `screenPixelsPerTexel` is the same function of `zoom` in both modes, and
+`observeMercatorLod` needs no globe arm at all. Verified across latitudes 0 through 85.0511 and several
+zoom/LOD pairs; the identity is exact rather than approximate.
+
+**Feeding `z_eff` to `observeMercatorLod` is the reading this formula invites, and it is worse than the
+naive convention it replaces** — LOD 9 instead of 6, and 154 modelled tiles against the naive scale's 136.
+The trap is named in `MercatorLod.kt`'s KDoc so the next reader meets it before writing it.
+
+Two consequences follow. **A style rule gated on zoom does not flicker during a pan**, because the selected
+LOD does not move with latitude — the paragraph above claimed otherwise. And **the on-screen ground scale at
+the view centre is identical in both projections**, so "the map jumps on toggle" is true away from the
+centre and at any zoom where curvature reads, and *false at the centre*. `CONTEXT.md`'s **Camera** entry
+carries the precise form.
+
+What survives unaltered is this ADR's decision and its central argument: the convention is latitude-matched,
+the naive alternative makes high-latitude frames **fail closed** rather than render slowly, and `Camera.zoom`
+remains projection-dependent in what it shows.
