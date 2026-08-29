@@ -63,7 +63,13 @@ fun main(arguments: Array<String>) {
     var failed = 0
 
     try {
-        framePlans(options.groundless, options.modelUrl, options.labelless)
+        framePlans(
+            groundless = options.groundless,
+            modelUrl = options.modelUrl,
+            labelless = options.labelless,
+            globe = options.globe,
+            baseZoom = options.baseZoom ?: DEFAULT_BASE_ZOOM,
+        )
             .take(options.frameCount)
             .forEach { plan ->
                 if (renderOneFrame(renderer, target, plan, options.outputDirectory)) {
@@ -174,6 +180,8 @@ private class HarnessOptions(
     val frameCount: Int,
     val groundless: Boolean,
     val labelless: Boolean,
+    val globe: Boolean,
+    val baseZoom: Double?,
     val verbose: Boolean,
 )
 
@@ -184,16 +192,27 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     var frameCount = FRAME_COUNT
     val groundless = arguments.contains("--no-basemap")
     val labelless = arguments.contains("--no-labels")
+    val globe = arguments.contains("--globe")
+    var baseZoom: Double? = null
     val verbose = arguments.contains("--verbose")
+    // Advance by one for a valueless flag and by two for an option that consumed its value. A fixed
+    // `index += 2` reads only even positions, so a single flag ahead of a value option hides that
+    // option entirely -- and silently, because an unmatched argument is not an error here. That is
+    // not hypothetical: `--globe` is emitted before `--zoom`, so every globe run ignored `--zoom` and
+    // rendered at the storyboard's default 11.5, where the sphere is larger than the viewport and a
+    // correct globe is indistinguishable from a flat map. The frames looked like a renderer defect.
     var index = 0
-    while (index + 1 < arguments.size) {
-        when (arguments[index]) {
-            "--style" -> styleUrl = arguments[index + 1]
-            "--model" -> modelUrl = arguments[index + 1].takeIf(String::isNotBlank)
-            "--out" -> outputDirectory = arguments[index + 1]
-            "--frames" -> frameCount = arguments[index + 1].toIntOrNull() ?: frameCount
+    while (index < arguments.size) {
+        val value = arguments.getOrNull(index + 1)
+        val consumedValue = when (arguments[index]) {
+            "--style" -> { styleUrl = value ?: styleUrl; true }
+            "--model" -> { modelUrl = value?.takeIf(String::isNotBlank) ?: modelUrl; true }
+            "--out" -> { outputDirectory = value ?: outputDirectory; true }
+            "--frames" -> { frameCount = value?.toIntOrNull() ?: frameCount; true }
+            "--zoom" -> { baseZoom = value?.toDoubleOrNull() ?: baseZoom; true }
+            else -> false
         }
-        index += 2
+        index += if (consumedValue) 2 else 1
     }
     if (styleUrl.isBlank()) {
         println(
@@ -207,7 +226,9 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
         println("No output directory. Pass --out <directory>.")
         return null
     }
-    return HarnessOptions(styleUrl, modelUrl, outputDirectory, frameCount, groundless, labelless, verbose)
+    return HarnessOptions(
+        styleUrl, modelUrl, outputDirectory, frameCount, groundless, labelless, globe, baseZoom, verbose,
+    )
 }
 
 /** Counts diagnostics by code and keeps the first few, so a warning storm prints as one line. */
