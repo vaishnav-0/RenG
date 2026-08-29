@@ -4,6 +4,7 @@ import com.rohittp.reng.Geometry
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.Placement
 import com.rohittp.reng.PipelineStage
+import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.RenGErrorCode
 import com.rohittp.reng.ShaderValue
 import com.rohittp.reng.internal.failureContextDiagnostic
@@ -343,6 +344,14 @@ internal class Scene(
  * [labelPipeline] is nullable on the same terms and for the same reason: a frame with no labels needs
  * none, and a frame *with* labels and none supplied hits a `requireNotNull` at phase 5 rather than
  * silently drawing a labelless map that looks finished.
+ *
+ * **[projectionMode] reaches exactly one decision today: whether [drawGround] culls the far
+ * hemisphere (ADR 0038).** It defaults to [ProjectionMode.MERCATOR] because nothing upstream can yet
+ * supply anything else — a `PreparedFrame` carries no projection mode at all, and
+ * `FramePlanningCore` still refuses [ProjectionMode.GLOBE] outright — so `RenGRenderer` has no globe
+ * to pass down and does not pass one. Threading it from the frame plan is the globe cycle's own seam
+ * work; until then this parameter is reached by tests, and a green mercator run says nothing about
+ * whether a globe frame ever gets here.
  */
 internal class SceneContent(
     private val camera: ResolvedMercatorCamera,
@@ -352,6 +361,7 @@ internal class SceneContent(
     private val modelPipelines: Map<ModelShaderVariant, ModelPipeline> = emptyMap(),
     private val labelPipeline: LabelPipeline? = null,
     private val iconPipeline: IconPipeline? = null,
+    private val projectionMode: ProjectionMode = ProjectionMode.MERCATOR,
 ) : GlFrameContent {
 
     override fun draw(binding: GlBinding) {
@@ -380,6 +390,7 @@ internal class SceneContent(
                         texture = tile.texture,
                     )
                 },
+                projectionMode = projectionMode,
             )
         }
 
@@ -390,6 +401,15 @@ internal class SceneContent(
             // beside the `GL_DEPTH_TEST` enable that has always lived here.
             binding.enable(GL_DEPTH_TEST)
             binding.depthMask(false)
+            // ADR 0038: the geometry pass must not inherit the ground's cull enable. The ground
+            // enables culling on a globe and draws immediately before this, and the winding of the
+            // triangles a consumer's shader pair emits is the consumer's own: a shader that negates
+            // a coordinate or reorders its corners inverts the front face, and culling would then
+            // delete a legal `Geometry` whose only sin is a sign, silently and only in one
+            // projection mode. That is the class of silent breakage ADR 0008 exists to prevent, so
+            // the disable belongs here beside the depth state, for the same reason the depth state
+            // does: `drawGeometry` cannot make these calls for itself.
+            binding.disable(GL_CULL_FACE)
             val geometryViewProjection = composeGeometryViewProjection(camera)
             for (sceneGeometry in scene.geometries) {
                 val resolved = resolveGeometry(sceneGeometry.geometry, camera).requireResolvedAtDrawTime()
@@ -437,6 +457,13 @@ internal class SceneContent(
         }
 
         if (mapStickers.isNotEmpty()) {
+            // ADR 0038 records a pre-existing gap here and this cycle deliberately does not close it:
+            // `drawStickers` sets no cull state, so it inherits whatever the model pass's last
+            // non-`doubleSided` primitive left -- and now, on a globe with no models in the frame, the
+            // ground's own enable. Nothing moves either way, because `STICKER_QUAD` is `GROUND_QUAD`'s
+            // winding exactly, so a sticker is front-facing under `drawFrame`'s `GL_CCW`. That is the
+            // same luck ADR 0038 removed from the ground rather than a second argument for keeping it,
+            // and closing it belongs with whichever cycle owns the sticker pass.
             drawStickers(
                 binding,
                 stickerPipeline,

@@ -1,8 +1,10 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
+import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -72,6 +74,27 @@ class LinuxGlConformanceTest {
             binding.viewport(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
             binding.scissor(0, 0, BASEMAP_READBACK_PIXELS, BASEMAP_READBACK_PIXELS)
             runBasemapReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 6's gate (ADR 0038) on llvmpipe: a globe ground pass removes a back-facing patch,
+     * a mercator one keeps it whatever the caller left enabled, and no mercator pixel moves in either
+     * winding. `runGroundCullReadbackSuite` says what each of its four cases would survive.
+     */
+    @Test fun theGroundCullReadbackSuitePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
+            binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
+            runGroundCullReadbackSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

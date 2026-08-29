@@ -1,9 +1,11 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
+import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.LABEL_INTEGRATION_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
@@ -200,6 +202,33 @@ class MacosGlConformanceTest {
             runLabelIntegrationReadbackSuite(binding, fixture.probe)
         } finally {
             fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 6's gate (ADR 0038), on both Apple rasterisers this machine can offer: a globe
+     * ground pass removes a back-facing patch, a mercator one keeps it whatever the caller left
+     * enabled, and no mercator pixel moves in either winding.
+     *
+     * Both rasterisers in one case rather than two, because the assertion is about RenG's own state
+     * changes rather than about a fill rule — the patch is entirely on-screen, so the large-quad
+     * defect that splits these two drivers apart in `runBasemapReadbackSuite` cannot reach it.
+     */
+    @Test fun theGroundCullReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG ground-cull readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
+                binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
+                runGroundCullReadbackSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
         }
     }
 

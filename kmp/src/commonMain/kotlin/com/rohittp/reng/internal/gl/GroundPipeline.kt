@@ -1,6 +1,7 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.PipelineStage
+import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.ResourceKey
 import com.rohittp.reng.ShaderPair
 import com.rohittp.reng.internal.failure.FailureDescriptor
@@ -168,8 +169,31 @@ internal class ResolvedGroundTile(
  * same reason: the premultiplied `GL_ONE, GL_ONE_MINUS_SRC_ALPHA` function is what [uploadTexture]'s
  * [TextureContent.IMAGE] path requires, and a basemap style with a transparent background composites
  * correctly over the cleared offscreen surface only under it.
+ *
+ * **Face culling is established here too, in both modes, and that is ADR 0038's whole new
+ * obligation.** On a globe the far hemisphere is exactly the back-facing set — ground patches wind
+ * consistently on a sphere, so the limb is where the two sets meet, which is where the eye puts it
+ * — and removing it needs `GL_CULL_FACE` and nothing else: no depth involvement, so ADR 0027 stands
+ * and ADR 0030's single model-pass exception is untouched. [drawFrame] has already established
+ * `frontFace(GL_CCW)` and `cullFace(GL_BACK)` for the whole scene, and the ground is the first pass
+ * inside it, so the mode and the winding are not restated here.
+ *
+ * Under [ProjectionMode.MERCATOR] the state is **explicitly disabled** rather than left alone. Until
+ * this cycle this function set no cull state at all and inherited whatever the caller had left,
+ * which was harmless only by luck: [GROUND_QUAD] happens to wind counter-clockwise, so an inherited
+ * enable removed nothing. Disabling makes a mercator frame's pixels a function of this pass rather
+ * than of its caller — the same rule ADR 0027 already applies to `depthMask(false)` — and it is what
+ * lets a cycle that changes the globe change no mercator pixel.
+ *
+ * The mode is spelled as an exhaustive `when` over [ProjectionMode] rather than as a boolean so that
+ * a third projection cannot silently inherit mercator's answer.
  */
-internal fun drawGround(binding: GlBinding, pipeline: GroundPipeline, tiles: List<ResolvedGroundTile>) {
+internal fun drawGround(
+    binding: GlBinding,
+    pipeline: GroundPipeline,
+    tiles: List<ResolvedGroundTile>,
+    projectionMode: ProjectionMode,
+) {
     if (tiles.isEmpty()) return
 
     binding.useProgram(pipeline.program)
@@ -183,6 +207,11 @@ internal fun drawGround(binding: GlBinding, pipeline: GroundPipeline, tiles: Lis
     }
     binding.enable(GL_DEPTH_TEST)
     binding.depthMask(false)
+    val cullFarHemisphere = when (projectionMode) {
+        ProjectionMode.GLOBE -> true
+        ProjectionMode.MERCATOR -> false
+    }
+    if (cullFarHemisphere) binding.enable(GL_CULL_FACE) else binding.disable(GL_CULL_FACE)
 
     tiles.forEach { tile ->
         if (pipeline.modelViewProjectionUniformLocation >= 0) {

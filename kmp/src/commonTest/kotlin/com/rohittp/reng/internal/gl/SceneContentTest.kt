@@ -6,6 +6,7 @@ import com.rohittp.reng.Geometry
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.PipelineStage
 import com.rohittp.reng.Placement
+import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.RenGErrorCode
 import com.rohittp.reng.RenGException
 import com.rohittp.reng.ResourceLocator
@@ -1505,6 +1506,94 @@ class SceneContentTest {
         scaleMode = AnchoringMode.SCREEN,
         scale = 1.0,
     )
+
+    // --- ADR 0038: the ground owns its cull state, and the geometry pass never inherits it -------
+
+    /**
+     * The mode reaches [drawGround] rather than stopping at [SceneContent]'s constructor. Both arms
+     * are asserted: a test that only exercised the globe would pass with the mercator arm deleted,
+     * and a test that only exercised mercator would pass with the globe arm deleted.
+     */
+    @Test
+    fun theGroundPassCarriesTheFramesProjectionModeIntoItsCullState() {
+        listOf(
+            ProjectionMode.MERCATOR to "disable(${hex(GL_CULL_FACE)})",
+            ProjectionMode.GLOBE to "enable(${hex(GL_CULL_FACE)})",
+        ).forEach { (mode, expected) ->
+            val binding = RecordingGlBinding()
+            val groundPipeline = newGroundPipeline(binding)
+            val scene = Scene(
+                outputPixelSize = OUTPUT_SIZE,
+                frameIndex = 0L,
+                groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = 303)),
+            )
+            binding.log.clear()
+            SceneContent(
+                topDownCamera(),
+                scene,
+                newStickerPipeline(),
+                groundPipeline,
+                projectionMode = mode,
+            ).draw(binding)
+            val call = binding.log.indexOfFirst { it == expected }
+            val firstDraw = binding.log.indexOfFirst { it.startsWith("drawArrays") }
+            assertTrue(firstDraw >= 0, "$mode must draw the ground")
+            assertTrue(call in 0 until firstDraw, "$mode must issue $expected before drawing: ${binding.log}")
+        }
+    }
+
+    /**
+     * ADR 0038's one stated boundary. The globe ground leaves `GL_CULL_FACE` enabled behind it and the
+     * geometry pass runs a consumer's own shader pair, whose triangle winding is the consumer's to
+     * decide — a shader that negates a coordinate inverts the front face, and an inherited enable
+     * would then delete a legal `Geometry` silently and in one projection mode only.
+     *
+     * Asserted in **both** modes on purpose: the reason is a property of consumer shaders rather than
+     * of the globe, so the disable is unconditional, and under mercator this case is what stops the
+     * geometry pass from acquiring a mode-dependent state it never had.
+     */
+    @Test
+    fun theGeometryPassDisablesCullingRatherThanInheritingTheGlobeGroundsEnable() {
+        ProjectionMode.entries.forEach { mode ->
+            val binding = RecordingGlBinding()
+            val groundPipeline = newGroundPipeline(binding)
+            val geometryPipeline = newGeometryPipeline(binding)
+            assertTrue(
+                groundPipeline.program != geometryPipeline.program,
+                "the fixture must give the two passes distinct programs or this case cannot locate either",
+            )
+            val scene = Scene(
+                outputPixelSize = OUTPUT_SIZE,
+                frameIndex = 0L,
+                groundTiles = listOf(groundTile(canonicalX = 8, tileY = 8, texture = 303)),
+                geometries = listOf(SceneGeometry(testGeometry(), geometryPipeline, consumerUniforms = emptyMap())),
+            )
+            binding.log.clear()
+            SceneContent(
+                topDownCamera(),
+                scene,
+                newStickerPipeline(),
+                groundPipeline,
+                projectionMode = mode,
+            ).draw(binding)
+
+            val geometryProgram = binding.log.indexOfFirst { it == "useProgram(${geometryPipeline.program})" }
+            assertTrue(geometryProgram >= 0, "$mode must bind the geometry program: ${binding.log}")
+            val disabled = binding.log.subList(0, geometryProgram).indexOfLast { it == "disable(${hex(GL_CULL_FACE)})" }
+            assertTrue(
+                disabled >= 0,
+                "$mode must disable culling before the geometry pass binds its program: ${binding.log}",
+            )
+            if (mode == ProjectionMode.GLOBE) {
+                val groundEnable = binding.log.indexOfFirst { it == "enable(${hex(GL_CULL_FACE)})" }
+                assertTrue(groundEnable >= 0, "the globe ground must have enabled culling first")
+                assertTrue(
+                    disabled > groundEnable,
+                    "the geometry pass's disable must come after the ground's enable, or it undoes nothing",
+                )
+            }
+        }
+    }
 
     private fun testGeometry(): Geometry = Geometry(
         topLeft = Vector3(1.0, -1.0, 10.0),

@@ -1,8 +1,10 @@
 package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.BASEMAP_READBACK_PIXELS
+import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -174,6 +176,25 @@ class IosGlConformanceTest {
      * hand-assembled 2x2 PNGs — so it needs no network and no api key. The iOS spike recorded that it
      * did, and that was wrong.
      */
+    /**
+     * Cycle G task 6's gate (ADR 0038) on EAGL, and the one readback case on this target that is
+     * **not** expected to stand anything down. The suite's patch is entirely on-screen and 64 pixels
+     * square, so the large-off-screen-quad defect that makes `runBasemapReadbackSuite` skip its
+     * ground-coverage case here cannot reach it: what is being measured is whether RenG changed a
+     * GL enable, not how the driver fills a quad.
+     */
+    @Test fun theGroundCullReadbackSuitePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
+            binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
+            runGroundCullReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
     @Test fun theBasemapReadbackSuitePassesOnARealEaglContext() {
         val fixture = EaglOffscreenContext.create()
         try {
