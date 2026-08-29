@@ -394,8 +394,13 @@ class CycleBPureCoreContractTest {
         preparation.begin(
             listOf(
                 plan(frameIndex = 4L, stickers = listOf(sticker("alpha"))),
+                // A GLOBE plan whose camera is outside Mercator's latitude clip. It carried no
+                // camera of its own until Cycle G task 10, when GLOBE stopped being the invalidity:
+                // the mode now reaches `planGlobeSpatial`, which shares the Mercator domain, so the
+                // plan has to be invalid for a reason a globe frame can actually have.
                 plan(
                     frameIndex = 9L,
+                    camera = Camera(90.0, 0.0, 0.0, 0.0, 0.0),
                     projectionMode = ProjectionMode.GLOBE,
                     stickers = listOf(sticker("beta")),
                 ),
@@ -418,7 +423,7 @@ class CycleBPureCoreContractTest {
         val settled = preparation.failItem(1L)
 
         val failure = assertIs<OrderedPreparationOutcome.Failure>(settled.outcome)
-        assertEquals(RenGErrorCode.UNSUPPORTED_PROJECTION_MODE, failure.failure.code)
+        assertEquals(RenGErrorCode.INVALID_VALUE, failure.failure.code)
         assertEquals(PipelineStage.FRAME_PLANNING, failure.failure.stage)
         assertNull(settled.cursor)
         assertEquals(OrderedPreparationState.Idle(history), settled.state, "history is untouched")

@@ -32,39 +32,39 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * ADR 0038's ground half, in pixels on a real driver: the globe removes back-facing ground and
- * mercator does not, and a mercator frame's pixels do not depend on what its caller left enabled.
+ * ADR 0038's Mercator ground half, in pixels on a real driver: [drawGround] owns its cull state, so
+ * a mercator frame's pixels do not depend on what its caller left enabled.
  *
- * **Why this is not driven through `createRenderer` like [runBasemapReadbackSuite] is.**
- * `ProjectionMode.GLOBE` is still refused at frame planning, so no public call can put a globe frame
- * in front of a driver yet. This suite therefore calls [drawGround] directly, standing in for the
- * caller: it establishes exactly what `GlFrameDrawer.drawFrame` establishes scene-wide before
- * `content.draw` — `frontFace(GL_CCW)` and `cullFace(GL_BACK)` — and then varies the one thing this
- * cycle changes.
+ * **This suite lost two of its four cases to Cycle G task 10, and the reason is worth reading.** It
+ * was written against a [drawGround] that took a `projectionMode` and enabled culling on its `GLOBE`
+ * arm — the honest shape while the subdivided sphere grid did not exist. Task 7 built
+ * `drawGlobeGround` and task 10 routed globe frames to it, leaving that arm unreachable from
+ * production; the parameter went with it, and so did
+ * `assertTheGlobeRemovesABackFacingPatchFromACleanCullState` and
+ * `assertTheGlobeLeavesTheNearSideByteIdentical`, which measured it. **The claims did not
+ * disappear**: `runGlobeGroundReadbackSuite` makes the same two against a real sphere rather than a
+ * mirrored flat quad — `assertTheNearHemisphereIsWhatIsDrawn` fails if the globe ground's
+ * `enable(GL_CULL_FACE)` is deleted, because the far tiles then paint over the near ones, and
+ * `assertTheGroundCoversExactlyWhatTheGlobeSubtends` fails if the cull removes more than the far
+ * hemisphere.
+ *
+ * **Why this is not driven through `createRenderer` like [runBasemapReadbackSuite] is.** It calls
+ * [drawGround] directly and stands in for the caller: it establishes exactly what
+ * `GlFrameDrawer.drawFrame` establishes scene-wide before `content.draw` — `frontFace(GL_CCW)` and
+ * `cullFace(GL_BACK)` — and then varies the one thing that must not matter.
  *
  * **The fixture is one ground quad drawn twice over, once mirrored.** Mirroring the model-view-
  * projection about `x` reverses the winding of both triangles of `GROUND_QUAD`'s strip without
- * changing which pixels they cover, so the mirrored draw is a stand-in for a ground patch on the far
- * hemisphere: same area, opposite facing. A patch is the only thing a cull can act on, and pairing
- * the two windings is what makes each assertion below say something the other cannot.
+ * changing which pixels they cover. A patch is the only thing a cull can act on, and pairing the two
+ * windings is what makes each assertion below say something the other cannot.
  *
- * **What each case would survive, and therefore why there are four.**
- * - [assertMercatorDrawsABackFacingPatchEvenFromAHostileCullState] fails if the mercator arm's
- *   `disable` is deleted, and passes with the globe arm deleted.
- * - [assertTheGlobeRemovesABackFacingPatchFromACleanCullState] fails if the globe arm's `enable` is
- *   deleted, and passes with the mercator arm deleted. It starts from culling *disabled* on purpose:
- *   an inherited enable would otherwise do the globe's work for it.
- * - [assertTheGlobeLeavesTheNearSideByteIdentical] fails if the globe arm removes anything a
- *   mercator frame keeps — an over-broad cull that deleted front faces too would pass both of the
- *   above.
+ * **What each case would survive.**
+ * - [assertTheGroundDrawsABackFacingPatchEvenFromAHostileCullState] fails if the `disable` is
+ *   deleted. The hostile state is not hypothetical: it is exactly what `drawGlobeGround` leaves
+ *   behind it, and what `drawModels`' last non-`doubleSided` primitive has always left behind it.
  * - [assertNoMercatorPixelMoves] fails if a mercator frame's pixels depend on the caller's cull
  *   state in either winding. That is the claim this cycle makes about the projection it is *not*
  *   changing, and it is the one that protects three shipped releases.
- *
- * **What it does not claim.** Nothing here says the far hemisphere of a real globe winds
- * consistently — task 7 owns the ground geometry, and this suite has no sphere in it. It says that
- * *given* a back-facing patch, the globe arm removes it and the mercator arm does not, which is the
- * whole of what ADR 0038 asks the ground pass to do.
  */
 internal fun runGroundCullReadbackSuite(binding: GlBinding, dialect: ShaderDialect) {
     val target = createGroundCullTarget(binding)
@@ -78,9 +78,7 @@ internal fun runGroundCullReadbackSuite(binding: GlBinding, dialect: ShaderDiale
     println("RenG ground-cull readback: driver=${binding.getString(GL_RENDERER)} dialect=$dialect")
     try {
         val fixture = GroundCullFixture(binding, pipeline, target, texture)
-        assertMercatorDrawsABackFacingPatchEvenFromAHostileCullState(fixture)
-        assertTheGlobeRemovesABackFacingPatchFromACleanCullState(fixture)
-        assertTheGlobeLeavesTheNearSideByteIdentical(fixture)
+        assertTheGroundDrawsABackFacingPatchEvenFromAHostileCullState(fixture)
         assertNoMercatorPixelMoves(fixture)
     } finally {
         deleteGroundPipeline(binding, programs, pipeline)
@@ -91,62 +89,20 @@ internal fun runGroundCullReadbackSuite(binding: GlBinding, dialect: ShaderDiale
 }
 
 /**
- * The mercator arm is load-bearing rather than decorative. The caller here leaves `GL_CULL_FACE`
- * **enabled** — which is exactly what the globe ground pass now leaves behind it, and what
+ * The disable is load-bearing rather than decorative. The caller here leaves `GL_CULL_FACE`
+ * **enabled** — which is exactly what the globe ground pass leaves behind it, and what
  * `drawModels`' last non-`doubleSided` primitive has always left behind it — and the mercator ground
  * must draw its back-facing patch anyway, because under mercator no ground patch faces away.
  */
-private fun assertMercatorDrawsABackFacingPatchEvenFromAHostileCullState(fixture: GroundCullFixture) {
+private fun assertTheGroundDrawsABackFacingPatchEvenFromAHostileCullState(fixture: GroundCullFixture) {
     val frame = fixture.render(
         winding = GroundPatchWinding.BACK_FACING,
-        projectionMode = ProjectionMode.MERCATOR,
         callerLeftCullingEnabled = true,
     )
     assertTrue(
         frame.paintedPixels >= MINIMUM_PATCH_PIXELS,
         "under mercator a back-facing ground patch must still draw, whatever the caller left " +
             "enabled: ${frame.paintedPixels} painted pixels against a floor of $MINIMUM_PATCH_PIXELS",
-    )
-}
-
-/**
- * The globe arm, from a caller that left culling **disabled**, so the enable can only come from
- * [drawGround] itself.
- */
-private fun assertTheGlobeRemovesABackFacingPatchFromACleanCullState(fixture: GroundCullFixture) {
-    val frame = fixture.render(
-        winding = GroundPatchWinding.BACK_FACING,
-        projectionMode = ProjectionMode.GLOBE,
-        callerLeftCullingEnabled = false,
-    )
-    assertEquals(
-        0,
-        frame.paintedPixels,
-        "on a globe a back-facing ground patch must leave no pixel at all",
-    )
-}
-
-/** The near side is untouched: enabling culling must remove back faces and nothing else. */
-private fun assertTheGlobeLeavesTheNearSideByteIdentical(fixture: GroundCullFixture) {
-    val mercator = fixture.render(
-        winding = GroundPatchWinding.FRONT_FACING,
-        projectionMode = ProjectionMode.MERCATOR,
-        callerLeftCullingEnabled = false,
-    )
-    val globe = fixture.render(
-        winding = GroundPatchWinding.FRONT_FACING,
-        projectionMode = ProjectionMode.GLOBE,
-        callerLeftCullingEnabled = false,
-    )
-    assertTrue(
-        mercator.paintedPixels >= MINIMUM_PATCH_PIXELS,
-        "the front-facing fixture must actually paint, or this case compares two empty frames: " +
-            "${mercator.paintedPixels}",
-    )
-    assertContentEquals(
-        mercator.bytes,
-        globe.bytes,
-        "a globe must keep every pixel of a front-facing ground patch that mercator keeps",
     )
 }
 
@@ -160,8 +116,8 @@ private fun assertTheGlobeLeavesTheNearSideByteIdentical(fixture: GroundCullFixt
  */
 private fun assertNoMercatorPixelMoves(fixture: GroundCullFixture) {
     GroundPatchWinding.entries.forEach { winding ->
-        val clean = fixture.render(winding, ProjectionMode.MERCATOR, callerLeftCullingEnabled = false)
-        val hostile = fixture.render(winding, ProjectionMode.MERCATOR, callerLeftCullingEnabled = true)
+        val clean = fixture.render(winding, callerLeftCullingEnabled = false)
+        val hostile = fixture.render(winding, callerLeftCullingEnabled = true)
         assertTrue(
             clean.paintedPixels >= MINIMUM_PATCH_PIXELS,
             "the $winding mercator frame must paint, or this case compares two empty frames",
@@ -189,7 +145,6 @@ private class GroundCullFixture(
      */
     fun render(
         winding: GroundPatchWinding,
-        projectionMode: ProjectionMode,
         callerLeftCullingEnabled: Boolean,
     ): GroundCullFrame {
         binding.bindFramebuffer(GL_DRAW_FRAMEBUFFER, target)
@@ -210,7 +165,6 @@ private class GroundCullFixture(
             binding = binding,
             pipeline = pipeline,
             tiles = listOf(ResolvedGroundTile(modelViewProjection = matrixFor(winding), texture = texture)),
-            projectionMode = projectionMode,
         )
 
         val bytes = ByteArray(GROUND_CULL_READBACK_PIXELS * GROUND_CULL_READBACK_PIXELS * 4)

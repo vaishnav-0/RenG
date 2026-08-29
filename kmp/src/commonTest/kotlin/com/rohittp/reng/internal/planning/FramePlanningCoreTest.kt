@@ -29,6 +29,7 @@ import com.rohittp.reng.internal.identity.PureKotlinSha256
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.identity.Sha256Digest
 import com.rohittp.reng.internal.maximumBytesFor
+import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
 import com.rohittp.reng.internal.resource.RentilePrivateKey
 import com.rohittp.reng.internal.resource.RentilePrivateKeyResolver
 import kotlin.test.Test
@@ -42,8 +43,27 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FramePlanningCoreTest {
+    /**
+     * **Cycle G task 10 turned this case inside out.** It used to assert that a `GLOBE` plan was
+     * refused with `UNSUPPORTED_PROJECTION_MODE` before spatial planning and before any resource
+     * route; the globe is implemented now, so what it asserts instead is that a `GLOBE` plan reaches
+     * the *globe* planner and fails or succeeds on that planner's own terms.
+     *
+     * Three inputs, each pinning something a wrong dispatch would break:
+     *
+     * - an **invalid camera** must fail with the shared `camera.latitude` diagnostic and route
+     *   nothing, which is what proves `planGlobeSpatial` runs before `staticResourceTraversal` — the
+     *   ordering guarantee the old refusal was standing in for;
+     * - the **same invalid camera under `MERCATOR`** must fail identically, so the two planners agree
+     *   about the domain they share;
+     * - a **valid globe camera with a tile budget of one** must fail `RESOURCE_LIMIT_EXCEEDED` at
+     *   `basemap.tileInstances`. This is the case the old assertion could not have: it can only be
+     *   reached by actually selecting globe tiles, so it fails if `plan()` still refuses `GLOBE`, if
+     *   it dispatches a globe plan to the Mercator planner's footprint, or if the budget stops being
+     *   checked.
+     */
     @Test
-    fun globeProjectionModeFailsBeforeSpatialPlanningAndAnyResourceRoute() {
+    fun globeProjectionModeReachesTheGlobePlannerRatherThanBeingRefused() {
         val resolver = RecordingPrivateKeyResolver()
         val planningCore = planningCore(resolver)
         val globeWithInvalidCamera = framePlan(
@@ -56,7 +76,7 @@ class FramePlanningCoreTest {
             request(plan = globeWithInvalidCamera, basemapStyle = ResourceLocator("style-document")),
         )
 
-        assertFailure(globeOutcome, RenGErrorCode.UNSUPPORTED_PROJECTION_MODE, "projectionMode")
+        assertFailure(globeOutcome, RenGErrorCode.INVALID_VALUE, "camera.latitude")
         assertEquals(emptyList(), resolver.calls)
 
         val mercatorOutcome = planningCore.plan(
@@ -70,16 +90,40 @@ class FramePlanningCoreTest {
         )
         assertFailure(mercatorOutcome, RenGErrorCode.INVALID_VALUE, "camera.latitude")
 
+        // Zoom 4 rather than the plan's default 0, because a globe has no world copies: at zoom 0
+        // the whole planet is the single LOD-0 tile and a budget of one admits it, where the same
+        // camera under Mercator selects several copies of it and is over budget. The zoom is what
+        // makes this case about the budget instead of about the projection.
         val globeOverBudget = planningCore.plan(
             request(
-                plan = framePlan(projectionMode = ProjectionMode.GLOBE),
+                plan = framePlan(
+                    projectionMode = ProjectionMode.GLOBE,
+                    camera = Camera(0.0, 0.0, 4.0, 0.0, 0.0),
+                ),
                 outputPixelSize = OutputPixelSize(1024, 1024),
                 basemapStyle = ResourceLocator("style-document"),
                 maximumBasemapTileInstances = 1,
             ),
         )
-        assertFailure(globeOverBudget, RenGErrorCode.UNSUPPORTED_PROJECTION_MODE, "projectionMode")
+        assertFailure(globeOverBudget, RenGErrorCode.RESOURCE_LIMIT_EXCEEDED, "basemapTileInstances")
         assertEquals(emptyList(), resolver.calls)
+
+        val globeSuccess = assertIs<FramePlanningOutcome.Success>(
+            planningCore.plan(
+                request(
+                    plan = framePlan(projectionMode = ProjectionMode.GLOBE, frameIndex = 77L),
+                    basemapStyle = ResourceLocator("style-document"),
+                ),
+            ),
+        )
+        assertIs<ResolvedGlobeCamera>(
+            globeSuccess.planned.spatialPlan.camera,
+            "a GLOBE plan must carry the camera the globe resolver produced",
+        )
+        assertTrue(
+            assertNotNull(globeSuccess.planned.spatialPlan.tileSelection).instances.isNotEmpty(),
+            "a GLOBE plan with a style configured must select tiles to draw",
+        )
     }
 
     // ADR 0029, load-bearing at the full FramePlanningCore level: a check that fires after the
@@ -87,7 +131,7 @@ class FramePlanningCoreTest {
     // pure core exposes -- has already run would honour the letter of "before acquisition or
     // drawing" and not the decision. planMercatorSpatial's failure short-circuits plan() before
     // staticResourceTraversal ever runs, so the resolver must see zero calls, exactly like the
-    // sibling GLOBE case above.
+    // invalid-camera arm of the sibling GLOBE case above.
     @Test
     fun screenPositionedModelIsRefusedBeforeAnyResourceRoute() {
         val resolver = RecordingPrivateKeyResolver()
@@ -608,7 +652,19 @@ class FramePlanningCoreTest {
     @Test
     fun noFailingPlanRegistersItsFrameIdentityOrResolvesAnyPrivateKey() {
         val failingRequests = listOf(
-            request(plan = framePlan(projectionMode = ProjectionMode.GLOBE, frameIndex = 11L)),
+            // The globe's own tile-budget failure. This entry used to be a bare GLOBE plan, which
+            // failed for being a globe at all; since task 10 it has to fail for a reason a globe
+            // frame can actually have, or it stops testing the ordering it is here for.
+            request(
+                plan = framePlan(
+                    projectionMode = ProjectionMode.GLOBE,
+                    camera = Camera(0.0, 0.0, 4.0, 0.0, 0.0),
+                    frameIndex = 11L,
+                ),
+                outputPixelSize = OutputPixelSize(1024, 1024),
+                basemapStyle = ResourceLocator("style-document"),
+                maximumBasemapTileInstances = 1,
+            ),
             request(plan = framePlan(camera = Camera(90.0, 0.0, 0.0, 0.0, 0.0), frameIndex = 12L)),
             request(
                 plan = framePlan(frameIndex = 13L),
