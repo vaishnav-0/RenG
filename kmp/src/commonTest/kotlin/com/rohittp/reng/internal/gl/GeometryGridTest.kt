@@ -138,11 +138,18 @@ class GeometryGridTest {
     }
 
     /**
-     * The grid's boundary nodes are `resolveGeometry`'s own corners, bit for bit, and the lerp is
-     * written the way it is precisely so that they are: `start * (1 - t) + end * t` returns **both**
-     * endpoints exactly, where `start + (end - start) * t` returns the far one only up to a rounding.
-     * A grid whose corners have already drifted has lost the byte-for-byte Mercator claim before a
-     * pixel is drawn.
+     * The grid's boundary nodes are `resolveGeometry`'s own corners, bit for bit.
+     *
+     * **This case cannot see which lerp spelling produced them, and that was measured rather than
+     * assumed.** Swapping the two-term form for `start + (end - start) * t` survives every test in
+     * the module: the two disagree by at most one `Double` ULP, and `Double`'s ULP is 2^-29 of
+     * `Float`'s, so zero narrowed components differ over both fixtures at every granularity. The
+     * mutant is equivalent in what reaches a driver, and the exact form is kept because it is exact
+     * by construction for every input rather than by luck on the inputs measured.
+     *
+     * What this case does catch is anything that reorders or re-derives a corner rather than passing
+     * it through — swapping the emitted texture coordinates fails here, because a node is identified
+     * by its uv and nothing else.
      */
     @Test
     fun aGridsCornerNodesAreTheResolvedCornersBitExactly() {

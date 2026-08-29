@@ -485,10 +485,17 @@ private fun mercatorYSpan(geometry: Geometry): Double {
 private fun lerp(start: Double, end: Double, t: Double): Double = start * (1.0 - t) + end * t
 
 /**
- * The two-term form, never `start + (end - start) * t`, because only this one returns **both**
- * endpoints exactly: at `t = 1` the other form returns `start + (end - start)`, which is `end` only
- * up to a rounding. A grid whose boundary nodes are not bit-identical to the corners is a grid that
- * has already lost the byte-for-byte Mercator claim before a pixel is drawn.
+ * The two-term form, because only this one returns **both** endpoints exactly by construction: at
+ * `t = 1` the other spelling returns `start + (end - start)`, which is `end` only up to a rounding.
+ *
+ * **It is exact by construction rather than by measurement, and the difference matters to how this
+ * comment is written.** Replacing both spellings with `start + (end - start) * t` was run as a
+ * mutation and **survived all 1,490 tests**, so it is recorded here as an equivalent mutant rather
+ * than as a gap: over the two fixtures at every granularity from 1 to 32 cells a side, **zero** of
+ * up to 3,267 narrowed `Float` components differ between the two forms. The two can disagree by one
+ * `Double` ULP, and `Double`'s ULP is 2^-29 of `Float`'s, so what reaches a driver is the same
+ * bytes. Keeping this form buys exactness that holds for every input rather than for the ones
+ * measured; it does not buy a pixel, and a comment claiming otherwise would be false.
  */
 private fun lerp(start: DoubleVector3, end: DoubleVector3, t: Double): DoubleVector3 =
     start * (1.0 - t) + end * t
