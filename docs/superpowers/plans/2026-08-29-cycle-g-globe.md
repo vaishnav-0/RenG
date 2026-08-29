@@ -258,6 +258,24 @@ Task 5's handover, in its own words: `globeGroundFootprint(camera)` then
 `selectGlobeTiles(footprint, observeMercatorLod(plan.camera.zoom, previous).selectedLod, maximumBasemapTileInstances)`
 — **the LOD argument is the camera's plain `zoom`, never `effectiveZoom`.**
 
+**Task 8's handover, added after it landed.** Its output is reachable — a globe camera yields a
+`ResolvedPlacement` plus a horizon verdict, a sticker/model MVP through `composeMapModelViewProjection`,
+and placed labels. Three things still hold the mercator shape and are yours:
+
+- `SceneContent` holds a `ResolvedMercatorCamera` and calls `resolvePlacement`;
+- `RenGRenderer.resolveFrameCamera` only ever resolves a Mercator camera;
+- `FramePlanningCore` still refuses `GLOBE`.
+
+Task 8 introduced **`ResolvedFrameCamera`**, the sealed mode-independent half of a resolved camera, because
+`placeLabels`, `layOutPointLabel`, `layOutLineLabels` and `projectLineRuns` were every one of them typed to
+`ResolvedMercatorCamera` — no globe camera could reach the label path at all. Use that type rather than
+widening signatures again.
+
+Note also that **`projectVisibleGeographicPosition`** is the horizon-aware projection; the plain
+`projectGeographicPosition` cannot answer the horizon question and there is deliberately **no plain
+overload accepting a `ResolvedFrameCamera`**, so calling the wrong one is a compile error rather than a
+silent bug. Do not add one.
+
 *Vacuity warning:* a fixture whose camera sees no tiles draws nothing, and so does a broken wiring. Assert a
 specific non-background pixel, and assert the result **changes** when the camera moves.
 
