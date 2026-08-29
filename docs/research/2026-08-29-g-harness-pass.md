@@ -75,15 +75,27 @@ and a 45-degree vertical field of view. Agreement to 0.2 px, in a quantity nothi
   correct viewport-aligned behaviour. Beyond the limb is the harness's clear colour and nothing else, so
   the far hemisphere is being culled rather than drawn and overdrawn.
 
-## One finding, and it is not a RenG defect
+## The one finding, which the owner turned into a fix
 
 **The polar cap has no imagery.** Web Mercator source tiles end at ±85.0511°, so a cap around each pole has
 no tile to sample and RenG draws nothing there. Measured on style 59 at zoom 2: **783 sentinel pixels
 enclosed by the sphere across 24 rows**, a notch 14 px wide at the frame edge widening to 56 px. It is
 inherent to Mercator tiles on a sphere rather than anything this cycle did — a flat Mercator map simply
-never shows the region — but it is a visible artifact a consumer will meet the first time they tilt a globe
-toward a pole, and it is recorded nowhere else. What should fill it is an owner decision, not a defect
-report.
+never shows the region — but it is a visible artifact a consumer meets the first time they look at a globe.
+
+**It was recorded here as an owner decision and the owner made it immediately**, on seeing the videos: the
+poles are missing, fix them. The fix is `af38b63` — a top- or bottom-row tile also paints the cap beyond
+it, stretching its own edge texel row over the gap, reaching the pole through the shader's existing
+identity with no branch and reusing its tile's longitude bits untouched. Measured after: **19** pixels.
+
+**And the residual 19 are not holes.** The neighbourhood around them is full of `(0, 93, 31)`,
+`(0, 94, 31)`, `(0, 90, 30)` — dark forest green straddling the sentinel — with a few landing exactly on
+`(0, 96, 32)`. The harness's own KDoc calls that colour "a saturated colour nothing in a map style would
+produce, so that RenG drew nothing here reads as itself"; **satellite imagery of forest produces it**. That
+puts a small but non-zero floor under every measurement taken by counting sentinel pixels, including the
+`undrawn %` this document leans on throughout. It does not invalidate any figure here — 783 against 19 is
+far outside that floor — but a future reader counting a handful of sentinel pixels should not read them as
+a defect without looking at what surrounds them.
 
 ## Style 86, the stress case
 
