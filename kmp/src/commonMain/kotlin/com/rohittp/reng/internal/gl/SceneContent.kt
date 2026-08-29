@@ -21,6 +21,7 @@ import com.rohittp.reng.internal.planning.ResolvedPlacement
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.resolveBasemapTileQuad
 import com.rohittp.reng.internal.planning.resolvePlacement
+import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.renGFailure
 
@@ -748,6 +749,23 @@ private fun Geometry.boundsWestSouthEastNorth(): FloatArray = floatArrayOf(
  * globe too, because the nonlinearity was spent on the CPU before any vertex was handed over.
  */
 internal fun composeGeometryViewProjection(camera: ResolvedMercatorCamera): FloatArray =
+    (camera.projectionMatrix * camera.viewMatrix).toColumnMajorFloatArray()
+
+/**
+ * The same matrix for a globe camera, and it is the same two factors in the same order.
+ *
+ * It is **not** [com.rohittp.reng.internal.projection.globeFixedViewProjection], which the globe
+ * ground uploads: that one carries the globe-fixed-to-camera-relative transform as a third factor
+ * because the ground's vertex shader emits a unit sphere direction. A `Geometry`'s vertices are
+ * projected on the CPU and arrive already camera-relative — [geometryGrid] applies exactly that
+ * third factor itself, in `Double`, before narrowing — so folding it in here would apply it twice.
+ *
+ * That is the whole of ADR 0008 surviving the globe: what a consumer's shader receives is still a
+ * position and still a linear view-projection, because the nonlinearity was spent before the vertex
+ * was handed over. Nothing in production reaches this yet — a `PreparedFrame` carries no projection
+ * mode and `FramePlanningCore` still refuses `GLOBE` — and closing that seam is task 10's.
+ */
+internal fun composeGeometryViewProjection(camera: ResolvedGlobeCamera): FloatArray =
     (camera.projectionMatrix * camera.viewMatrix).toColumnMajorFloatArray()
 
 /**

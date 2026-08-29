@@ -6,6 +6,8 @@ import com.rohittp.reng.GLOBE_GROUND_READBACK_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
+import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
+import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runModelReadbackSuite
 import kotlin.test.Test
@@ -192,6 +194,23 @@ class IosGlConformanceTest {
             binding.viewport(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             binding.scissor(0, 0, GROUND_CULL_READBACK_PIXELS, GROUND_CULL_READBACK_PIXELS)
             runGroundCullReadbackSuite(binding, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * Cycle G task 9's gate on EAGL: a `Geometry` is a subdivided, CPU-projected grid now, and
+     * subdividing one under Mercator must move no pixel. The suite prints, for whichever rasteriser
+     * it lands on, how far each granularity moves the frame the four-corner strip of `0.3.0` drew.
+     */
+    @Test fun theGeometrySubdivisionReadbackSuitePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
+            binding.scissor(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
+            runGeometrySubdivisionReadbackSuite(binding, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

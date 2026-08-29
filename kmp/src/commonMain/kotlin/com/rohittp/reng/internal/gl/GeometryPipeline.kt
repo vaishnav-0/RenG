@@ -284,6 +284,11 @@ internal fun drawGeometry(
     val uniformsSnapshot = consumerUniforms.toMap()
     val texturesSnapshot = consumerTextures.toMap()
 
+    // A grid the camera pruned to nothing draws nothing, and says so by touching no GL state at
+    // all rather than by uploading two empty buffers and issuing a zero-count draw. A geometry
+    // entirely behind the limb is the ordinary way this happens on a globe.
+    if (grid.triangleIndices.isEmpty()) return
+
     binding.useProgram(pipeline.program)
     binding.bindVertexArray(pipeline.vertexArray)
     binding.bindBuffer(GL_ARRAY_BUFFER, pipeline.vertexBuffer)

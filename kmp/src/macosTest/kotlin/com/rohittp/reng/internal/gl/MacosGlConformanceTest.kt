@@ -6,6 +6,8 @@ import com.rohittp.reng.GROUND_CULL_READBACK_PIXELS
 import com.rohittp.reng.LABEL_INTEGRATION_PIXELS
 import com.rohittp.reng.MODEL_READBACK_PIXELS
 import com.rohittp.reng.runBasemapReadbackSuite
+import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
+import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runLabelIntegrationReadbackSuite
@@ -257,6 +259,33 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
                 binding.scissor(0, 0, GLOBE_GROUND_READBACK_PIXELS, GLOBE_GROUND_READBACK_PIXELS)
                 runGlobeGroundReadbackSuite(binding, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * Cycle G task 9's gate, on both Apple rasterisers this machine can offer: a `Geometry` is a
+     * subdivided, CPU-projected grid now, and subdividing one under Mercator must move no pixel.
+     *
+     * Both rasterisers rather than one, and the fixture is built so that neither has an excuse.
+     * `measureLargeQuadRasterisation` records `Apple Software Renderer` dropping quads that reach far
+     * outside the viewport; this suite's quad is smaller than its viewport for exactly that reason,
+     * so what is compared is RenG's two tessellations rather than the driver's clip behaviour.
+     */
+    @Test fun theGeometrySubdivisionReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG geometry subdivision readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
+                binding.scissor(0, 0, GEOMETRY_SUBDIVISION_READBACK_PIXELS, GEOMETRY_SUBDIVISION_READBACK_PIXELS)
+                runGeometrySubdivisionReadbackSuite(binding, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }
