@@ -154,16 +154,25 @@ vertex shader can emit a unit direction, and that is what changes.
 **Tests, on a real context:** a flat DEM renders byte-identical to terrain off; a known DEM produces known
 heights; **exaggeration 2 doubles displacement exactly** (never test at 1).
 
-### Task 9 — the ground writes depth
+### Task 9 — the ground writes depth, in displaced frames only
 
-Add the write, per Task 1's ADR. No ground-relative content exists yet, so there is nothing coplanar.
+**Read ADR 0039, not design §8** — the design's first draft stated this unconditionally and was wrong. The
+write is conditional on the frame's ground being displaced. An unconditional write revives ADR 0027's
+coplanar-`Geometry` defect in the 28 of 34 corpus styles that declare no terrain, and that is a live gate:
+`BasemapReadbackSuite.assertACoplanarGeometryKeepsEveryGroundCoveredPixelAcrossACameraSweep` budgets
+`max(2, covered/100)` deleted pixels, against ADR 0027's recorded pre-fix failure of 184 of 2099 at pitch 15.
 
-**Tests:** a model behind a ridge is occluded by it; a model in front is not; ground-over-ground still
-resolves; and the existing map-regime order is unchanged for everything else.
+Expect `SceneContentTest.kt:405`'s "exactly one `depthMask(true)` per scene" to need a **terrain arm
+asserting two**, rather than a widened count — a widened count would pass for the wrong reason.
+
+**Tests:** a model behind a ridge is occluded by it; a model in front is not; a frame with no terrain writes
+no ground depth and the coplanar sweep above still passes; ground-over-ground still resolves; the
+map-regime order is unchanged for everything else.
 
 ### Task 10 — diagnostics
 
-Two new `DiagnosticCode` constants — incomplete coverage, and terrain unavailable — each **once per frame**,
+Two new `DiagnosticCode` constants — **`TERRAIN_COVERAGE_INCOMPLETE`** and **`TERRAIN_UNAVAILABLE`**, the
+names ADR 0041 fixes — each **once per frame**,
 not once per tile. **This is a public ABI addition**; expect `kmp/api/kmp.klib.api` to move by exactly two
 lines and treat anything else as a defect.
 

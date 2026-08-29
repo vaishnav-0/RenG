@@ -148,20 +148,32 @@ top-level `lights`, independent of `terrain` entirely, whose range is the gamma-
 
 ## 8. The ground writes depth
 
-**Decision.** The ground gains depth writes, superseding ADR 0027 for the ground pass, giving the map
-regime the phases: ground (test + write), geometries (test), models (test + write, ADR 0030), map-anchored
-stickers (test).
+**Decision, and it is conditional — this paragraph was wrong when first written and ADR 0039 is the
+authority.** The ground writes depth **in a frame whose ground is displaced**, superseding ADR 0027 for the
+ground pass, giving the map regime the phases: ground (test + write), geometries (test), models
+(test + write, ADR 0030), map-anchored stickers (test). In a frame with no terrain the ground writes no
+depth, exactly as ADR 0027 says.
+
+**Why conditional, since this document first said otherwise.** An unconditional write revives ADR 0027's
+first defect in the most ordinary frame a consumer writes — a coplanar altitude-0 `Geometry` over a *flat*
+ground — and that is a live gate rather than a worry:
+`BasemapReadbackSuite.assertACoplanarGeometryKeepsEveryGroundCoveredPixelAcrossACameraSweep` budgets
+`max(2, covered/100)` deleted pixels, and ADR 0027 records the pre-fix code failing **184 of 2099** at pitch
+15. **28 of the corpus's 34 styles declare no terrain**, so that is most frames. The partition costs
+nothing: the write buys occlusion only where the ground has relief, and the defect exists only where it has
+none. Widening the sweep's budget instead was considered and rejected.
 
 ADR 0027 removed depth writes because a coplanar `Geometry` z-fought the flat ground and a map-anchored
 sticker carried its anchor's single depth against a plane varying down-screen. Terrain makes the opposite
 error worse: **terrain that cannot occlude is not terrain**, and a model behind a mountain painting over it
 is more wrong than a z-fight.
 
-**The risk is real and is quarantined by the wave split.** Ground-relative content is *deliberately*
-coplanar with terrain, and its height comes from a **CPU `Double`** lookup while the ground's comes from a
-**GPU `Float`** fetch — different arithmetic paths that cannot be expected to agree to the bit, which is
-exactly ADR 0027's original condition. Wave 1 introduces depth writes while **no ground-relative content
-exists**, so it carries no coplanar risk at all. Wave 2 introduces the risk and opens with a spike that
+**The remaining risk is real and is quarantined by the wave split.** Ground-relative content is
+*deliberately* coplanar with terrain, and its height comes from a **CPU `Double`** lookup while the
+ground's comes from a **GPU `Float`** fetch — different arithmetic paths that cannot be expected to agree to
+the bit, which is exactly ADR 0027's original condition. Wave 1 introduces depth writes while **no
+ground-relative content exists**, so no content is coplanar with *displaced* ground; the flat-ground case is
+handled by the condition above rather than by the wave split. Wave 2 introduces the risk and opens with a spike that
 measures it, with the mitigation being a shared nearest-texel rule against the same padded texture so both
 paths sample the same value.
 
