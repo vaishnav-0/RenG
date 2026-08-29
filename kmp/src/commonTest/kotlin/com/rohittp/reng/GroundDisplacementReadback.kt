@@ -199,23 +199,22 @@ private fun assertAFlatDemDrawsExactlyWhatTerrainOffDraws(fixture: DisplacementF
  *
  * The fixture's tile sits at LOD 10, row 512, whose northern edge is Mercator `y = 0.5` — the equator,
  * where `1 / cos(latitude)` is exactly `1` — and whose southern edge is `y = 0.5009765625`, where it
- * is `1.0000188`. Every vertex therefore scales its metres by `equatorialLogicalPixelsPerMetre`
- * alone, to within two parts in a hundred thousand, and the fixture sets that scale to `1.0`. So one
- * metre of DEM is one logical pixel of map-space `z`.
+ * is `1.0000188`. Every vertex therefore scales its metres by
+ * [FIXTURE_LOGICAL_PIXELS_PER_METRE] alone, to within two parts in a hundred thousand.
  *
  * The fixture's matrix is `clip.x = x`, `clip.y = y + 2^-12 * z`, which puts the tile's unit square
  * across the middle half of the frame and turns map-space `z` into vertical clip offset. A frame is
- * [DISPLACEMENT_READBACK_PIXELS] = 128 pixels, so one unit of clip `y` is 64 pixels, and:
+ * [DISPLACEMENT_READBACK_PIXELS] = 256 pixels, so one unit of clip `y` is 128 pixels, and:
  *
  * ```
- * lift = 768 m * 1.0 px/m * 2^-12 clip/px * 64 px/clip = 12 pixels, exactly
+ * lift = 768 m * 0.5 px/m * 2^-12 clip/px * 128 px/clip = 12 pixels, exactly
  * ```
  *
- * The flat tile's northern edge sits at clip `y = 0.5`, which is window row 96.0 — a boundary half a
- * pixel from both neighbouring pixel centres, so no rasteriser's fill rule is in question — and the
- * highest painted row is therefore 95. Lifted, the edge is at row 108.0 and the highest painted row
- * is 107. **The assertion is the difference, 12**, so the fixture's own edge convention cancels and
- * only the displacement is under test.
+ * The flat tile's northern edge sits at clip `y = 0.5`, which is window row 192.0 — a boundary half
+ * a pixel from both neighbouring pixel centres, so no rasteriser's fill rule is in question — and
+ * the highest painted row is therefore 191. Lifted, the edge is at row 204.0 and the highest painted
+ * row is 203. **The assertion is the difference, 12**, so the fixture's own edge convention cancels
+ * and only the displacement is under test.
  *
  * Every one of those factors is a power of two or an exact integer in `Float`, so nothing here
  * depends on rounding. A build that used metres as logical pixels directly would lift by 768 pixels
@@ -420,12 +419,12 @@ private fun projectedLimbRadius(sphereRadius: Double, camera: ResolvedGlobeCamer
  * The arithmetic, again performed rather than measured:
  *
  * ```
- * lift = 800 m * 1.0 px/m * 2^-16 clip/px * 64 px/clip * cosh(PI) = 9.056 pixels
+ * lift = 800 m * 0.5 px/m * 2^-16 clip/px * 128 px/clip * cosh(PI) = 9.056 pixels
  * ```
  *
  * against `0.781` pixels if the latitude term were dropped — a row difference of **9** against
  * **0 or 1**, which is why the assertion is a range rather than an equality: the edge lands at window
- * row 105.06 and a rasteriser owns the last 0.06, while nothing owns the gap between 9 and 1.
+ * row 201.06 and a rasteriser owns the last 0.06, while nothing owns the gap between 9 and 1.
  *
  * The matrix is a sixteenth of the other cases' vertical scale, because at the fixture's own scale
  * this lift would be 139 pixels and leave a 128-pixel frame entirely.
@@ -508,7 +507,7 @@ private class DisplacementFixture(
             elevation = dem?.let {
                 MercatorGroundElevationFrame(
                     dem = demUniforms(exaggeration),
-                    equatorialLogicalPixelsPerMetre = 1.0f,
+                    equatorialLogicalPixelsPerMetre = FIXTURE_LOGICAL_PIXELS_PER_METRE,
                 )
             },
         )
@@ -731,8 +730,19 @@ private val FIXTURE_ENCODING: DemEncoding = DemEncoding.MAPBOX
  */
 private const val FIXTURE_ELEVATION_METRES: Double = 768.0
 
-/** `768 m * 1 px/m * 2^-12 clip/px * 128 px/clip`, exactly. */
-private const val EXPECTED_LIFT_PIXELS: Int = 24
+/**
+ * The metre scale the fixture hands the shader, and it is **not 1**.
+ *
+ * One is a symmetry point: at that value `metres * scale` is `metres`, so a build that dropped the
+ * scale entirely and used metres directly as logical pixels draws the identical frame, and every
+ * assertion here would pass against it. The fixture ran at 1 until a mutation pass said so. A half
+ * is a real Mercator scale — `worldSize / C` is 0.209 px/m at zoom 14 — and it keeps every factor
+ * between the DEM and the measured pixel exact in `Float`.
+ */
+private const val FIXTURE_LOGICAL_PIXELS_PER_METRE: Float = 0.5f
+
+/** `768 m * 0.5 px/m * 2^-12 clip/px * 128 px/clip`, exactly. */
+private const val EXPECTED_LIFT_PIXELS: Int = 12
 
 /**
  * The default for the cases that do not measure a lift.
@@ -787,8 +797,8 @@ private const val CLIP_FIXTURE_TILE_Y: Int = 0
 /** `(800 + 10000) / 0.1 = 108000`, which is the Mapbox triple `(1, 165, 224)` with no rounding. */
 private const val CLIP_FIXTURE_ELEVATION_METRES: Double = 800.0
 
-/** `800 * 2^-16 * 128 * cosh(PI) = 18.11` pixels, against `1.56` with no latitude term. */
-private val EXPECTED_CLIP_LIFT_PIXELS: IntRange = 17..19
+/** `800 * 0.5 * 2^-16 * 128 * cosh(PI) = 9.06` pixels, against `0.78` with no latitude term. */
+private val EXPECTED_CLIP_LIFT_PIXELS: IntRange = 8..10
 
 /** [FIXTURE_MATRIX] with a sixteenth of its vertical scale, so a 9-pixel lift stays in frame. */
 private val CLIP_FIXTURE_MATRIX: FloatArray = floatArrayOf(
