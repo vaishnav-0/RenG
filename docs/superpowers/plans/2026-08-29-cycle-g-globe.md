@@ -35,6 +35,12 @@ a decision to accept. `VERSION_NAME` stays `0.4.0`, frozen.
 - Typed failures carry redacted diagnostics; never forward an adapter's or the engine's message.
 - **Assume the next vacuous check exists.** E-labels found thirteen inside its own new tests, every one by
   deliberately breaking working code rather than by review.
+- **A round trip proves consistency, not correctness** — measured by Task 4, which found its own round-trip
+  case blind to three separate mutations. It cannot see an error the forward and inverse paths **share** (a
+  flipped basis axis cancels itself), a **self-consistent wrong root** (a ray taking the far sphere
+  intersection round-trips perfectly), or anything downstream **normalisation** erases (a dropped world-copy
+  unwrap, since everything wraps Mercator x afterwards). Pair every round trip with an assertion against an
+  independently derived value.
 
 ## Two failures of E-labels' *planning* that this plan exists to avoid
 
