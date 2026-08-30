@@ -45,7 +45,7 @@ import com.rohittp.reng.internal.resource.StyleFailureKind
  * *document* url is `source["url"]` resolved against the style's own locator, so it preregisters like any
  * other route ([styleTimeRoutes] emits it as `BASEMAP_TILE_JSON`). Only the *tile* routes derived from
  * that document are unknowable in advance -- and the document arrives during `prepare(style)`, because
- * Rentile wires `TileJsonResourceAcquirer` into `StyleCompiler` (`DefaultBasemapRasterizer.kt:176-181`),
+ * Rentile wires `TileJsonResourceAcquirer` into `StyleCompiler` (`DefaultBasemapRasterizer.kt:177-182`),
  * strictly before any tile is named in `prepareBatch`. RenG therefore reads that document's bytes as the
  * firewall answers the route it already preregistered for it -- `OperationRegistry` observes them *after*
  * its allowlist lookup, never instead of one -- parses them with [parseBasemapTileJson], and folds the
@@ -101,7 +101,7 @@ import com.rohittp.reng.internal.resource.StyleFailureKind
  *  - **Nesting depth.** RenG bounds it at `STYLE_JSON_MAXIMUM_DEPTH`; kotlinx imposes no ceiling.
  *
  * **A second version-and-configuration-pinned assumption**, alongside the credential one above.
- * `RasterSample.immediateChildren` and `RasterSample.ancestor` (`raster/RasterResource.kt:81-105`)
+ * `RasterSample.immediateChildren` and `RasterSample.ancestor` (`raster/RasterResource.kt:87-111`)
  * compose tile urls this file never emits. They are unreachable only because `BasemapEngineHost` passes
  * `TileSubstitutionPolicy.Disabled`, which makes `validateSubstitutionAllowance`
  * (`DefaultBasemapRasterizer.kt:663-681`) throw as soon as any plan failure exists, before
@@ -648,7 +648,7 @@ internal fun appendSpriteExtension(baseUrl: String, extension: String): String {
 
 /**
  * Rentile's `CompiledRasterSource.sampleFor` / `CompiledVectorSource.sampleFor`
- * (`raster/RasterResource.kt:34-54`, `mvt/VectorSource.kt:73-93` -- byte-identical to each other),
+ * (`raster/RasterResource.kt:40-60`, `mvt/VectorSource.kt:73-93` -- byte-identical to each other),
  * ported verbatim, minus the `bounds` test RenG deliberately does not model.
  *
  * The trap here is `sourceZ = min(tile.z, maxZoom)`: past a source's maxzoom the url's zoom is **not**
@@ -671,7 +671,7 @@ internal fun basemapTileSampleFor(source: BasemapStyleSource, tile: CanonicalBas
 }
 
 /**
- * Rentile's `RasterSample.tileUrl` / `VectorTileSample.tileUrl` (`raster/RasterResource.kt:56-69`,
+ * Rentile's `RasterSample.tileUrl` / `VectorTileSample.tileUrl` (`raster/RasterResource.kt:62-75`,
  * `mvt/VectorSource.kt:95-108`), ported verbatim.
  *
  * Two traps. `templateIndex` is a **hash round-robin**, `floorMod(sourceZ * 31 + sourceX * 17 +
@@ -698,7 +698,7 @@ internal fun basemapTileUrl(source: BasemapStyleSource, sample: BasemapTileSampl
 }
 
 /**
- * Rentile's `RasterSample.neighbor` (`raster/RasterResource.kt:71-79`), ported verbatim: y is
+ * Rentile's `RasterSample.neighbor` (`raster/RasterResource.kt:77-85`), ported verbatim: y is
  * **clipped** to the zoom's tile range (a neighbour off the top or bottom of the world does not exist),
  * x is **wrapped** with `floorMod` (the world is cylindrical).
  */
@@ -1122,7 +1122,7 @@ private fun tileResourceClassOf(kind: BasemapSourceKind): ResourceClass? = when 
 
 /**
  * The 3x3 neighbourhood a hillshade layer samples, in Rentile's own iteration order (`deltaY` outer,
- * `deltaX` inner -- `DefaultBasemapRasterizer.kt:552-557`), or the single centre sample for every other
+ * `deltaX` inner -- `DefaultBasemapRasterizer.kt:553-558`), or the single centre sample for every other
  * source kind.
  */
 private fun demNeighbourhoodOrSelf(

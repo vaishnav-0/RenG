@@ -43,7 +43,7 @@ class DemTileWindowTest {
     /**
      * The world is cylindrical, so a request for `x = -1` at `z = 2` is a request for the tile at
      * `x = 3`, and Rentile canonicalises with `floorMod` before dividing
-     * (`RasterResource.kt:38`). Kotlin's `%` keeps its dividend's sign, so replacing `floorMod`
+     * (`RasterResource.kt:44`). Kotlin's `%` keeps its dividend's sign, so replacing `floorMod`
      * with `%` breaks both halves of this test in different ways, which is why both are here:
      *
      * - At `zoomDelta = 0` the ancestor *is* the canonical tile: `floorMod(-1, 4) = 3` matches the

@@ -54,9 +54,9 @@ internal data class DemTileWindow(
  * **Why this exists at all.** `ValidatedDemTile` carries `requestedTile` and `sourceTile` and nothing
  * between them. Rentile computed the window — `RasterSample` (`internal/raster/RasterResource.kt:9-21`)
  * carries `childScale`, `childX` and `childY` — and then dropped it on the way out through
- * `acquireTerrainTiles` (`internal/DefaultBasemapRasterizer.kt:657-684`), which rebuilds a `TileId`
+ * `acquireTerrainTiles` (`internal/DefaultBasemapRasterizer.kt:658-701`), which rebuilds a `TileId`
  * from `sourceZ/sourceX/sourceY` alone. The two tiles differ in exactly two cases, both from
- * `CompiledRasterSource.sampleFor` (`RasterResource.kt:34-54`): a request above the source's
+ * `CompiledRasterSource.sampleFor` (`RasterResource.kt:40-60`): a request above the source's
  * `maximumZoom`, and a world-wrapped `x`. Substitution is not one of them — `acquireTerrainTiles`
  * calls the acquirer directly and the ancestor-substitution machinery is reachable only from the
  * render path — so the arithmetic below is a complete account of the difference, not a heuristic.
@@ -68,7 +68,7 @@ internal data class DemTileWindow(
  * ```
  *
  * **`floorMod` and `%` are not interchangeable, and this is the one trap here.** Rentile canonicalises
- * `x` with `floorMod` before dividing (`RasterResource.kt:38`, then `:44` and `:51`), because the
+ * `x` with `floorMod` before dividing (`RasterResource.kt:44`, then `:50` and `:57`), because the
  * world is cylindrical and a request for `x = -1` at `z = 2` is a request for the tile at `x = 3`.
  * Kotlin's `%` keeps the sign of its left operand, so `-1 % 4` is `-1`: with `%` in place of
  * `floorMod` a wrapped request either
