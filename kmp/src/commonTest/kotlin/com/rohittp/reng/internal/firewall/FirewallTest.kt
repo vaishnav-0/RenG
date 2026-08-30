@@ -740,20 +740,38 @@ class FirewallTest {
         assertEquals(emptyMap(), manifest.entries)
     }
 
-    // ---- Gap 3: DEM terrain-encoding validation on the write path -------------------------------
+    // ---- DEM writes, after ADR 0016's terrain-encoding obligation was retired --------------------
 
+    /**
+     * A DEM write is no longer refused for its container or its alpha, and this pair is what says so.
+     *
+     * ADR 0016 once required "RenG's terrain encoding validation" on a DEM write, and these two cases
+     * asserted its two verdicts. **That obligation is retired** by the ADR's 2026-08-30 erratum: it
+     * existed because RenG would later decode the bytes itself, and since Rentile `0.7.0` RenG decodes
+     * no DEM at all — the texels arrive already decoded and unpremultiplied. RenG has no opinion about
+     * the container, and can form none: it has no WebP decoder, which is what five of the six terrain
+     * styles in the owner's corpus actually serve.
+     *
+     * **The cost of the check while it stood is what these cases now guard against returning.** Every
+     * WebP DEM write was declined, so no DEM ever reached the consumer's Store — 53 fetches of one
+     * style across three frames, 20 of them DEM, against exactly 33 store entries — and every cold
+     * start refetched every tile.
+     *
+     * A translucent PNG is the fixture precisely because it is what the retired check rejected: if
+     * someone reinstates a DEM-specific write gate, this is the case that fails.
+     */
     @Test
-    fun declinesToCacheADemTileThatIsNotAnEightBitRgbTerrainEncoding() = runTest {
-        // ADR 0016: "A fetched DEM write additionally requires RenG's terrain encoding validation."
-        // Rentile's DEM path reaches its raw-store write after generic bounded image validation only.
-        // The write still *requires* the check -- a negative verdict means no write -- which is the whole
-        // of what the ADR sentence constrains.
+    fun cachesADemTileWhateverItsAlphaCarriesNowThatRenGDoesNotDecodeIt() = runTest {
         val store = RoutedStore()
         val transport = RoutedTransport(mapOf(ResourceClass.BASEMAP_DEM_TILE to TRANSLUCENT_PNG))
         val fw = firewall(transport = transport, store = store)
         fw.transport.execute(engineRequestFor(demRoute))
         fw.store.write(engineKeyFor(demRoute), engineStoredResourceOf(TRANSLUCENT_PNG))
-        assertEquals(0, store.writeCalls)
+        assertEquals(
+            1,
+            store.writeCalls,
+            "a DEM's alpha is Rentile's business since 0.7.0; refusing the write only stopped it caching",
+        )
     }
 
     @Test

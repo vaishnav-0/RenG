@@ -51,19 +51,6 @@ class ClassGateRunnerTest {
         assertIs<SuppliedValidationOutcome.Failed>(runner.run(ResourceClassGate.DECODE_PNG, stickerContent(large4096Png)))
     }
 
-    // Terrain encoding is no longer a class gate: RenG's driver never acquires a BASEMAP_DEM_TILE, so
-    // no ResourceClassGate can ever name that class. ADR 0016 puts the obligation on the firewall's
-    // write path instead, which calls this same function. The three admission answers it must give are
-    // unchanged, so they are still pinned here -- on the function rather than through a gate that can
-    // no longer be reached.
-    @Test
-    fun admitsBothEightBitRgbTerrainEncodingsAndRejectsAFourChannelOne() {
-        val ceiling = ResourceLimits().maximumDecodedImageBytes
-        assertTrue(validatesDemTerrainEncoding(mapboxDem, ceiling))
-        assertTrue(validatesDemTerrainEncoding(terrariumDem, ceiling))
-        assertFalse(validatesDemTerrainEncoding(fourChannelDem, ceiling))
-        assertFalse(validatesDemTerrainEncoding(corruptPng, ceiling), "content that cannot decode is not terrain")
-    }
 
     @Test
     fun aFailedGateOnStoredContentReportsStoreIntegrityWhicheverGateFailed() = runTest {

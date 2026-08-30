@@ -139,3 +139,37 @@ ordering that reaches Rentile's raw-store write before decode validation, the no
 remove-then-refetch on a stored digest mismatch, and this ADR's fail-closed posture toward a URL or resource
 class it does not recognise. That posture is what kept `GLYPH_RANGE` safely absent while it was unenumerated;
 what changes now is only that it is enumerated, routed, and measured.
+
+---
+
+## Erratum, 2026-08-30 — the DEM write obligation is retired, because its premise expired
+
+This ADR placed one obligation on the write path alone: *"A fetched DEM write additionally requires RenG's
+terrain encoding validation."* `OperationRegistry` carried it by decoding the DEM as a PNG and requiring
+every texel opaque. **That check is removed, and the obligation with it.**
+
+**Why it existed.** RenG would later decode those bytes *itself*, with its own PNG decoder, and interpret
+R/G/B as a packed elevation. So a DEM landing in the consumer's Store had to be one RenG could actually
+read, and opacity mattered concretely: Rentile decoded DEM pixels into a *premultiplied* bitmap, so a texel
+with alpha below 255 arrived with its channels already scaled and its height silently wrong.
+
+**Why it expired.** Since Rentile `0.7.0`, **RenG decodes no DEM at all** — `ValidatedDemTile.texels`
+arrives already decoded, guaranteed unpremultiplied. RenG therefore has no opinion about the container
+format, and cannot form one: it has no decoder for WebP, which is what most real DEM sources serve. The
+check was asserting a property RenG no longer depends on, about bytes it no longer reads.
+
+**What it cost while it stood.** Five of the six terrain styles in the owner's corpus serve WebP, so every
+DEM write was declined and **no DEM ever reached the consumer's Store**. Measured over three frames of one
+style: 53 fetches, 20 of them DEM, against exactly 33 store entries. A session's resident cache hid it;
+every cold start refetched every tile.
+
+**What still guards the path**, because this is a firewall and the answer must not be "nothing". Rentile
+validates HTTP status, encoded size against the configured ceiling, decodability, dimensions against its
+own maximum, and a SHA-256 digest — all before RenG sees a byte. And this ADR's own read-path reasoning
+already covers what remains: Rentile re-decodes on a store hit and remove-then-refetches on a digest
+mismatch, so a bad cached record self-heals rather than being terminal. That is why every other raster
+class takes the generic branch, and a DEM is now the same shape as the rest.
+
+`validatesDemTerrainEncoding` and its helper were deleted rather than left in place, since nothing called
+them. The decision this ADR makes — that Rentile is contained behind an operation-scoped firewall, and that
+every fetch and store crossing it is RenG's to mediate — is unchanged.

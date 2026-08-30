@@ -42,7 +42,7 @@ internal class DemTexels(val image: DecodedImage, val contentDigest: String)
  * a defence against premultiplication, and Rentile's texels are documented as never premultiplied
  * and as preserving whatever alpha the image carried, so a translucent texel's R, G and B are still
  * exactly the ones the DEM packed and the height RenG decodes from them is still the right one.
- * ADR 0016's write-path obligation ([com.rohittp.reng.internal.driver.validatesDemTerrainEncoding])
+ * ADR 0016's write-path obligation, retired by that ADR's 2026-08-30 erratum
  * is a different question about what reaches the consumer's `Store` and is unchanged.
  *
  * The [rgba] length is checked as well, because every offset in [assemblePaddedTexels] is derived

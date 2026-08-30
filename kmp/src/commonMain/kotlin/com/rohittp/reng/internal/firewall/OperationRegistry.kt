@@ -33,7 +33,6 @@ import com.rohittp.reng.internal.resource.RentilePrivateKey
 import com.rohittp.reng.internal.resource.RentilePrivateKeyResolver
 import com.rohittp.reng.internal.resource.ResourceRouteKey
 import com.rohittp.reng.internal.resource.TransportLatchKey
-import com.rohittp.reng.internal.driver.validatesDemTerrainEncoding
 import com.rohittp.reng.internal.resource.copyValidStoredResource
 import com.rohittp.reng.internal.resource.isValidMetadata
 import com.rohittp.rentile.RawResourceKey as EngineRawResourceKey
@@ -763,18 +762,31 @@ internal class OperationRegistry(
         }
 
     /**
-     * Everything [passesClassSpecificReadValidation] proves, plus the one obligation ADR 0016 places on
-     * writes alone: *"A fetched DEM write additionally requires RenG's terrain encoding validation."*
-     * Rentile's DEM path is `RasterResourceAcquirer`, which reaches its raw-store write after generic
-     * bounded image validation only, so nothing but this checks that a DEM tile is actually terrain-
-     * encoded before it lands in the consumer's Store.
+     * Exactly what [passesClassSpecificReadValidation] proves, and — since Cycle E-terrain — nothing
+     * more.
+     *
+     * **ADR 0016 placed one obligation on writes alone** — *"A fetched DEM write additionally requires
+     * RenG's terrain encoding validation"* — and this function carried it by decoding the DEM as a PNG
+     * and requiring every texel opaque. **That obligation's premise expired**, and ADR 0016 carries the
+     * erratum: it existed because RenG would later decode those bytes *itself*, so a tile reaching the
+     * consumer's Store had to be one RenG could read. Since Rentile `0.7.0`, RenG decodes no DEM at all
+     * — `ValidatedDemTile.texels` arrives already decoded — so the check was asserting a format RenG no
+     * longer has an opinion about.
+     *
+     * **Its only remaining effect was to disable persistent caching for most terrain.** Five of the
+     * owner's six corpus terrain styles serve WebP, which is not a PNG, so every DEM write was declined
+     * and no DEM ever reached the consumer's Store: measured over three frames of one style, 53 fetches
+     * of which 20 were DEM, against exactly 33 store entries. Within a session the resident cache hid
+     * it; every cold start refetched every tile.
+     *
+     * **What still guards this path is not nothing.** Rentile validates status, encoded size,
+     * decodability, dimensions against its own ceiling, and a SHA-256 digest before RenG sees a byte;
+     * and the read branch above already argues why an unvalidated raster record is safe here — Rentile
+     * re-decodes on a store hit and remove-then-refetches on mismatch, so a bad record self-heals
+     * rather than being terminal. A DEM is that same shape.
      */
     private fun passesClassSpecificWriteValidation(resourceClass: ResourceClass, stored: StoredRawResource): Boolean =
-        when (resourceClass) {
-            ResourceClass.BASEMAP_DEM_TILE ->
-                validatesDemTerrainEncoding(stored.bytes, DEM_TILE_DECODE_CEILING_BYTES)
-            else -> passesClassSpecificReadValidation(resourceClass, stored)
-        }
+        passesClassSpecificReadValidation(resourceClass, stored)
 
     private fun redactedLocatorHex(url: String): String = sha256Hex(redactAuthenticationQuery(url))
 
@@ -1242,7 +1254,6 @@ private val UNSUPPORTED_SPRITE_ENTRY_FIELDS: Set<String> = setOf("stretchX", "st
 
 /** Generous enough for any DEM tile; only used to decide whether a fetched DEM record is terrain-encoded
  *  at all before writing it, never to size an actual buffer. */
-private const val DEM_TILE_DECODE_CEILING_BYTES: Long = 64L * 1024L * 1024L
 
 /** Generous enough for any sticker/sprite-sized image; only used to decide whether a sprite image
  *  record decodes at all before answering the engine's read, never to size an actual buffer. */

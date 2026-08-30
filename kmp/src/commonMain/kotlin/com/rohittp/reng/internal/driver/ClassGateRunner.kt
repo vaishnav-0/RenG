@@ -98,35 +98,3 @@ internal class RenGClassGateRunner(private val limits: ResourceLimits) : ClassGa
 
 private const val OPAQUE_ALPHA: Byte = -1 // 0xFF unsigned
 
-/**
- * Admits a DEM tile's raw PNG bytes iff they decode and carry an eight-bit RGB terrain encoding.
- *
- * This is no longer a class gate and has no caller in this file: RenG's driver never acquires a
- * `BASEMAP_DEM_TILE` — the Rentile engine does, through RenG's firewall — so nothing can reach a
- * [ResourceClassGate] over that class. ADR 0016 puts the obligation on the **write** path instead ("a
- * fetched DEM write additionally requires RenG's terrain encoding validation"), which is
- * [com.rohittp.reng.internal.firewall.OperationRegistry]'s. It is kept here, and `internal` rather than
- * private, so that path can call the identical check rather than growing a second copy of it.
- */
-internal fun validatesDemTerrainEncoding(bytes: ByteArray, maximumDecodedImageBytes: Long): Boolean {
-    val image = (decodePng(bytes, maximumDecodedImageBytes) as? PngDecodeResult.Success)?.image ?: return false
-    return isEightBitRgbTerrainEncoding(image)
-}
-
-/**
- * Admits a decoded image iff every pixel's alpha channel is fully opaque. Mapbox Terrain-RGB and
- * Terrarium are both plain eight-bit RGB byte triples — mathematically indistinguishable from the
- * decoded bytes alone, since both are just a caller-side formula's interpretation of R/G/B — so any PNG
- * whose source colour type carries no meaningful alpha (RenG's canonical decode leaves such pixels fully
- * opaque; see [com.rohittp.reng.internal.image.DecodedImage]) satisfies either encoding. A genuinely
- * four-channel encoding — alpha carrying real data — fails the instant any pixel is not fully opaque.
- */
-private fun isEightBitRgbTerrainEncoding(image: DecodedImage): Boolean {
-    val rgba = image.rgbaSnapshot()
-    var index = 3
-    while (index < rgba.size) {
-        if (rgba[index] != OPAQUE_ALPHA) return false
-        index += 4
-    }
-    return true
-}
