@@ -88,7 +88,36 @@ field added later.
 
 ## Wave 2 — the harness reads documents
 
-### Task 3 — config and plan file replace the flag pile
+#
+
+### Correction found before implementation: a bare `@Serializable` is not available
+
+Surveying the public types before annotating them shows the plan's "annotate `FramePlan` and everything it
+reaches" cannot be executed as written, for two independent reasons.
+
+**The shape forbids it.** `Vector3`, `Camera`, `Placement`, `FramePlan`, `AnimationTrack` and `Model` all
+take primary-constructor *parameters* that are not properties, declaring `public val`s in the class body and
+assigning them from an `init` block — `FramePlan` does it to keep private `ArrayList` snapshots and hand out
+fresh copies. kotlinx-serialization refuses that shape: it serializes constructor properties.
+
+**And the validation forbids it.** Every one of these types validates in `init` — `canonicalDouble` rejects
+NaN, `require(frameIndex >= 0L)`, `require(timeSeconds >= 0.0)`, `requireUnicodeScalars`. A deserializer that
+assigns fields directly rather than calling the constructor would let a document mint values the constructor
+refuses: a `Vector3` holding NaN, an `AnimationTrack` at negative time, a `Camera` outside its zoom range.
+Those objects would then flow into planning and GL as though they had been validated.
+
+**So each public type takes `@Serializable(with = …)` over a private surrogate, and every serializer's
+`deserialize` calls the real public constructor.** The surrogate carries the explicit `@SerialName`s the plan
+requires; the constructor keeps its monopoly on producing a valid value. This is strictly stronger than what
+the plan asked for: **a decoded Frame Plan is exactly as validated as a constructed one, and a malformed
+document fails with RenG's own `require` message rather than producing a quietly illegal object.**
+
+The cost is real and is accepted: roughly a dozen hand-written serializers instead of a dozen annotations,
+and each one is a place where a property can be forgotten. **The round-trip fixture gate is what makes that
+safe** — it must assert over a corpus that exercises every property of every type, so a forgotten field
+fails rather than silently defaulting.
+
+## Task 3 — config and plan file replace the flag pile
 
 Replace `--style`, `--model`, `--frames`, `--no-basemap`, `--no-labels`, `--globe`, `--zoom`,
 `--zoom-span`, `--static-camera` with `--config`, `--plans`, `--out`.
