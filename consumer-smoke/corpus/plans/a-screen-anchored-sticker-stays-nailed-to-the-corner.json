@@ -1,0 +1,33 @@
+[
+  {
+    "frameIndex": 0,
+    "camera": {
+      "latitude": 37.7955,
+      "unwrappedLongitude": -122.41,
+      "zoom": 13.0,
+      "bearing": 30.0,
+      "pitch": 40.0
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ]
+  }
+]

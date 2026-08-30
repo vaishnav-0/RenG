@@ -36,6 +36,15 @@ private val UNDRAWN: IntArray = intArrayOf(0, 96, 32, 255)
 fun main(arguments: Array<String>) {
     val options = parseArguments(arguments) ?: exitProcess(2)
 
+    if (options.emitCorpusTo != null) {
+        corpusPlans().forEach { (name, plans) ->
+            val path = "${options.emitCorpusTo}/$name.json"
+            writeTextFile(path, encodePlans(plans))
+            println("  $name: ${plans.size} plan(s) -> $path")
+        }
+        return
+    }
+
     if (options.emitPlansTo != null) {
         // With `--plans`, this decodes that file and writes it back out, which is an idempotence
         // check anyone can run: `--emit-plans` a corpus file onto itself and a clean `git diff` says
@@ -224,6 +233,7 @@ private class HarnessOptions(
     val outputDirectory: String,
     val localPropertiesPath: String,
     val emitPlansTo: String?,
+    val emitCorpusTo: String?,
     val verbose: Boolean,
 )
 
@@ -248,6 +258,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
     var outputDirectory = ""
     var localPropertiesPath = "local.properties"
     var emitPlansTo: String? = null
+    var emitCorpusTo: String? = null
     var verbose = false
 
     var index = 0
@@ -268,19 +279,23 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
             "--out" -> { outputDirectory = requireValue() ?: return null; index += 2 }
             "--local-properties" -> { localPropertiesPath = requireValue() ?: return null; index += 2 }
             "--emit-plans" -> { emitPlansTo = requireValue() ?: return null; index += 2 }
+            "--emit-corpus" -> { emitCorpusTo = requireValue() ?: return null; index += 2 }
             else -> {
                 println(
                     "Unrecognised argument `$argument`.\n" +
                         "  --config <path>  --plans <path>  --out <directory>\n" +
-                        "  --local-properties <path>  --emit-plans <path>  --verbose",
+                        "  --local-properties <path>  --emit-plans <path>  " +
+                        "--emit-corpus <directory>  --verbose",
                 )
                 return null
             }
         }
     }
 
-    if (emitPlansTo != null) {
-        return HarnessOptions("", plansPath, "", localPropertiesPath, emitPlansTo, verbose)
+    if (emitPlansTo != null || emitCorpusTo != null) {
+        return HarnessOptions(
+            "", plansPath, "", localPropertiesPath, emitPlansTo, emitCorpusTo, verbose,
+        )
     }
     if (configPath.isBlank()) {
         println("No config. Pass --config <path to a harness config json>.")
@@ -295,7 +310,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
         return null
     }
     return HarnessOptions(
-        configPath, plansPath, outputDirectory, localPropertiesPath, null, verbose,
+        configPath, plansPath, outputDirectory, localPropertiesPath, null, null, verbose,
     )
 }
 

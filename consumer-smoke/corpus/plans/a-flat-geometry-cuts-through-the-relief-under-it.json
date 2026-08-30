@@ -1,0 +1,38 @@
+[
+  {
+    "frameIndex": 0,
+    "camera": {
+      "latitude": 37.7275,
+      "unwrappedLongitude": -119.575,
+      "zoom": 13.0,
+      "bearing": 45.0,
+      "pitch": 70.0
+    },
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.7355,
+          "y": -119.59,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.7195,
+          "y": -119.56,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision mediump float;\nin vec2 vTexCoord;\nuniform vec3 uTint;\nout vec4 fragColor;\nvoid main() {\n    float line = step(0.94, fract(vTexCoord.x * 8.0)) + step(0.94, fract(vTexCoord.y * 8.0));\n    fragColor = vec4(uTint, 0.55) * clamp(line, 0.0, 1.0);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  }
+]

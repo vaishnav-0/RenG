@@ -1,0 +1,13 @@
+[
+  {
+    "frameIndex": 0,
+    "camera": {
+      "latitude": -84.0,
+      "unwrappedLongitude": 0.0,
+      "zoom": 3.0,
+      "bearing": 0.0,
+      "pitch": 0.0
+    },
+    "projectionMode": "GLOBE"
+  }
+]
