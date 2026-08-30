@@ -62,11 +62,37 @@ import kotlin.math.sin
  * Fade is task 13's; `zOrder` is carried by the engine and not honoured here, and `avoidEdges` is
  * honoured for the icon half alone ([resolveIcon]) -- both recorded in the cycle's ledger rather
  * than hidden.
+ *
+ * **[ground] is where terrain enters the label path, and the whole of it.** A label anchored at sea
+ * level over a ridge detaches from the feature it names: the anchor projects to the pixel the
+ * ellipsoid is at, and the feature is drawn where the displaced ground put it. Handing the anchor
+ * its own terrain height is one addition in metres -- exactly `SceneContent.groundResolved`'s
+ * addition, for exactly ADR 0040's reason -- applied to the [GeographicPosition] this pass projects,
+ * so the *projection* spends it and no arithmetic here is projection-specific.
+ *
+ * **It enters here rather than at the draw, and that is E-labels' decision E4 rather than a
+ * preference.** Collision resolves once per `prepare()` and never during a draw, so a height added
+ * after this function had run would collide sea-level boxes and then draw elevated ones -- two
+ * labels that overlap on the terrain would both survive, and a symbol's own icon would separate from
+ * its text. Everything downstream of the two projections below is already a function of them: the
+ * glyph frames, the collision box, the icon's box and quad, and [LabelCollisionIndex]. So moving the
+ * anchor moves the whole symbol, and the index sees what the screen will.
+ *
+ * **`null` is a frame with no drawn terrain**, which is every frame RenG drew before this cycle: the
+ * altitude below is then the literal `0.0` it has always been. A `GroundSurface` answering `null`
+ * under one anchor is ADR 0040's "absent terrain resolves `GROUND_RELATIVE` as `ABSOLUTE`" and
+ * reaches here as a zero from whoever binds this, not as a second nullable.
+ *
+ * **Nothing here touches [deriveLabelIdentity].** It projects the candidate's own latitude and
+ * longitude into a Mercator cell and never its altitude, so a label's identity -- and therefore its
+ * fade -- is the same number over a ridge as over the sea. A terrain height that restarted a fade
+ * every time a DEM tile arrived would be a flicker with no cause a reader could see.
  */
 internal fun placeLabels(
     camera: ResolvedFrameCamera,
     batch: LabelCandidateBatch,
     sprites: SpriteAtlasManifest? = null,
+    ground: LabelGroundElevation? = null,
 ): List<PlacedLabel> {
     if (batch.candidates.isEmpty()) return emptyList()
 
@@ -82,11 +108,12 @@ internal fun placeLabels(
     for (candidateIndex in batch.candidates.indices.sortedByPriority(batch)) {
         val candidate = batch.candidates[candidateIndex]
         val labels = when (candidate.placement) {
-            LabelPlacement.POINT ->
-                listOfNotNull(layOutPointLabel(camera, batch.atlas, candidate, candidateIndex, sprites, viewport))
+            LabelPlacement.POINT -> listOfNotNull(
+                layOutPointLabel(camera, batch.atlas, candidate, candidateIndex, sprites, viewport, ground),
+            )
 
             LabelPlacement.LINE, LabelPlacement.LINE_CENTER ->
-                layOutLineLabels(camera, batch.atlas, candidate, candidateIndex, sprites, viewport)
+                layOutLineLabels(camera, batch.atlas, candidate, candidateIndex, sprites, viewport, ground)
         }
 
         for (label in labels) {
@@ -157,6 +184,29 @@ internal fun placeLabels(
     // `ignorePlacement` allow -- the one that would have won the collision paints over the other.
     // The pipeline draws a batch in exactly the order it is handed, and sorts nothing itself.
     return placed.asReversed()
+}
+
+/**
+ * How high the terrain stands beneath one label anchor, in metres above the ellipsoid.
+ *
+ * **Metres rather than pixels, for [com.rohittp.reng.internal.gl.GroundDrape]'s reason.** The two
+ * projections spend an altitude differently -- Mercator by `1 / cos(latitude)` per position, a sphere
+ * radially and uniformly -- and both already do it inside `projectGeographicPosition`, which is where
+ * this number is handed. ADR 0040 states a ground-relative altitude in metres for the same reason.
+ *
+ * **Zero is the honest answer where the frame drew no displaced ground under the anchor**, which
+ * covers a style with no `terrain` block, a tile whose DEM never arrived, and an anchor outside the
+ * world's latitude band alike. ADR 0040 resolves `GROUND_RELATIVE` as `ABSOLUTE` there, and "add
+ * nothing" is exactly that -- so this returns a `Double` rather than a `Double?` and the whole of the
+ * absent case is one number.
+ *
+ * A separate type from `GroundDrape` because the two are asked different questions: a drape samples a
+ * *normalised Mercator* pair at every subdivided vertex of a quad and carries the coplanar lift a
+ * second copy of the terrain surface needs, and a label anchor is a geographic position that meets no
+ * depth test at all.
+ */
+internal fun interface LabelGroundElevation {
+    fun metresBeneath(latitude: Double, unwrappedLongitude: Double): Double
 }
 
 /**
@@ -333,6 +383,7 @@ private fun layOutPointLabel(
     candidateIndex: Int,
     sprites: SpriteAtlasManifest?,
     viewport: LabelScreenBox,
+    ground: LabelGroundElevation?,
 ): PlacedLabel? {
     if (!candidate.hasFinitePlacementInputs()) return null
 
@@ -341,7 +392,10 @@ private fun layOutPointLabel(
         GeographicPosition(
             latitude = candidate.latitude,
             unwrappedLongitude = candidate.longitude,
-            altitudeMetres = 0.0,
+            // `?: 0.0` rather than a flat implementation of the interface: a frame with no drawn
+            // terrain must reach the projection with the literal zero it always did, so that every
+            // pixel of the 28 corpus styles that declare no `terrain` block is unmoved by this cycle.
+            altitudeMetres = ground?.metresBeneath(candidate.latitude, candidate.longitude) ?: 0.0,
         ),
     )
     if (anchor !is ScreenProjection.Projected) return null

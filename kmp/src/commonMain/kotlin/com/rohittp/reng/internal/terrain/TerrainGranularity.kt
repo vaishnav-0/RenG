@@ -2,7 +2,11 @@ package com.rohittp.reng.internal.terrain
 
 import com.rohittp.reng.ProjectionMode
 import com.rohittp.reng.internal.gl.MAXIMUM_GROUND_CELLS_PER_TILE_SIDE
+import com.rohittp.reng.internal.gl.globeGroundCellsPerTileSide
 import com.rohittp.reng.internal.planning.basemapTileSideLogicalPixels
+import com.rohittp.reng.internal.projection.ResolvedFrameCamera
+import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
+import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 
 /**
  * How finely a displaced ground tile is subdivided, and **why this is a budget rather than an error
@@ -104,6 +108,37 @@ internal fun groundCellsPerTileSide(curvatureCells: Int, terrainCells: Int): Int
     require(curvatureCells >= 1) { "a ground grid has at least one cell a side" }
     require(terrainCells >= 1) { "a ground grid has at least one cell a side" }
     return minOf(maxOf(curvatureCells, terrainCells), MAXIMUM_GROUND_CELLS_PER_TILE_SIDE)
+}
+
+/**
+ * [groundCellsPerTileSide] with the curvature claim derived from the frame's own camera, which is the
+ * number a frame draws its whole ground at **and** the number every CPU lookup into that ground must
+ * be asked at.
+ *
+ * **It exists because two places now need the answer and they run at different times.** The draw
+ * reconciles it to build the grid; `prepare()` reconciles it to put a label anchor on the surface the
+ * grid will draw, because collision resolves once per preparation and never during a draw. A lookup
+ * taken at terrain's *unreconciled* claim finds the wrong ground cell on every globe frame whose
+ * curvature asks for more cells than the DEM does — so the two would disagree exactly where the globe
+ * is steepest, and the picture of that disagreement is a label sitting slightly off its own hill.
+ * Both callers reach this one function rather than restating the `when`.
+ *
+ * `null` [selectedLod] is a frame with no ground tiles, where nothing reads the answer: the curvature
+ * claim needs a lod and such a frame has none.
+ */
+internal fun frameGroundCellsPerTileSide(
+    camera: ResolvedFrameCamera,
+    selectedLod: Int?,
+    terrainCells: Int,
+): Int {
+    if (selectedLod == null) return 1
+    return groundCellsPerTileSide(
+        curvatureCells = when (camera) {
+            is ResolvedMercatorCamera -> 1
+            is ResolvedGlobeCamera -> globeGroundCellsPerTileSide(camera, selectedLod)
+        },
+        terrainCells = terrainCells,
+    )
 }
 
 /**

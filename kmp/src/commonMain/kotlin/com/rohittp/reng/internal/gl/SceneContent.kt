@@ -30,7 +30,7 @@ import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
 import com.rohittp.reng.internal.projection.globeMetresToLogicalPixels
 import com.rohittp.reng.internal.terrain.DemTileWindow
 import com.rohittp.reng.internal.terrain.GroundSurface
-import com.rohittp.reng.internal.terrain.groundCellsPerTileSide
+import com.rohittp.reng.internal.terrain.frameGroundCellsPerTileSide
 import com.rohittp.reng.internal.renGFailure
 
 /**
@@ -131,11 +131,12 @@ internal class SceneTileDem(val demTexture: Int, val window: DemTileWindow)
  * read a texel, how big the source DEM is, how far to exaggerate it, and how finely terrain alone
  * would like the ground subdivided.
  *
- * **[cellsPerTileSide] is terrain's *claim*, not the frame's answer.** [drawGroundPhase] reconciles
- * it with the globe's curvature claim through
- * [com.rohittp.reng.internal.terrain.groundCellsPerTileSide], because a frame draws its whole ground
- * at one granularity or a sliver of background shows between two tiles that disagree. Carrying the
- * claim rather than the answer is what keeps that reconciliation in one place.
+ * **[cellsPerTileSide] is terrain's *claim*, not the frame's answer.** [SceneContent] reconciles it
+ * with the globe's curvature claim through
+ * [com.rohittp.reng.internal.terrain.frameGroundCellsPerTileSide], because a frame draws its whole
+ * ground at one granularity or a sliver of background shows between two tiles that disagree.
+ * Carrying the claim rather than the answer is what keeps that reconciliation in one place -- one
+ * place `RenGRenderer.prepare` now reaches too, to put a label anchor on this surface.
  *
  * Non-null exactly when the frame's style declared a `terrain` block RenG agreed with, including
  * when every one of its tiles turned out to have no DEM: the decode and the exaggeration are
@@ -151,10 +152,15 @@ internal class SceneTerrain(
      * question of it.
      *
      * **It is built per frame and only on demand**, because holding it costs one `rgbaSnapshot` per
-     * distinct source DEM and a frame with no `GROUND_RELATIVE` content would pay that for nothing.
-     * That conditional construction is the whole of what survives the design's §6 "sparse CPU decode":
+     * distinct source DEM and a frame that asks nothing of it would pay that for nothing. That
+     * conditional construction is the whole of what survives the design's §6 "sparse CPU decode":
      * Rentile `0.7.0` hands over decoded texels, so there is no decode to be sparse about, only a
      * copy to be avoided.
+     *
+     * **It is built during `prepare()` and carried here, not derived at draw time**, because the
+     * label placement pass rode this exact object before the frame existed -- ADR 0035 puts label
+     * collision inside `prepare()`. Two constructions would be two copies of every source DEM and
+     * two answers to which of the frame's tiles displace.
      */
     val surface: GroundSurface? = null,
 ) {
@@ -464,25 +470,16 @@ internal class SceneContent(
      *
      * `1` with no ground tiles, where nothing reads it: the globe's curvature claim needs a LOD and a
      * frame with no ground has none.
+     *
+     * **The reconciliation itself is [frameGroundCellsPerTileSide]'s** rather than written here,
+     * because `RenGRenderer.prepare` needs the identical number to put a label anchor on this
+     * surface and a second `when` over the camera is a second chance to answer differently.
      */
-    private val frameGroundCells: Int = if (scene.groundTiles.isEmpty()) {
-        1
-    } else {
-        when (camera) {
-            is ResolvedMercatorCamera -> groundCellsPerTileSide(
-                curvatureCells = 1,
-                terrainCells = scene.terrain?.cellsPerTileSide ?: 1,
-            )
-
-            is ResolvedGlobeCamera -> groundCellsPerTileSide(
-                curvatureCells = globeGroundCellsPerTileSide(
-                    camera,
-                    scene.groundTiles.first().instance.lod,
-                ),
-                terrainCells = scene.terrain?.cellsPerTileSide ?: 1,
-            )
-        }
-    }
+    private val frameGroundCells: Int = frameGroundCellsPerTileSide(
+        camera = camera,
+        selectedLod = scene.groundTiles.firstOrNull()?.instance?.lod,
+        terrainCells = scene.terrain?.cellsPerTileSide ?: 1,
+    )
 
     /**
      * The surface a `GROUND_RELATIVE` altitude is measured from, or `null` when this frame drew none.

@@ -104,6 +104,7 @@ import com.rohittp.reng.internal.image.PngDecodeResult
 import com.rohittp.reng.internal.image.decodePng
 import com.rohittp.reng.internal.label.FadedLabel
 import com.rohittp.reng.internal.label.LabelFadeState
+import com.rohittp.reng.internal.label.LabelGroundElevation
 import com.rohittp.reng.internal.label.advanceLabelFade
 import com.rohittp.reng.internal.label.placeLabels
 import com.rohittp.reng.internal.lifecycle.GpuLedger
@@ -146,6 +147,7 @@ import com.rohittp.reng.internal.terrain.GroundSurfaceTile
 import com.rohittp.reng.internal.terrain.TerrainGranularityInputs
 import com.rohittp.reng.internal.terrain.canPadDemTexture
 import com.rohittp.reng.internal.terrain.demTileWindowFor
+import com.rohittp.reng.internal.terrain.frameGroundCellsPerTileSide
 import com.rohittp.reng.internal.terrain.padDemTexture
 import com.rohittp.reng.internal.terrain.terrainCellsPerTileSide
 import com.rohittp.rentile.PreparedStyle
@@ -495,6 +497,19 @@ internal class RenGPreparedFrame(
      * flat here.
      */
     internal val terrain: PreparedTerrain? = null,
+    /**
+     * The CPU-readable copy of the surface this frame's ground draws, or `null` when nothing in the
+     * frame asked where the ground is — see `RenGRenderer.groundSurfaceFor` for that condition.
+     *
+     * **It is built during `prepare()` and carried rather than derived at draw time, and that is the
+     * one thing about it worth reading twice.** Labels are placed and collided inside `prepare()`
+     * (ADR 0035), so their anchors have already ridden this exact object by the time a frame exists;
+     * a `GROUND_RELATIVE` sticker, model or geometry rides it during the draw. Deriving it twice
+     * would be two `rgbaSnapshot` copies of every source DEM and two independent answers to which of
+     * this frame's tiles displace — and the picture of that disagreement is content riding a surface
+     * the ground is not drawing, which looks exactly like a lookup that is merely imprecise.
+     */
+    internal val groundSurface: GroundSurface? = null,
     /**
      * This frame's labels, or `null` when it drew none — `drawLabels = false`, no configured style, no
      * selected tile, a style that declares no text, or a frame every candidate of which lost its place.
@@ -1083,6 +1098,31 @@ internal class RenGRenderer(
             )
             val decodedByKey = acquired.decodedImagesByKey
 
+            // Hoisted above the label block rather than assembled with the frame below, because both
+            // are what a label anchor needs to know where the ground is: `groundInstances` is the one
+            // answer to "did this frame draw a ground at all, and at which LOD", and `preparedTerrain`
+            // is the one answer to "which of its tiles displace". Both are pure functions of
+            // `acquired` and of the plan, so hoisting them moves work rather than meaning.
+            val groundInstances = groundInstances(
+                instances = planned.spatialPlan.tileSelection?.instances.orEmpty(),
+                renderedTiles = acquired.basemapTiles,
+                styleDigest = acquired.basemapStyleDigest,
+            )
+            val terrain = preparedTerrain(acquired)
+            // **One surface per frame, built here and spent in two places at two different times.**
+            // A label anchor rides it during this `prepare()`, because ADR 0035 puts collision here
+            // and never in a draw; a `GROUND_RELATIVE` sticker, model or geometry rides it at draw
+            // time through `sceneTerrain`. Building it twice would be two `rgbaSnapshot` copies of
+            // every source DEM in the frame -- and, worse, two objects that could disagree about
+            // which tiles displace the day the two construction sites drift apart.
+            val groundSurface = groundSurfaceFor(
+                plan = plan,
+                planModels = planModels,
+                hasLabelCandidates = acquired.labelCandidates?.batch?.candidates?.isNotEmpty() == true,
+                groundInstances = groundInstances,
+                terrain = terrain,
+            )
+
             val stickers = plan.stickers.zip(stickerImageReferences) { sticker, reference ->
                 PreparedSticker(
                     placement = sticker.placement,
@@ -1136,7 +1176,18 @@ internal class RenGRenderer(
             val placedLabels = if (labelBatch == null) {
                 emptyList()
             } else {
-                placeLabels(planned.spatialPlan.camera, labelBatch, acquired.spriteAtlas)
+                placeLabels(
+                    planned.spatialPlan.camera,
+                    labelBatch,
+                    acquired.spriteAtlas,
+                    labelGroundElevation(
+                        plan = plan,
+                        resolvedCamera = planned.spatialPlan.camera,
+                        surface = groundSurface,
+                        terrain = terrain,
+                        selectedLod = groundInstances.firstOrNull()?.instance?.lod,
+                    ),
+                )
             }
             val labelFade = advanceLabelFade(
                 previous = previousLabelFade,
@@ -1181,8 +1232,9 @@ internal class RenGRenderer(
             // the count is over the tiles that will actually displace and only the prepared terrain
             // knows which those are. Handing this the acquisition outcome instead is the defect Task
             // 13's harness pass caught: a frame that acquired every DEM and could use none of them
-            // reported nothing at all.
-            val terrain = preparedTerrain(acquired)
+            // reported nothing at all. Task 18 moved the preparation itself further up still -- a
+            // label anchor rides the same surface and is placed above -- and left the report here, so
+            // a frame's diagnostics keep the order they were emitted in before labels rode anything.
             acquired.terrain?.let { outcome ->
                 reportTerrainDegradation(
                     outcome = outcome,
@@ -1207,12 +1259,9 @@ internal class RenGRenderer(
                 geometries = geometries,
                 models = models,
                 basemapTiles = acquired.basemapTiles,
-                groundInstances = groundInstances(
-                    instances = planned.spatialPlan.tileSelection?.instances.orEmpty(),
-                    renderedTiles = acquired.basemapTiles,
-                    styleDigest = acquired.basemapStyleDigest,
-                ),
+                groundInstances = groundInstances,
                 terrain = terrain,
+                groundSurface = groundSurface,
                 labels = labels,
                 mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
                 screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
@@ -1333,6 +1382,101 @@ internal class RenGRenderer(
      * would make the frame's granularity fall back to the flat rule as a side effect of a coverage
      * gap, which is a different picture from the one the style asked for.
      */
+    /**
+     * The CPU-readable copy of the surface this frame's ground will draw, or `null` when nothing in
+     * the frame asked where the ground is.
+     *
+     * **This is the whole of what the design's "sparse CPU decode" becomes.** §6 argued that a CPU
+     * elevation lookup must decode only the tiles containing ground-relative content, because decoding
+     * the visible set would be about 224 MiB against a `maximumDecodedImageBytes` shared with every
+     * raster. Rentile `0.7.0` deleted that premise -- `ValidatedDemTile.texels` arrives decoded and
+     * `PreparedTerrain` already holds it -- so the only cost left to be sparse about is
+     * [GroundSurface]'s one `rgbaSnapshot` per source image, and the sparsity that matters is *per
+     * frame* rather than per tile: a frame that asks nothing pays nothing, and a frame that asks pays
+     * for the ground it is riding, which is the ground it already drew.
+     *
+     * **[hasLabelCandidates] is Task 18's widening of that condition, and it is the batch's own
+     * candidate list rather than `drawLabels`.** Every label anchor rides this surface, so a frame
+     * with labels asks the same question a `GROUND_RELATIVE` sticker does -- but a frame whose style
+     * declares no symbol layer, or whose tiles carry no labelled feature, has no anchor to place and
+     * must keep paying nothing.
+     *
+     * **What it does cost is one `rgbaSnapshot` per source DEM on every terrain frame that draws
+     * text**, where before this task only a `GROUND_RELATIVE` placement paid it. At a 512-texel DEM
+     * that is a mebibyte a tile over the visible set and its perimeter ring. The copy is
+     * [GroundSurface]'s own decision -- taking it once is what stops a per-anchor lookup from being a
+     * per-anchor mebibyte -- and removing it means giving `DecodedImage` an indexed read, which is a
+     * wider change than this task and is recorded rather than made.
+     *
+     * **[selectedLod] comes from the ground instances rather than from the plan**, for `sceneTerrain`'s
+     * reason: both tile selectors emit one LOD per frame, and a frame with no ground instances drew no
+     * ground at all -- which is ADR 0040's "absent terrain resolves `GROUND_RELATIVE` as `ABSOLUTE`",
+     * and is why a `drawBasemap = false` frame's labels sit at sea level however steep the world is.
+     * That case cannot even arise from an acquisition: terrain is acquired only for a frame whose
+     * canonical tile list is non-empty, which is exactly a frame that draws its basemap.
+     */
+    private fun groundSurfaceFor(
+        plan: FramePlan,
+        planModels: List<Model>,
+        hasLabelCandidates: Boolean,
+        groundInstances: List<PreparedGroundInstance>,
+        terrain: PreparedTerrain?,
+    ): GroundSurface? {
+        if (terrain == null) return null
+        val selectedLod = groundInstances.firstOrNull()?.instance?.lod ?: return null
+        val ridesTheGround = hasLabelCandidates ||
+            plan.geometries.any { it.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
+            plan.stickers.any { it.placement.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
+            planModels.any { it.placement.altitudeMode == AltitudeMode.GROUND_RELATIVE }
+        if (!ridesTheGround) return null
+        return terrain.groundSurface(selectedLod)
+    }
+
+    /**
+     * [GroundSurface] bound to the one granularity this frame's ground is drawn at, in the shape the
+     * label placement pass consumes — or `null` when this frame drew no displaced ground under
+     * anything.
+     *
+     * **The granularity is `SceneContent`'s own, reached through the same
+     * [frameGroundCellsPerTileSide] and given the same three inputs.** A lookup at any other number
+     * finds a different ground cell and therefore a different height, and the picture of that is a
+     * label sitting slightly off the hill it names — which reads as an imprecise lookup rather than
+     * as a disagreement about the grid.
+     *
+     * **The `null` a lookup can still answer becomes zero here**, which is ADR 0040 in one line: where
+     * the frame drew no displaced ground under an anchor, a ground-relative height is nothing at all
+     * and the label stays exactly where it has always been.
+     *
+     * **No lift.** `GROUND_DRAPE_LIFT_METRES` exists for content drawn coplanar with the ground and
+     * fighting it for depth; Task 14's spike measured that labels have no such fight — `drawLabels`
+     * and `drawIcons` both disable the depth test outright — so a lift here would move a name off its
+     * own feature to fix a defect it does not have.
+     */
+    private fun labelGroundElevation(
+        plan: FramePlan,
+        resolvedCamera: ResolvedFrameCamera,
+        surface: GroundSurface?,
+        terrain: PreparedTerrain?,
+        selectedLod: Int?,
+    ): LabelGroundElevation? {
+        if (surface == null || terrain == null || surface.isEmpty) return null
+        val lod = selectedLod ?: return null
+        val cellsPerTileSide = frameGroundCellsPerTileSide(
+            camera = resolvedCamera,
+            selectedLod = lod,
+            terrainCells = terrainCellsPerTileSide(
+                terrain = TerrainGranularityInputs(terrain.tileSizePx),
+                projectionMode = plan.projectionMode,
+                zoom = plan.camera.zoom,
+                latitude = plan.camera.latitude,
+                selectedLod = lod,
+            ),
+        )
+        return LabelGroundElevation { latitude, unwrappedLongitude ->
+            surface.elevationMetresBeneath(latitude, unwrappedLongitude, cellsPerTileSide) ?: 0.0
+        }
+    }
+
     private fun preparedTerrain(acquired: FrameAcquisition): PreparedTerrain? {
         val outcome = acquired.terrain as? TerrainAcquisitionOutcome.Acquired ?: return null
         val demTiles = LinkedHashMap<CanonicalBasemapTile, AcquiredDemTile>()
@@ -2280,26 +2424,12 @@ internal class RenGRenderer(
                 latitude = frame.camera.latitude,
                 selectedLod = selectedLod,
             ),
-            surface = if (frame.ridesTheGround()) terrain.groundSurface(selectedLod) else null,
+            // Built during `prepare()` and carried, never rebuilt here: a label anchor rode this
+            // exact object before the frame existed, and a second construction at draw time would be
+            // a second answer to "which of this frame's tiles displace".
+            surface = frame.groundSurface,
         )
     }
-
-    /**
-     * Whether anything in this frame asked where the ground is.
-     *
-     * **This is the whole of what the design's "sparse CPU decode" becomes.** §6 argued that a CPU
-     * elevation lookup must decode only the tiles containing ground-relative content, because decoding
-     * the visible set would be about 224 MiB against a `maximumDecodedImageBytes` shared with every
-     * raster. Rentile `0.7.0` deleted that premise -- `ValidatedDemTile.texels` arrives decoded and
-     * `PreparedTerrain` already holds it -- so the only cost left to be sparse about is
-     * `GroundSurface`'s one `rgbaSnapshot` per source image, and the sparsity that matters is *per
-     * frame* rather than per tile: a frame with no `GROUND_RELATIVE` content pays nothing, and a frame
-     * with one pays for the ground it is riding, which is the ground it already drew.
-     */
-    private fun RenGPreparedFrame.ridesTheGround(): Boolean =
-        geometries.any { it.geometry.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
-            stickers.any { it.placement.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
-            models.any { it.placement.altitudeMode == AltitudeMode.GROUND_RELATIVE }
 
     /**
      * ADR 0034's fourth scene list, assembled from what `prepare()` already decided.

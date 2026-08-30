@@ -32,7 +32,8 @@ import kotlin.math.sqrt
  *  1. **Project the line.** Every source point goes through
  *     [projectVisibleGeographicPosition], which is a sealed answer rather than a pixel precisely so that a
  *     point behind the camera cannot become a plausible pixel on the wrong side of the screen. See
- *     [projectLineRuns] for what a line that is only partly on screen becomes.
+ *     [projectLineRuns] for what a line that is only partly on screen becomes, and for why `ground`
+ *     is sampled at every one of those points rather than once for the line.
  *  2. **Walk it at `symbolSpacing`.** [LabelPlacement.LINE] repeats the label along the run;
  *     [LabelPlacement.LINE_CENTER] places one instance at the centre instead.
  *  3. **Distribute the glyphs along the curve.** Each glyph is sampled at its own arc length and
@@ -65,6 +66,7 @@ internal fun layOutLineLabels(
         right = camera.outputPixelSize.width.toDouble(),
         bottom = camera.outputPixelSize.height.toDouble(),
     ),
+    ground: LabelGroundElevation? = null,
 ): List<PlacedLabel> {
     if (!candidate.hasFinitePlacementInputs()) return emptyList()
     if (!candidate.hasFiniteLinePlacementInputs()) return emptyList()
@@ -97,7 +99,7 @@ internal fun layOutLineLabels(
         candidate.translateY
     }
 
-    val runs = projectLineRuns(camera, candidate.line)
+    val runs = projectLineRuns(camera, candidate.line, ground)
     if (runs.isEmpty()) return emptyList()
 
     val instance = LineInstanceInputs(
@@ -409,10 +411,18 @@ private class LineSample(
  * geometry is quantised to an integer grid and several source vertices can project onto one pixel;
  * a zero-length segment has no tangent, and one kept in the array would be a division by zero in
  * [ProjectedRun.sampleAt] rather than a visible defect.
+ *
+ * **[ground] is sampled per source point, not once per line.** A road crossing a valley has a
+ * different terrain height at every vertex, and one height for the whole run would slide the name
+ * off the road wherever the two disagree -- which over real relief is most of it. Sampling per point
+ * is also what makes the *walk* honest: [MINIMUM_SEGMENT_PIXELS], the arc lengths the glyphs are
+ * distributed along, and [exceedsBendCeiling]'s turns are all measured on these pixels, so a line
+ * that climbs is longer on screen and its label is spaced accordingly.
  */
 private fun projectLineRuns(
     camera: ResolvedFrameCamera,
     line: List<LabelLinePoint>,
+    ground: LabelGroundElevation?,
 ): List<ProjectedRun> {
     val runs = ArrayList<ProjectedRun>()
     var pointsX = ArrayList<Double>()
@@ -438,7 +448,7 @@ private fun projectLineRuns(
             GeographicPosition(
                 latitude = point.latitude,
                 unwrappedLongitude = point.longitude,
-                altitudeMetres = 0.0,
+                altitudeMetres = ground?.metresBeneath(point.latitude, point.longitude) ?: 0.0,
             ),
         )
         if (projected !is ScreenProjection.Projected) {
