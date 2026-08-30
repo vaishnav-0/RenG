@@ -128,6 +128,16 @@ texture, and keeping a decoded DEM for every visible tile would be ~224 MiB agai
 `maximumDecodedImageBytes` of 256 MiB already shared with every raster. So only tiles containing a
 ground-relative placement or a label anchor are decoded CPU-side.
 
+> **Erratum, 2026-08-30 — this paragraph's premise expired mid-cycle.** It reasons about a *decode cost*,
+> and there is no longer a decode to be sparse about: Rentile `0.7.0` hands `ValidatedDemTile.texels` over
+> already decoded, RenG decodes no DEM at all, and `PreparedTerrain` holds the texels for every acquired
+> tile. The memory is still spent — it is spent inside Rentile now, whether RenG samples one tile or all
+> of them — so the argument for sparsity survives only as a plainer question about resident bytes, and
+> not as a constraint on how the lookup is written. What replaced this paragraph as the real constraint on
+> the CPU lookup is Task 14's spike: it must reconstruct the ground's **drawn surface**, four corners of
+> the containing ground cell along the ground's own diagonal, because reading the texel beneath the point
+> is 3.049 m wrong and the plan's original test passes against exactly that error.
+
 **Labels follow terrain.** Not a decision so much as a consequence: an anchor left at sea level detaches
 from its feature the moment the ground under it rises.
 
