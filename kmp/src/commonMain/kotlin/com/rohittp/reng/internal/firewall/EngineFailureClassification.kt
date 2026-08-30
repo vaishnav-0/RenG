@@ -42,7 +42,7 @@ private const val MAXIMUM_UNWRAP_DEPTH: Int = 8
  * in a `when` with no `else`. A code a future Rentile adds therefore fails this file's compilation
  * rather than being silently swept into some default bucket, which is the exact failure mode ADR 0016's
  * firewall exists to prevent. The `as?` casts alongside it are belt-and-braces for the same reason:
- * Rentile 0.6.0 pairs each code with exactly one sealed subclass, so they cannot fail today, but a
+ * Rentile 0.7.0 pairs each code with exactly one sealed subclass, so they cannot fail today, but a
  * future Rentile that reused a code across two classes would fail closed here instead of throwing a
  * `ClassCastException` out of a function whose whole purpose is to stop engine faults escaping.
  *

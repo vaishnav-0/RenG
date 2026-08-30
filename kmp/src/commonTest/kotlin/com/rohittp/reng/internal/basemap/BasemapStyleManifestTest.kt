@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 
 /**
  * Every expectation here is a byte-exact string lifted from Rentile's own composition at the pinned
- * `0.6.0` release commit `87ccba2`, because RenG's firewall matches an engine request by exact string
+ * `0.7.0` release commit `ca192ab`, because RenG's firewall matches an engine request by exact string
  * equality: a plausible-but-different URL is refused, not repaired.
  */
 class BasemapStyleManifestTest {

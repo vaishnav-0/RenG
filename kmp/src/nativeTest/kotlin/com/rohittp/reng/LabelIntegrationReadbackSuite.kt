@@ -766,7 +766,7 @@ private const val MAXIMUM_ANCHOR_OFFSET: Int = 16
  * exactly one aggregate diagnostic behind.
  *
  * **The fixture is the ADR's own motivating fact.** Rentile's `internal/glyph/ScriptSupport.kt` is
- * byte-identical between `0.5.0` and `0.6.0`, so Arabic still produces no glyph quads whatever the
+ * byte-identical between `0.5.0` and `0.7.0`, so Arabic still produces no glyph quads whatever the
  * style says. The two style layers are unchanged from every other case here -- only the *feature*
  * text differs -- so a consumer's experience is a map with its background and no text whatsoever,
  * which until this task nothing anywhere reported.

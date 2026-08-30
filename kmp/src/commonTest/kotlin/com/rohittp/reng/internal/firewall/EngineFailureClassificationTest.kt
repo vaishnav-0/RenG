@@ -43,7 +43,7 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
 
 /**
  * The firewall's failure half. Every assertion here is a contract about what a consumer is allowed to
- * observe after Rentile fails, so each one is written against Rentile's real 0.6.0 exception surface --
+ * observe after Rentile fails, so each one is written against Rentile's real 0.7.0 exception surface --
  * the exemplars below are constructed with the exact constructor signatures Rentile publishes, so a
  * signature change in a future Rentile breaks this test's compilation rather than silently reclassifying.
  */
@@ -325,7 +325,7 @@ class EngineFailureClassificationTest {
         assertEquals(
             emptyList(),
             unmapped,
-            "RenG routes every Rentile 0.6.0 resource class; an unmapped one a future Rentile adds " +
+            "RenG routes every Rentile 0.7.0 resource class; an unmapped one a future Rentile adds " +
                 "must fail closed rather than being guessed at",
         )
         assertEquals(

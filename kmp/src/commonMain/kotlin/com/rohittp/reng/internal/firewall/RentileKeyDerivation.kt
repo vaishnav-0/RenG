@@ -11,7 +11,7 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
 
 /**
  * Derives the private key ADR 0016's firewall latches Rentile requests under, for real, against the
- * actual Rentile 0.2.0-through-0.6.0 derivation -- the placeholder `DeterministicRentilePrivateKeyResolver`
+ * actual Rentile 0.2.0-through-0.7.0 derivation -- the placeholder `DeterministicRentilePrivateKeyResolver`
  * this replaces (removed once `RenGRenderer` was rewired onto this class, basemap task 17) only ever
  * needed process-local determinism, never agreement with Rentile's own cache keys.
  *
@@ -20,10 +20,12 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
  * onto `RasterResourceAcquirer` for `DEM_TILE`) key every entry by
  * `sha256Hex(url.withRedactedAuthenticationQuery())` paired with Rentile's own [RentileResourceClass] --
  * verified by diffing Rentile's `ContentIdentity.kt` directly between its `0.2.0` release commit
- * (`2d0a5bf`) and the `0.6.0` release commit `87ccba2` whose version `libs.versions.toml` pins --
+ * (`2d0a5bf`) and the `0.7.0` release commit `ca192ab` whose version `libs.versions.toml` pins --
  * byte-identical across every release in that range. The `0.5.0 -> 0.6.0` step was re-confirmed against
  * the two *published* sources jars rather than against a checkout, since the published bytes are what
- * actually ships, so the scheme below is not inferred from any single measurement run. RenG must
+ * actually ships, so the scheme below is not inferred from any single measurement run. The
+ * `0.6.0 -> 0.7.0` step is a checkout diff only, not a second jar comparison: the file is byte-identical
+ * at `87ccba2` and `ca192ab`, and `0.7.0` changes four files, none of them this one. RenG must
  * reproduce that exact derivation for the eight [ResourceClass] values Rentile itself fetches and
  * keys, or RenG's own diffing and eviction bookkeeping silently stops matching Rentile's actual
  * cache entries: **a permanent, unannounced cache miss, never a thrown failure** -- there is no
@@ -39,7 +41,7 @@ import com.rohittp.rentile.ResourceClass as RentileResourceClass
  * `AMBIGUOUS_RESOURCE_ROUTE`. Those four instead derive from RenG's own canonical resource identity
  * ([ResourceKeyDeriver.external]), which is already proven injective in locator and class.
  *
- * Rentile 0.3.0's ninth class, `GLYPH_RANGE` -- still the ninth and last at the pinned `0.6.0` -- is
+ * Rentile 0.3.0's ninth class, `GLYPH_RANGE` -- still the ninth and last at the pinned `0.7.0` -- is
  * **routed** here as of Cycle E-labels, and it had to be: the firewall's transport index is keyed on
  * `(url, RentileResourceClass)` and populated through this table, so a glyph route RenG preregisters is
  * only findable if some RenG [ResourceClass] translates to `GLYPH_RANGE`. No existing constant could be
@@ -131,7 +133,7 @@ internal fun engineKeyedResourceClassOf(resourceClass: ResourceClass): RentileRe
  *
  * `null` for anything else -- a tenth class a future Rentile adds -- is the fail-closed answer: the
  * caller reports a failure that names no resource rather than guessing at one. Every one of Rentile
- * 0.6.0's nine classes is mapped as of Cycle E-labels, so that branch is unreachable from today's engine
+ * 0.7.0's nine classes is mapped as of Cycle E-labels, so that branch is unreachable from today's engine
  * and is a guard against tomorrow's; do not delete it on the strength of being uncovered.
  */
 internal fun rengResourceClassOf(engineResourceClass: RentileResourceClass): ResourceClass? =
@@ -158,8 +160,8 @@ private val AUTHENTICATION_QUERY_PARAMETER_NAMES: Set<String> = setOf(
  * other parameter and the fragment untouched, and returns the url unchanged when it carries no query
  * component at all. Byte-for-byte the same rewrite as Rentile's private
  * `com.rohittp.rentile.internal.withRedactedAuthenticationQuery` -- confirmed by reading that source at
- * Rentile's `0.2.0` release commit (`2d0a5bf`) and diffing it against the pinned `0.6.0` release
- * commit `87ccba2` -- unchanged across that range. Any
+ * Rentile's `0.2.0` release commit (`2d0a5bf`) and diffing it against the pinned `0.7.0` release
+ * commit `ca192ab` -- unchanged across that range. Any
  * divergence here changes the hash input for all eight engine-keyed classes and silently breaks their
  * key agreement with Rentile.
  */
