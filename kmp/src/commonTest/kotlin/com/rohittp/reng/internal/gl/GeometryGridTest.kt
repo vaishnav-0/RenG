@@ -333,6 +333,189 @@ class GeometryGridTest {
         assertEquals(mercator.failure.stage, globe.failure.stage)
         assertEquals(mercator.failure.diagnostic, globe.failure.diagnostic)
     }
+
+    // --- the drape (cycle E-terrain task 17) -----------------------------------------------------
+
+    /**
+     * **A draped cell folds on [groundGridIndices]' own diagonal and an undraped one does not**, which
+     * is the agreement task 14's spike found missing and the reason [GROUND_DRAPE_LIFT_METRES] is four
+     * metres rather than sixteen.
+     *
+     * The undraped order is the one the four-corner triangle strip shipped with in `0.3.0`, and it is
+     * deliberately left alone: `runGeometrySubdivisionReadbackSuite` requires a one-cell Mercator grid
+     * to reproduce that strip **byte for byte**, and flipping it globally moves 39 bytes of it on
+     * `Apple M3 Max`. A drape has drawn no released frame, so it pays nothing to adopt the ground's.
+     *
+     * Compared at one cell a side because that is the granularity at which the two grids number their
+     * nodes identically -- the geometry grid emits nodes through a dedupe map in quadtree order and
+     * `groundGridIndices` walks a dense row-major lattice, and above one cell those two numberings
+     * diverge for reasons that have nothing to do with the diagonal.
+     */
+    @Test
+    fun aDrapedCellFoldsOnTheGroundsDiagonalAndAnUndrapedOneKeepsTheShippedOne() {
+        val camera = mercatorCamera(zoom = 12.0)
+        val geometry = tiltedGeometry()
+        val draped = (
+            geometryGrid(geometry, camera, cellsPerSide = 1, drape = { _, _ -> 0.0 })
+                as SpatialOutcome.Success
+            ).value
+        val undraped = (geometryGrid(geometry, camera, cellsPerSide = 1) as SpatialOutcome.Success).value
+
+        assertEquals(
+            groundGridIndices(1).toList(),
+            draped.triangleIndices.toList(),
+            "a draped cell must fold exactly where the ground folds",
+        )
+        assertEquals(
+            listOf<Short>(0, 2, 3, 0, 3, 1),
+            undraped.triangleIndices.toList(),
+            "an undraped cell keeps the north-west to south-east fold the shipped strip used",
+        )
+    }
+
+    /**
+     * **What a drape actually does to a Mercator node: it raises it by its own latitude's metres.**
+     *
+     * A constant drape of [DRAPE_RISE_METRES] must put the quad's corners exactly where declaring that
+     * altitude puts them -- which is the claim that the drape and `projectMercator` spend a metre the
+     * same way, and the reason a ground-relative placement needs no conversion of its own.
+     *
+     * **And the interior must not be the lerp between them**, which is the half a corners-only
+     * assertion cannot see. `1 / cos(latitude)` is convex, so a node halfway down a quad spanning two
+     * latitudes sits *below* the straight line between the corners' rises; a drape that lerped the
+     * corners' heights -- which is what the undraped grid does with a declared altitude -- would land
+     * on that line instead. [drapeBandGeometry] spans 60 degrees of latitude, off the equator, so the
+     * gap is pixels rather than a rounding.
+     */
+    @Test
+    fun aMercatorDrapeRaisesEachNodeByItsOwnLatitudesMetres() {
+        val camera = mercatorCamera(zoom = 3.0)
+        val flat = drapeBandGeometry()
+        val declared = Geometry(
+            topLeft = Vector3(flat.topLeft.x, flat.topLeft.y, DRAPE_RISE_METRES),
+            bottomRight = Vector3(flat.bottomRight.x, flat.bottomRight.y, DRAPE_RISE_METRES),
+            shaderPair = flat.shaderPair,
+        )
+        val draped = (
+            geometryGrid(flat, camera, cellsPerSide = 4, drape = { _, _ -> DRAPE_RISE_METRES })
+                as SpatialOutcome.Success
+            ).value
+        val lerped = (geometryGrid(declared, camera, cellsPerSide = 4) as SpatialOutcome.Success).value
+
+        listOf(0f to 0f, 1f to 0f, 0f to 1f, 1f to 1f).forEach { (u, v) ->
+            assertEquals(
+                lerped.nodeAt(u, v).z,
+                draped.nodeAt(u, v).z,
+                absoluteTolerance = 1.0e-3,
+                message = "a constant drape must put the corner at ($u, $v) where declaring the " +
+                    "altitude puts it",
+            )
+        }
+
+        val middleDraped = draped.nodeAt(0f, 0.5f).z
+        val middleLerped = lerped.nodeAt(0f, 0.5f).z
+        println(
+            "RenG geometry grid: a $DRAPE_RISE_METRES m drape raises the band's middle node to " +
+                "$middleDraped logical pixels where lerping its corners reaches $middleLerped",
+        )
+        assertTrue(
+            middleLerped - middleDraped > MINIMUM_CONVEXITY_LOGICAL_PIXELS,
+            "the drape must apply 1 / cos(latitude) at each node rather than lerping the corners'; " +
+                "the middle node sits $middleDraped against the lerp's $middleLerped",
+        )
+    }
+
+    /**
+     * The globe spends a drape's metres exactly where it spends a declared altitude's -- radially, and
+     * by the same fraction everywhere -- so a constant drape and a constant declared altitude agree at
+     * **every** node rather than only at the corners.
+     *
+     * That difference from the Mercator case is the point: a sphere has no `1 / cos(latitude)`, and
+     * copying Mercator's term here would be twice too large at latitude 60.
+     */
+    @Test
+    fun aGlobeDrapeIsTheDeclaredAltitudeAtEveryNode() {
+        val camera = globeCamera(zoom = WHOLE_GEOMETRY_IN_VIEW_ZOOM, latitude = 55.0)
+        val flat = curvedGeometry()
+        val declared = Geometry(
+            topLeft = Vector3(flat.topLeft.x, flat.topLeft.y, DRAPE_RISE_METRES),
+            bottomRight = Vector3(flat.bottomRight.x, flat.bottomRight.y, DRAPE_RISE_METRES),
+            shaderPair = flat.shaderPair,
+        )
+        val draped = (
+            geometryGrid(flat, camera, cellsPerSide = 4, drape = { _, _ -> DRAPE_RISE_METRES })
+                as SpatialOutcome.Success
+            ).value
+        val lifted = (geometryGrid(declared, camera, cellsPerSide = 4) as SpatialOutcome.Success).value
+        val unlifted = (geometryGrid(flat, camera, cellsPerSide = 4) as SpatialOutcome.Success).value
+
+        assertEquals(lifted.vertexCount, draped.vertexCount)
+        var worst = 0.0
+        var movement = 0.0
+        for (index in 0 until draped.vertexCount) {
+            val a = draped.interleavedVertices
+            val b = lifted.interleavedVertices
+            val c = unlifted.interleavedVertices
+            for (component in 0 until 3) {
+                val offset = index * GEOMETRY_VERTEX_COMPONENT_COUNT + component
+                worst = maxOf(worst, abs(a[offset].toDouble() - b[offset].toDouble()))
+                movement = maxOf(movement, abs(b[offset].toDouble() - c[offset].toDouble()))
+            }
+        }
+        println("RenG geometry grid: globe drape worst node disagreement $worst, rise $movement")
+        assertTrue(
+            movement > MINIMUM_GLOBE_RISE_LOGICAL_PIXELS,
+            "the fixture must be able to see $DRAPE_RISE_METRES metres at all; it moved $movement",
+        )
+        assertEquals(0.0, worst, absoluteTolerance = 1.0e-9)
+    }
+
+    /**
+     * A drape is subdivided at the **ground's** node spacing, and an undraped geometry is not.
+     *
+     * Under Mercator a plane does not depart from itself, so [geometryCellsPerSide] answers one cell
+     * for any quad -- which is right for a flat quad and is precisely the shape ADR 0040 replaces for a
+     * drape, four corners on the terrain and a chord between them.
+     */
+    @Test
+    fun aDrapesGranularityFollowsTheGroundsNodeSpacing() {
+        val geometry = tiltedGeometry()
+        val camera = mercatorCamera(zoom = 12.0)
+        assertEquals(1, geometryCellsPerSide(geometry, camera), "a Mercator plane asks for one cell")
+
+        // The quad spans 0.0016 degrees of longitude, which at LOD 12's 512-pixel tiles is
+        // 0.0016 / (360 / 4096) * 512 = 9.3 logical pixels; against a ground at 64 cells a tile -- one
+        // node every 8 pixels -- that is two cells, rounded up to the grid's power of two.
+        assertEquals(
+            2,
+            drapeCellsPerSide(
+                geometry = geometry,
+                worldSizeLogicalPixels = camera.worldSizeLogicalPixels,
+                groundCellsPerTileSide = 64,
+                selectedLod = 12,
+            ),
+        )
+        // A coarser ground asks for fewer, so the answer follows the ground rather than the quad.
+        assertEquals(
+            1,
+            drapeCellsPerSide(
+                geometry = geometry,
+                worldSizeLogicalPixels = camera.worldSizeLogicalPixels,
+                groundCellsPerTileSide = 4,
+                selectedLod = 12,
+            ),
+        )
+        // And it is capped by the grid's own 16-bit index ceiling rather than by the arithmetic.
+        assertEquals(
+            MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE,
+            drapeCellsPerSide(
+                geometry = bandGeometry(),
+                worldSizeLogicalPixels = camera.worldSizeLogicalPixels,
+                groundCellsPerTileSide = 64,
+                selectedLod = 12,
+            ),
+        )
+    }
 }
 
 // --- fixtures and measurements -------------------------------------------------------------------
@@ -377,6 +560,36 @@ private fun bandGeometry(): Geometry = Geometry(
  * at zoom 4 measures a survivor set rather than a grid.
  */
 private const val WHOLE_GEOMETRY_IN_VIEW_ZOOM: Double = 2.5
+
+/**
+ * 100 kilometres, which at zoom 3 is about ten logical pixels: big enough that the convexity of
+ * `1 / cos(latitude)` across [drapeBandGeometry] is several pixels rather than a rounding, and never
+ * zero, where a drape and its absence are the same grid.
+ */
+private const val DRAPE_RISE_METRES: Double = 100_000.0
+
+/**
+ * Measured at 4.9 logical pixels between the drape's own per-node rise and the lerp of its corners'
+ * across [drapeBandGeometry] at zoom 3; two is under half of it.
+ */
+private const val MINIMUM_CONVEXITY_LOGICAL_PIXELS: Double = 2.0
+
+/** A floor on the globe fixture's own sensitivity: 100 km is about 12 logical pixels at zoom 2.5. */
+private const val MINIMUM_GLOBE_RISE_LOGICAL_PIXELS: Double = 4.0
+
+/**
+ * A band from latitude 70 to latitude 10, deliberately **not** symmetric about the equator.
+ *
+ * [bandGeometry] runs from +60 to -60, whose middle node sits at latitude 0 -- where `1 / cos` is
+ * exactly 1 and whose two corners carry the identical scale, so a lerp of the corners is a constant
+ * and the case would be reading one symmetry point against another. This band's two corners scale by
+ * 2.92 and 1.02 and its interior sits at none of the three.
+ */
+private fun drapeBandGeometry(): Geometry = Geometry(
+    topLeft = Vector3(70.0, -40.0, 0.0),
+    bottomRight = Vector3(10.0, 40.0, 0.0),
+    shaderPair = minimalGeometryShaderPair(),
+)
 
 private fun minimalGeometryShaderPair(): ShaderPair = ShaderPair(
     vertexSource = "#version 300 es\nvoid main() {\n    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n}\n",

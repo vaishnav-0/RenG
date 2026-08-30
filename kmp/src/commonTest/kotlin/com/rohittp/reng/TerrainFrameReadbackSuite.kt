@@ -12,6 +12,7 @@ import com.rohittp.reng.internal.gl.GL_RGBA8
 import com.rohittp.reng.internal.gl.GL_SCISSOR_TEST
 import com.rohittp.reng.internal.gl.GL_TEXTURE_2D
 import com.rohittp.reng.internal.gl.GL_UNSIGNED_BYTE
+import com.rohittp.reng.internal.gl.GROUND_DRAPE_LIFT_METRES
 import com.rohittp.reng.internal.gl.GlBinding
 import com.rohittp.reng.internal.gl.RenderContextProbe
 import com.rohittp.reng.internal.gl.ShaderDialect
@@ -21,6 +22,7 @@ import com.rohittp.reng.internal.projection.resolveGlobeCamera
 import kotlin.io.encoding.Base64
 import kotlin.math.abs
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
@@ -181,6 +183,21 @@ internal fun runTerrainFrameReadbackSuite(
         binding,
         probe,
     )
+    // A third renderer because a style's exaggeration is a property of the style rather than of a
+    // frame, and tasks 16 and 17's cases need a *plausible* one: the coplanar fight is a fight about
+    // metres against a depth budget that scales with zoom, and 500x relief at zoom 4 puts a drape's
+    // four-metre lift eight ten-thousandths of a logical pixel above the ground, which measures
+    // nothing at all. See [FINE_TERRAIN_STYLE_JSON].
+    val fineRenderer = createRenderer(
+        RendererConfiguration(
+            outputPixelSize = OutputPixelSize(TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS),
+            transport = transport,
+            store = TerrainFrameStore(),
+            basemapStyle = ResourceLocator(FINE_TERRAIN_STYLE_URL),
+        ),
+        binding,
+        probe,
+    )
     val failures = CollectedTerrainFrameFailures()
     try {
         val fixture = TerrainFrameFixture(
@@ -188,8 +205,10 @@ internal fun runTerrainFrameReadbackSuite(
             transport = transport,
             terrainRenderer = terrainRenderer,
             plainRenderer = plainRenderer,
+            fineRenderer = fineRenderer,
             terrainTarget = terrainRenderer.mintRenderTarget(FramebufferName(target.toUInt())),
             plainTarget = plainRenderer.mintRenderTarget(FramebufferName(target.toUInt())),
+            fineTarget = fineRenderer.mintRenderTarget(FramebufferName(target.toUInt())),
             targetFramebuffer = target,
         )
         failures.run("adjacent displaced tiles leave no crack") {
@@ -204,7 +223,23 @@ internal fun runTerrainFrameReadbackSuite(
         failures.run("the two projections displace the same ground") {
             assertTheTwoProjectionsDisplaceTheSameGroundAndPartByCurvature(fixture)
         }
+        failures.run("a ground-relative placement rides the surface") {
+            assertAGroundRelativePlacementRidesTheSurfaceInBothProjections(fixture)
+        }
+        failures.run("a draped geometry follows the ridge") {
+            assertADrapedGeometryFollowsTheRidgeRatherThanCuttingThroughIt(fixture)
+        }
+        failures.run("the coplanar drape survives the ground it rides") {
+            assertTheCoplanarDrapeSurvivesTheGroundItRides(fixture)
+        }
+        failures.run("a globe geometry drapes too") {
+            assertAGlobeGeometryDrapesToo(fixture)
+        }
+        failures.run("no terrain leaves ground-relative content alone") {
+            assertWithoutTerrainAGroundRelativeAltitudeIsAbsolute(fixture)
+        }
     } finally {
+        fineRenderer.close()
         plainRenderer.close()
         terrainRenderer.close()
         binding.deleteFramebuffers(1, intArrayOf(target))
@@ -243,7 +278,7 @@ private class CollectedTerrainFrameFailures {
     }
 }
 
-private const val TERRAIN_FRAME_CASE_COUNT: Int = 4
+private const val TERRAIN_FRAME_CASE_COUNT: Int = 9
 
 // ---- case 1: the seam ---------------------------------------------------------------------------
 
@@ -678,6 +713,23 @@ private enum class DemRelief {
     SUMMIT,
 
     /**
+     * A north-south triangular ridge **inside** every tile: [DEM_RIDGE_PNG]'s
+     * `1000 * (1 - |2 * (x + 0.5) / 64 - 1|)` metres, peaking at the tile's own centre column and
+     * falling to 15.6 m at both edges.
+     *
+     * **Relief within a tile rather than between tiles**, which is what tasks 16 and 17 need and what
+     * no relief here had: a ground cell's four corners are four *different* heights, so the surface a
+     * CPU lookup has to reconstruct is genuinely a surface, and a flat quad laid across it is
+     * genuinely cutting through a ridge. [SUMMIT] and [ALTERNATING_BY_TILE_COLUMN] are uniform inside
+     * a tile, which is exactly the symmetry point at which reading a cell's corners and reading the
+     * texel under the point are the same answer.
+     *
+     * It is periodic with one tile and its two edge columns agree, so the padded ring joins one tile
+     * to the next at one height and the ridge repeats seamlessly across the frame.
+     */
+    RIDGE,
+
+    /**
      * Sea level on even tile columns, [SUMMIT_METRES] on odd ones, so that **every** vertical tile
      * boundary in the frame is a step the padded ring has to close.
      */
@@ -701,30 +753,499 @@ private enum class DemRelief {
     fun demFor(lod: Int, tileX: Int): ByteArray = when (this) {
         SEA_LEVEL -> DEM_SEA_LEVEL_PNG
         SUMMIT -> DEM_SUMMIT_PNG
+        RIDGE -> DEM_RIDGE_PNG
         ALTERNATING_BY_TILE_COLUMN -> if (tileX % 2 == 0) DEM_SEA_LEVEL_PNG else DEM_SUMMIT_PNG
         EASTERN_HALF -> if (tileX * 2 >= (1 shl lod)) DEM_SUMMIT_PNG else DEM_SEA_LEVEL_PNG
     }
 }
+
+// ---- case 5: a ground-relative placement rides the drawn surface ---------------------------------
+
+/**
+ * **ADR 0040's `GROUND_RELATIVE`, in pixels, through the public API, in both projections.** A sticker
+ * declaring altitude zero over a plateau stands *on* the plateau; the same sticker declaring
+ * `ABSOLUTE` zero stands at sea level and the terrain buries it.
+ *
+ * ## The known height is an identity rather than a measurement
+ *
+ * The fixture's DEM is uniform 1,000 m and the style exaggerates by 500, so the surface the ground
+ * draws is **exactly** [DRAWN_SUMMIT_METRES] everywhere -- a terminating value both the shader and the
+ * CPU lookup reach without rounding. So "sits on the surface at a known height" is asserted as
+ * `GROUND_RELATIVE 0` reading back **byte for byte** identical to `ABSOLUTE 500000`, which is a far
+ * stronger statement than a pixel-position measurement and needs no budget.
+ *
+ * ## What each of the three frames stops the others being satisfied by
+ *
+ * The sea-level frame is the sensitivity control: without it, a build that resolved `GROUND_RELATIVE`
+ * as `ABSOLUTE` -- ADR 0040's own degradation, and the single most likely way this can be wrong --
+ * would satisfy the identity by making all three frames the same. The painted-pixel floor is the
+ * vacuity control: three frames in which the sticker never drew are also byte-identical.
+ *
+ * **A uniform DEM says nothing about the reconstruction rule and is not asked to.** Whether the lookup
+ * reads a cell's corners or the texel underneath is invisible on a plateau -- that is
+ * `GroundSurfaceTest`'s subject, and the relief cases below are where it reaches a pixel.
+ */
+private fun assertAGroundRelativePlacementRidesTheSurfaceInBothProjections(fixture: TerrainFrameFixture) {
+    ProjectionMode.entries.forEach { mode ->
+        val camera = if (mode == ProjectionMode.MERCATOR) ANCHOR_CAMERA else LIMB_CAMERA
+        val atSeaLevel = fixture.renderTerrain(
+            camera, mode, DemRelief.SUMMIT,
+            stickers = listOf(anchorSticker(camera, AltitudeMode.ABSOLUTE, 0.0)),
+        )
+        val onTheGround = fixture.renderTerrain(
+            camera, mode, DemRelief.SUMMIT,
+            stickers = listOf(anchorSticker(camera, AltitudeMode.GROUND_RELATIVE, 0.0)),
+        )
+        val atTheKnownHeight = fixture.renderTerrain(
+            camera, mode, DemRelief.SUMMIT,
+            stickers = listOf(anchorSticker(camera, AltitudeMode.ABSOLUTE, DRAWN_SUMMIT_METRES)),
+        )
+
+        val riding = onTheGround.pixelsOf(TerrainInk.STICKER)
+        val buried = atSeaLevel.pixelsOf(TerrainInk.STICKER)
+        println(
+            "RenG terrain frame readback: $mode ground-relative sticker paints $riding pixels, " +
+                "the same sticker at absolute zero paints $buried, and it differs from the " +
+                "sea-level frame over ${onTheGround.differenceFrom(atSeaLevel)} pixels",
+        )
+
+        assertTrue(
+            riding >= MINIMUM_STICKER_PIXELS,
+            "a $mode sticker riding the terrain must actually draw; it painted $riding pixels",
+        )
+        assertTrue(
+            buried <= MAXIMUM_BURIED_STICKER_PIXELS,
+            "a $mode sticker at absolute zero stands under half a million metres of terrain and " +
+                "must be occluded by it; it painted $buried pixels",
+        )
+        assertEquals(
+            0,
+            onTheGround.differenceFrom(atTheKnownHeight),
+            "$mode: a ground-relative zero over a $DRAWN_SUMMIT_METRES m surface must read back " +
+                "byte for byte as an absolute $DRAWN_SUMMIT_METRES",
+        )
+        assertTrue(
+            onTheGround.differenceFrom(atSeaLevel) >= MINIMUM_STICKER_PIXELS,
+            "$mode: resolving GROUND_RELATIVE as ABSOLUTE would make these two frames one",
+        )
+    }
+}
+
+// ---- case 6: a draped geometry follows the relief ------------------------------------------------
+
+/**
+ * **A `GROUND_RELATIVE` `Geometry` drapes across every subdivided vertex, not just its corners.**
+ *
+ * ADR 0040 says that in as many words, and the difference between draping and not is the difference
+ * between a quad over a ridge and a quad through one. The fixture's ridge stands 220 logical pixels
+ * at its summit and 115 at the quad's edges, so a flat quad at the ridge's own mean height
+ * ([MEAN_DRAWN_RIDGE_METRES]) is above the terrain on the flanks and below it across the middle --
+ * which is exactly "cutting through", and is what the ground's depth writes (ADR 0039) make visible.
+ *
+ * Three frames, and each of the other two is why the first means something:
+ *
+ * - **draped** must paint essentially its whole footprint, because it is *on* the surface everywhere.
+ * - **flat at the mean** must paint substantially less, because the ridge buries its middle. A build
+ *   that ignored the altitude mode entirely would draw this frame for the draped one too.
+ * - **flat at zero** must paint almost nothing, because the whole ridge stands over it. Without it,
+ *   "the ridge buries things" would be an assumption rather than a measurement, and a build whose
+ *   ground wrote no depth at all would pass the first two.
+ */
+private fun assertADrapedGeometryFollowsTheRidgeRatherThanCuttingThroughIt(fixture: TerrainFrameFixture) {
+    val draped = fixture.renderFine(
+        RIDGE_CAMERA, ProjectionMode.MERCATOR, DemRelief.RIDGE,
+        geometries = listOf(ridgeGeometry(AltitudeMode.GROUND_RELATIVE, 0.0)),
+    )
+    val throughTheRidge = fixture.renderFine(
+        RIDGE_CAMERA, ProjectionMode.MERCATOR, DemRelief.RIDGE,
+        geometries = listOf(ridgeGeometry(AltitudeMode.ABSOLUTE, MEAN_DRAWN_RIDGE_METRES)),
+    )
+    val underTheRidge = fixture.renderFine(
+        RIDGE_CAMERA, ProjectionMode.MERCATOR, DemRelief.RIDGE,
+        geometries = listOf(ridgeGeometry(AltitudeMode.ABSOLUTE, 0.0)),
+    )
+
+    val drapedInk = draped.pixelsOf(TerrainInk.DRAPE)
+    val cuttingInk = throughTheRidge.pixelsOf(TerrainInk.DRAPE)
+    val buriedInk = underTheRidge.pixelsOf(TerrainInk.DRAPE)
+    println(
+        "RenG terrain frame readback: draped geometry paints $drapedInk pixels, the same quad flat " +
+            "at ${MEAN_DRAWN_RIDGE_METRES.toInt()} m paints $cuttingInk, and flat at sea level $buriedInk",
+    )
+
+    assertTrue(
+        drapedInk >= MINIMUM_DRAPED_PIXELS,
+        "a draped geometry must cover its footprint; it painted $drapedInk pixels",
+    )
+    assertTrue(
+        cuttingInk <= drapedInk * MAXIMUM_CUT_QUAD_PERCENT / 100,
+        "a flat quad at the ridge's mean height must be cut by the ridge: it painted $cuttingInk " +
+            "against the drape's $drapedInk",
+    )
+    assertTrue(
+        cuttingInk >= MINIMUM_CUT_QUAD_PIXELS,
+        "the flat quad must still draw where the terrain is below it, or the comparison above is " +
+            "satisfied by a quad that never drew; it painted $cuttingInk pixels",
+    )
+    assertTrue(
+        buriedInk <= MAXIMUM_BURIED_QUAD_PIXELS,
+        "a flat quad at sea level stands under the whole ridge and must be buried by it; it " +
+            "painted $buriedInk pixels",
+    )
+}
+
+// ---- case 7: the coplanar drape, counted the way the spike counted it ----------------------------
+
+/**
+ * **The one genuinely coplanar case in RenG, and the gate on `GROUND_DRAPE_LIFT_METRES`.**
+ *
+ * A `GROUND_RELATIVE` `Geometry` at altitude zero is a second copy of the terrain surface drawn
+ * through a different pipeline against a ground that now writes depth (ADR 0039), which is ADR 0027's
+ * original defect in new material: half the quad deleted, and redealt every frame as the camera moves.
+ * Task 14's spike measured every way out of it and ADR 0039's 2026-08-30 erratum records the verdict
+ * -- a shared texel rule fixes the wrong term, drawing the drape first keeps **zero** pixels, and a
+ * lift works.
+ *
+ * ## It is counted the spike's way, because the spike's way is what caught its own fixture being wrong
+ *
+ * **Contested** is the set of pixels the content paints when it wins *and* the ground paints when the
+ * content is absent; **survivors** are the contested pixels the coplanar drape still holds. Counting
+ * only "how much magenta is there" would be satisfied by a drape that had drifted off the ground
+ * altogether, and counting only "the drape covers the ground" would be satisfied by a drape that won
+ * because it was nowhere near it.
+ *
+ * The raised frame supplies the contested set at [DRAPE_CONTROL_METRES], which is the spike's own
+ * positive control at this fixture's scale: high enough to leave the fight outright, low enough that
+ * its footprint is the drape's to within a pixel of fringe. The sunk frame is the negative control and
+ * the reason a survivor count means anything at all -- if the ground could not delete this quad, the
+ * survivor count would be 100 per cent against every build, including one with no lift and no lookup.
+ *
+ * ## The number
+ *
+ * The spike measured **102,370 of 102,400** for a four-metre lift on the offset lattice at zoom 13,
+ * pitch 0, on `Apple M3 Max`. [MINIMUM_SURVIVOR_PERCENT] is stated against that rather than against
+ * this fixture's own reading, and the measured reading is printed beside it every run.
+ *
+ * ## What this case cannot see, measured rather than assumed
+ *
+ * **The drape's triangulation.** [DEM_RIDGE_PNG]'s relief varies with longitude alone, so inside any
+ * ground cell the north-west and south-west corners carry one height and the north-east and south-east
+ * corners carry another -- and a cell whose corners satisfy `NW + SE = NE + SW` describes the *same*
+ * surface under either diagonal. Reverting the drape to the geometry grid's historical fold measured
+ * **579,744 against 579,754** here, which is nothing. `GeometryGridTest` is where that claim lives, as
+ * an agreement with `groundGridIndices` rather than as a pixel count.
+ *
+ * **One camera.** The spike swept five pitch-and-bearing pairs and found the residual varying by a
+ * factor of two across them; this asserts pitch 0, which is where its own lift ladder was measured.
+ */
+private fun assertTheCoplanarDrapeSurvivesTheGroundItRides(fixture: TerrainFrameFixture) {
+    val groundOnly = fixture.renderFine(RIDGE_CAMERA, ProjectionMode.MERCATOR, DemRelief.RIDGE)
+    val raised = fixture.renderFine(
+        RIDGE_CAMERA, ProjectionMode.MERCATOR, DemRelief.RIDGE,
+        geometries = listOf(ridgeGeometry(AltitudeMode.GROUND_RELATIVE, DRAPE_CONTROL_METRES)),
+    )
+    val coplanar = fixture.renderFine(
+        RIDGE_CAMERA, ProjectionMode.MERCATOR, DemRelief.RIDGE,
+        geometries = listOf(ridgeGeometry(AltitudeMode.GROUND_RELATIVE, 0.0)),
+    )
+    val sunk = fixture.renderFine(
+        RIDGE_CAMERA, ProjectionMode.MERCATOR, DemRelief.RIDGE,
+        geometries = listOf(ridgeGeometry(AltitudeMode.GROUND_RELATIVE, -DRAPE_CONTROL_METRES)),
+    )
+
+    val content = raised.maskOf(TerrainInk.DRAPE)
+    val ground = groundOnly.groundMask()
+    var contested = 0
+    var survivors = 0
+    var sunkSurvivors = 0
+    for (index in content.indices) {
+        if (!content[index] || !ground[index]) continue
+        contested += 1
+        if (coplanar.inkAtIndex(index) == TerrainInk.DRAPE) survivors += 1
+        if (sunk.inkAtIndex(index) == TerrainInk.DRAPE) sunkSurvivors += 1
+    }
+    println(
+        "RenG coplanar drape readback: survivors $survivors / $contested contested " +
+            "(sunk control $sunkSurvivors), lift ${GROUND_DRAPE_LIFT_METRES.toInt()} m",
+    )
+
+    assertTrue(
+        contested >= MINIMUM_CONTESTED_PIXELS,
+        "the fixture must put the drape and the ground over the same $MINIMUM_CONTESTED_PIXELS " +
+            "pixels before a survivor count means anything; it contested $contested",
+    )
+    assertTrue(
+        sunkSurvivors * 100 <= contested * MAXIMUM_SUNK_SURVIVOR_PERCENT,
+        "the ground must be able to delete this quad, or every build survives: a quad sunk " +
+            "${DRAPE_CONTROL_METRES.toInt()} m kept $sunkSurvivors of $contested",
+    )
+    assertTrue(
+        survivors * 100 >= contested * MINIMUM_SURVIVOR_PERCENT,
+        "the coplanar drape kept $survivors of $contested contested pixels, under the " +
+            "$MINIMUM_SURVIVOR_PERCENT per cent the spike's four-metre lift measured",
+    )
+}
+
+// ---- case 8: no terrain, no change ---------------------------------------------------------------
+
+/**
+ * **ADR 0040's promise that nothing already shipped moves**, at the level a consumer meets it and in
+ * both projections: against a style declaring no terrain, a `GROUND_RELATIVE` sticker and a
+ * `GROUND_RELATIVE` `Geometry` must read back byte for byte as `ABSOLUTE` ones.
+ *
+ * `runGeometrySubdivisionReadbackSuite` already makes this claim for a `Geometry` against a hand-built
+ * grid; this makes it for a whole frame through `createRenderer`, and adds the placement half, which
+ * nothing else covers. It is also the case that fails if the drape's own triangulation ever escapes
+ * the drape: the geometry grid folds a cell on the ground's diagonal only when there is a drape, and
+ * a leak would move pixels here without moving a single altitude.
+ *
+ * The raised frame is the sensitivity control on the same terms as everywhere else in this file: two
+ * frames agree trivially if the instrument cannot see altitude at all.
+ */
+private fun assertWithoutTerrainAGroundRelativeAltitudeIsAbsolute(fixture: TerrainFrameFixture) {
+    ProjectionMode.entries.forEach { mode ->
+        val camera = if (mode == ProjectionMode.MERCATOR) ANCHOR_CAMERA else LIMB_CAMERA
+        val absolute = fixture.renderPlain(
+            camera, mode,
+            stickers = listOf(anchorSticker(camera, AltitudeMode.ABSOLUTE, 0.0)),
+            geometries = listOf(plainGeometry(camera, AltitudeMode.ABSOLUTE, 0.0)),
+        )
+        val groundRelative = fixture.renderPlain(
+            camera, mode,
+            stickers = listOf(anchorSticker(camera, AltitudeMode.GROUND_RELATIVE, 0.0)),
+            geometries = listOf(plainGeometry(camera, AltitudeMode.GROUND_RELATIVE, 0.0)),
+        )
+        val raised = fixture.renderPlain(
+            camera, mode,
+            stickers = listOf(anchorSticker(camera, AltitudeMode.ABSOLUTE, PLAIN_SENSITIVITY_METRES)),
+            geometries = listOf(plainGeometry(camera, AltitudeMode.ABSOLUTE, PLAIN_SENSITIVITY_METRES)),
+        )
+
+        val stickerInk = absolute.pixelsOf(TerrainInk.STICKER)
+        val drapeInk = absolute.pixelsOf(TerrainInk.DRAPE)
+        println(
+            "RenG terrain frame readback: $mode terrainless frame paints $stickerInk sticker and " +
+                "$drapeInk geometry pixels; raising both moves " +
+                "${absolute.differenceFrom(raised)} pixels",
+        )
+        assertTrue(
+            stickerInk >= MINIMUM_STICKER_PIXELS && drapeInk >= MINIMUM_PLAIN_GEOMETRY_PIXELS,
+            "$mode: the terrainless frame must draw both things, or byte identity is vacuous; it " +
+                "painted $stickerInk sticker and $drapeInk geometry pixels",
+        )
+        assertEquals(
+            0,
+            absolute.differenceFrom(groundRelative),
+            "$mode: with no terrain a ground-relative altitude means an absolute one (ADR 0040), so " +
+                "these two frames must be byte-identical",
+        )
+        assertTrue(
+            absolute.differenceFrom(raised) >= MINIMUM_PLAIN_SENSITIVITY_PIXELS,
+            "$mode: this camera must be able to see an altitude at all, or the identity above is " +
+                "satisfied by an instrument that is blind to it",
+        )
+    }
+}
+
+// ---- case 9: the globe drapes too ----------------------------------------------------------------
+
+/**
+ * **Task 17's "in both projections", end to end.** Every other drape claim in this suite is measured
+ * under Mercator, because that is the only projection task 14's spike ran and its own closing section
+ * says so in as many words: "the globe ground displaces radially through `GlobeGroundPipeline`, and a
+ * globe `Geometry` is already a CPU-projected grid with a third transform factor of its own, so
+ * nothing here transfers to `GLOBE` without being run again."
+ *
+ * So this case claims the two things a Mercator-only suite would otherwise leave to a code reading:
+ * that a globe frame reaches the drape at all, and that what it reaches follows the relief rather than
+ * a frame-wide constant. It is the globe's [assertADrapedGeometryFollowsTheRidgeRatherThanCuttingThroughIt].
+ *
+ * ## It deliberately does not measure the coplanar case, and that is a finding rather than an omission
+ *
+ * A first version drew the globe drape at altitude zero and measured **2,295 surviving pixels on
+ * `Apple M3 Max` against 5,348 on `Apple Software Renderer`** out of the same footprint -- a z-fight
+ * resolved differently by two rasterisers, which is ADR 0027's defect exactly. The arithmetic is not
+ * mysterious: [GROUND_DRAPE_LIFT_METRES] is four **metres**, and at zoom 2 four metres is 0.0002 of a
+ * logical pixel, so the lift buys nothing there. A metre lift is a fixed height against a depth budget
+ * that scales with zoom, which the spike states as the constant's own known weakness; at zoom 2 that
+ * weakness is total. This case therefore rides the surface at [GLOBE_DRAPE_CLEARANCE_METRES] -- a real
+ * offset a consumer might declare -- and the coplanar globe drape is recorded as owed rather than
+ * half-measured.
+ *
+ * The third frame declares **the same number** as `ABSOLUTE`, which is the sharpest form the contrast
+ * takes: one quad 100 km above the terrain and one 100 km above the ellipsoid, from two plans that
+ * differ by an enum. The terrain under this footprint runs 36 to 214 km, so the absolute one is buried
+ * over most of it and the drape over none.
+ */
+private fun assertAGlobeGeometryDrapesToo(fixture: TerrainFrameFixture) {
+    val draped = fixture.renderTerrain(
+        LIMB_CAMERA, ProjectionMode.GLOBE, DemRelief.RIDGE,
+        geometries = listOf(
+            plainGeometry(LIMB_CAMERA, AltitudeMode.GROUND_RELATIVE, GLOBE_DRAPE_CLEARANCE_METRES),
+        ),
+    )
+    val atSeaLevel = fixture.renderTerrain(
+        LIMB_CAMERA, ProjectionMode.GLOBE, DemRelief.RIDGE,
+        geometries = listOf(plainGeometry(LIMB_CAMERA, AltitudeMode.ABSOLUTE, 0.0)),
+    )
+    val atTheSameNumber = fixture.renderTerrain(
+        LIMB_CAMERA, ProjectionMode.GLOBE, DemRelief.RIDGE,
+        geometries = listOf(
+            plainGeometry(LIMB_CAMERA, AltitudeMode.ABSOLUTE, GLOBE_DRAPE_CLEARANCE_METRES),
+        ),
+    )
+
+    val drapedInk = draped.pixelsOf(TerrainInk.DRAPE)
+    val buriedInk = atSeaLevel.pixelsOf(TerrainInk.DRAPE)
+    val flatInk = atTheSameNumber.pixelsOf(TerrainInk.DRAPE)
+    println(
+        "RenG terrain frame readback: GLOBE draped geometry paints $drapedInk pixels, at sea level " +
+            "$buriedInk, and at the same number absolute $flatInk",
+    )
+
+    assertTrue(
+        drapedInk >= MINIMUM_GLOBE_DRAPED_PIXELS,
+        "a globe drape must ride out of the terrain and draw; it painted $drapedInk pixels",
+    )
+    assertTrue(
+        buriedInk <= MAXIMUM_BURIED_QUAD_PIXELS,
+        "a globe quad at sea level stands under the whole ridge; it painted $buriedInk pixels",
+    )
+    assertTrue(
+        flatInk * 100 <= drapedInk * MAXIMUM_CUT_QUAD_PERCENT,
+        "the same number declared ABSOLUTE is a fixed height that the ridge stands over across most " +
+            "of this quad: it painted $flatInk against the drape's $drapedInk",
+    )
+}
+
+// ---- the content cases' own fixtures ------------------------------------------------------------
+
+/**
+ * A 16 x 16 white sticker at [camera]'s own anchor, map-anchored with a screen scale of two so its
+ * drawn size is a fixed 32 x 32 logical pixels whatever the altitude does to its depth.
+ *
+ * **Screen scale rather than map scale**, so that a raised sticker moves and does not also grow: a
+ * map-scaled billboard's size follows the camera distance, and a pixel count that changed with the
+ * altitude would confuse "it moved" with "it got bigger". **Two rather than one** because a scale of
+ * exactly 1 is a symmetry point at which an applied scale and a dropped one are the same picture.
+ */
+private fun anchorSticker(camera: Camera, altitudeMode: AltitudeMode, altitudeMetres: Double): Sticker =
+    Sticker(
+        placement = Placement(
+            positionMode = AnchoringMode.MAP,
+            position = Vector3(camera.latitude, camera.unwrappedLongitude, altitudeMetres),
+            rotationMode = AnchoringMode.SCREEN,
+            rotation = Vector3(0.0, 0.0, 0.0),
+            scaleMode = AnchoringMode.SCREEN,
+            scale = 2.0,
+            altitudeMode = altitudeMode,
+        ),
+        image = ResourceLocator(TERRAIN_STICKER_URL),
+    )
+
+/**
+ * A quad two LOD-13 tiles a side, centred on [RIDGE_CAMERA] and running off every edge of a 768-pixel
+ * frame -- see [RIDGE_QUAD_HALF_LONGITUDE_DEGREES] for why the overhang is load bearing.
+ *
+ * Its latitude span is the longitude span times `cos(45.4755)`, so it is square on screen. It covers
+ * two whole ridge periods, which is what makes a flat quad at the mean height half above the terrain
+ * and half below it.
+ */
+private fun ridgeGeometry(altitudeMode: AltitudeMode, altitudeMetres: Double): Geometry {
+    val latitude = RIDGE_CAMERA.latitude + RIDGE_QUAD_LATITUDE_OFFSET_DEGREES
+    val longitude = RIDGE_CAMERA.unwrappedLongitude + RIDGE_QUAD_LONGITUDE_OFFSET_DEGREES
+    return Geometry(
+        topLeft = Vector3(
+            latitude + RIDGE_QUAD_HALF_LATITUDE_DEGREES,
+            longitude - RIDGE_QUAD_HALF_LONGITUDE_DEGREES,
+            altitudeMetres,
+        ),
+        bottomRight = Vector3(
+            latitude - RIDGE_QUAD_HALF_LATITUDE_DEGREES,
+            longitude + RIDGE_QUAD_HALF_LONGITUDE_DEGREES,
+            altitudeMetres,
+        ),
+        shaderPair = DRAPE_SHADER_PAIR,
+        altitudeMode = altitudeMode,
+    )
+}
+
+/** [ridgeGeometry]'s shape at the low-zoom cameras, where a tile-sized quad would be a few pixels. */
+private fun plainGeometry(camera: Camera, altitudeMode: AltitudeMode, altitudeMetres: Double): Geometry =
+    Geometry(
+        topLeft = Vector3(camera.latitude + 5.0, camera.unwrappedLongitude - 8.0, altitudeMetres),
+        bottomRight = Vector3(camera.latitude - 5.0, camera.unwrappedLongitude + 8.0, altitudeMetres),
+        shaderPair = DRAPE_SHADER_PAIR,
+        altitudeMode = altitudeMode,
+    )
+
+/**
+ * A consumer shader pair painting one flat colour, which is what makes a pixel count a pixel count.
+ *
+ * `runGeometrySubdivisionReadbackSuite`'s probe paints a gradient because it is measuring *where* the
+ * interpolation lands; every claim here is "did this quad hold this pixel", so a single ink that no
+ * tile carries is the instrument, and a gradient would put half the quad into `OTHER`.
+ */
+private val DRAPE_SHADER_PAIR: ShaderPair = ShaderPair(
+    vertexSource = "#version 300 es\n" +
+        "precision highp float;\n" +
+        "in vec3 aPosition;\n" +
+        "uniform mat4 uModelViewProjection;\n" +
+        "void main() {\n" +
+        "    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n" +
+        "}\n",
+    fragmentSource = "#version 300 es\n" +
+        "precision highp float;\n" +
+        "out vec4 rengDrapeOut;\n" +
+        "void main() {\n" +
+        "    rengDrapeOut = vec4(1.0, 0.0, 1.0, 1.0);\n" +
+        "}\n",
+)
 
 private class TerrainFrameFixture(
     private val binding: GlBinding,
     private val transport: TerrainFrameTransport,
     private val terrainRenderer: Renderer,
     private val plainRenderer: Renderer,
+    private val fineRenderer: Renderer,
     private val terrainTarget: RenderTarget,
     private val plainTarget: RenderTarget,
+    private val fineTarget: RenderTarget,
     private val targetFramebuffer: Int,
 ) {
     private var frameIndex: Long = 0L
 
-    fun renderTerrain(camera: Camera, mode: ProjectionMode, relief: DemRelief): TerrainFrame {
+    fun renderTerrain(
+        camera: Camera,
+        mode: ProjectionMode,
+        relief: DemRelief,
+        stickers: List<Sticker> = emptyList(),
+        geometries: List<Geometry> = emptyList(),
+    ): TerrainFrame {
         transport.relief = relief
-        return render(terrainRenderer, terrainTarget, camera, mode)
+        return render(terrainRenderer, terrainTarget, camera, mode, stickers, geometries)
     }
 
-    fun renderPlain(camera: Camera, mode: ProjectionMode): TerrainFrame {
+    /** [renderTerrain] against the `exaggeration: 1.5` style — see [FINE_TERRAIN_STYLE_JSON]. */
+    fun renderFine(
+        camera: Camera,
+        mode: ProjectionMode,
+        relief: DemRelief,
+        stickers: List<Sticker> = emptyList(),
+        geometries: List<Geometry> = emptyList(),
+    ): TerrainFrame {
+        transport.relief = relief
+        return render(fineRenderer, fineTarget, camera, mode, stickers, geometries)
+    }
+
+    fun renderPlain(
+        camera: Camera,
+        mode: ProjectionMode,
+        stickers: List<Sticker> = emptyList(),
+        geometries: List<Geometry> = emptyList(),
+    ): TerrainFrame {
         transport.relief = DemRelief.SEA_LEVEL
-        return render(plainRenderer, plainTarget, camera, mode)
+        return render(plainRenderer, plainTarget, camera, mode, stickers, geometries)
     }
 
     fun globeCamera(camera: Camera): ResolvedGlobeCamera =
@@ -740,6 +1261,8 @@ private class TerrainFrameFixture(
         renderTarget: RenderTarget,
         camera: Camera,
         mode: ProjectionMode,
+        stickers: List<Sticker> = emptyList(),
+        geometries: List<Geometry> = emptyList(),
     ): TerrainFrame {
         binding.bindFramebuffer(GL_DRAW_FRAMEBUFFER, targetFramebuffer)
         binding.disable(GL_SCISSOR_TEST)
@@ -757,6 +1280,8 @@ private class TerrainFrameFixture(
             camera = camera,
             projectionMode = mode,
             drawBasemap = true,
+            stickers = stickers,
+            geometries = geometries,
         )
         val frame = runBlocking { renderer.prepare(plan) }
         try {
@@ -779,7 +1304,7 @@ private class TerrainFrameFixture(
 }
 
 /** What a pixel of one of this suite's frames can be. */
-private enum class TerrainInk { CLEARED, EVEN_TILE, ODD_TILE, OTHER }
+private enum class TerrainInk { CLEARED, EVEN_TILE, ODD_TILE, STICKER, DRAPE, OTHER }
 
 /** One maximal run of one ink along a row. */
 private class InkRun(val ink: TerrainInk, val start: Int, val length: Int) {
@@ -792,14 +1317,42 @@ private class InkRun(val ink: TerrainInk, val start: Int, val length: Int) {
  * sign to get wrong.
  */
 private class TerrainFrame(val bytes: ByteArray) {
-    fun inkAt(column: Int, row: Int): TerrainInk {
-        val offset = (row * TERRAIN_FRAME_READBACK_PIXELS + column) * 4
+    fun inkAt(column: Int, row: Int): TerrainInk = inkAtIndex(row * TERRAIN_FRAME_READBACK_PIXELS + column)
+
+    fun inkAtIndex(index: Int): TerrainInk {
+        val offset = index * 4
         return when {
             isCloseTo(offset, CLEARED) -> TerrainInk.CLEARED
             isCloseTo(offset, EVEN_TILE) -> TerrainInk.EVEN_TILE
             isCloseTo(offset, ODD_TILE) -> TerrainInk.ODD_TILE
+            isCloseTo(offset, STICKER_INK) -> TerrainInk.STICKER
+            isCloseTo(offset, DRAPE_INK) -> TerrainInk.DRAPE
             else -> TerrainInk.OTHER
         }
+    }
+
+    /** How many pixels of the whole frame carry [ink]. */
+    fun pixelsOf(ink: TerrainInk): Int {
+        var count = 0
+        for (index in 0 until TERRAIN_FRAME_PIXEL_COUNT) {
+            if (inkAtIndex(index) == ink) count += 1
+        }
+        return count
+    }
+
+    /** Whether each pixel carries [ink], as a flat mask the survivor count intersects. */
+    fun maskOf(ink: TerrainInk): BooleanArray =
+        BooleanArray(TERRAIN_FRAME_PIXEL_COUNT) { inkAtIndex(it) == ink }
+
+    /**
+     * Whether each pixel carries a basemap tile, either colour.
+     *
+     * Two inks rather than one because the fixture's tiles alternate by column and the coplanar case's
+     * camera straddles a boundary; asking for one of them would silently halve the contested set.
+     */
+    fun groundMask(): BooleanArray = BooleanArray(TERRAIN_FRAME_PIXEL_COUNT) {
+        val ink = inkAtIndex(it)
+        ink == TerrainInk.EVEN_TILE || ink == TerrainInk.ODD_TILE
     }
 
     private fun isCloseTo(offset: Int, colour: IntArray): Boolean = (0..2).all {
@@ -954,6 +1507,15 @@ private const val TERRAIN_CHANNEL_TOLERANCE: Int = 8
  */
 private val CLEARED: IntArray = intArrayOf(0, 96, 32, 255)
 
+/**
+ * The ink of a `GROUND_RELATIVE` sticker: opaque white, which no tile, no background and no drape
+ * carries, so counting it is counting the sticker.
+ */
+private val STICKER_INK: IntArray = intArrayOf(255, 255, 255, 255)
+
+/** The ink a draped `Geometry`'s consumer shader pair paints, for the same reason. */
+private val DRAPE_INK: IntArray = intArrayOf(255, 0, 255, 255)
+
 /** The ink of a tile at an even `x`, which is where the fixture's sea level sits. */
 private val EVEN_TILE: IntArray = intArrayOf(240, 40, 40, 255)
 
@@ -1096,10 +1658,205 @@ private const val MINIMUM_CURVATURE_MARGIN_PIXELS: Int = 8
  */
 private const val MAXIMUM_RATIO_OVERSHOOT: Double = 1.4
 
+/**
+ * [SEAM_CAMERA] pitched 45 degrees, which is what turns a vertical rise into a screen movement.
+ *
+ * At pitch 0 a raised map anchor sits at the same screen position as an unraised one and differs only
+ * by perspective scale, so a sticker whose size is fixed in screen pixels would barely move -- the
+ * case would then rest entirely on the burial half and would pass against a build that resolved the
+ * altitude and then discarded it. Pitch 45 moves it about a hundred pixels up the frame.
+ */
+private val ANCHOR_CAMERA: Camera = Camera(
+    latitude = SEAM_CAMERA.latitude,
+    unwrappedLongitude = SEAM_CAMERA.unwrappedLongitude,
+    zoom = SEAM_ZOOM,
+    bearing = 0.0,
+    pitch = 45.0,
+)
+
+/**
+ * [SUMMIT_METRES] against the terrain style's `exaggeration` of 500: the height the ground actually
+ * draws, and therefore the `ABSOLUTE` altitude a `GROUND_RELATIVE` zero must be identical to.
+ *
+ * Written as the product rather than as `500000.0` so that changing either factor changes this, and
+ * exact in binary at every step -- 1,000 m is the Mapbox triple `(1, 173, 176)` on the nose and 500 is
+ * a whole number, so the shader and the CPU lookup reach the same `Double` with nothing to round.
+ */
+private const val DRAWN_SUMMIT_METRES: Double = SUMMIT_METRES * 500.0
+
+/**
+ * Zoom 13 at the centre of tile z13/4293/2931 -- 45.4755 N, 8.6792 E -- which is task 14's spike's own
+ * camera, so this suite's coplanar reading and the spike's table describe the same regime.
+ *
+ * **Latitude is deliberately not 0**, where Mercator's `1 / cos(latitude)` term is exactly 1 and a
+ * dropped latitude term is invisible; and the longitude puts the camera on [DEM_RIDGE_PNG]'s own
+ * summit column, so the quad below straddles the peak rather than a flank.
+ */
+private val RIDGE_CAMERA: Camera = Camera(
+    latitude = 45.4755,
+    unwrappedLongitude = 8.6792,
+    zoom = 13.0,
+    bearing = 0.0,
+    pitch = 0.0,
+)
+
+/**
+ * One whole LOD-13 tile of longitude, `360 / 8192`, so the quad spans **two** tiles -- 1,024 logical
+ * pixels across a 768-pixel frame, with 128 pixels of margin at each edge.
+ *
+ * **The margin is the measurement rather than decoration**, and it is what the first version of this
+ * fixture got wrong. The coplanar case's contested set comes from a *raised* control quad, and a quad
+ * 50 m nearer the camera projects about one pixel larger at every edge; with a quad that ended inside
+ * the frame, that fringe put 1,875 pixels into the contested set that the coplanar drape never covered
+ * at all, and the survivor count read 97.99 per cent while measuring the control's own footprint.
+ * Running the quad off every edge of the frame puts the fringe outside it, which is exactly why the
+ * spike's own content filled its frame.
+ *
+ * At this span `drapeCellsPerSide` asks for 128 cells and gets them, so a drape node sits every 8
+ * logical pixels -- the ground's own spacing at 64 cells over a 512-pixel tile.
+ */
+private const val RIDGE_QUAD_HALF_LONGITUDE_DEGREES: Double = 360.0 / 8192.0
+
+/** The same span in latitude, narrowed by `cos(45.4755)` so the quad is roughly square on screen. */
+private const val RIDGE_QUAD_HALF_LATITUDE_DEGREES: Double = RIDGE_QUAD_HALF_LONGITUDE_DEGREES * 0.7009
+
+/**
+ * **Half a ground cell east and a third of one south, and this offset is the difference between the
+ * case measuring RenG and the case measuring itself.**
+ *
+ * Without it the quad's western edge lands on `x = 4292.5` at LOD 13, which is exactly a ground cell
+ * boundary at 64 cells a tile -- and with 128 cells over two tiles the drape's node spacing is the
+ * ground's, so **every drape node coincides with a ground node**. At a coincident node the ground's own
+ * surface and the texel underneath the point are the same number, so a lookup reading the texel
+ * instead of reconstructing the cell measured **589,761 of 589,761 survivors** and the case reported a
+ * clean pass against a build 47 metres wrong between nodes. That is this cycle's recurring shape -- a
+ * fixture at a symmetry point -- and it was found by mutation rather than by reading.
+ *
+ * It is also the *realistic* condition, which is why the fix is an offset rather than a different
+ * granularity: a `Geometry` carries a consumer's own two latitudes and two longitudes and lands
+ * wherever they put it. Task 14's spike calls this the offset lattice and offsets its own content by
+ * exactly half a cell east and a third of one south; [GROUND_DRAPE_LIFT_METRES] is sized against that
+ * arm's lift ladder and would be over-generous against a snapped one.
+ */
+private const val RIDGE_QUAD_LONGITUDE_OFFSET_DEGREES: Double = 360.0 / 8192.0 / 64.0 / 2.0
+private const val RIDGE_QUAD_LATITUDE_OFFSET_DEGREES: Double =
+    -360.0 / 8192.0 * 0.7009 / 64.0 / 3.0
+
+/**
+ * The height the ridge draws on average across [ridgeGeometry]'s footprint: the profile is a triangle
+ * spanning 15.6 m to 984.4 m, whose mean over whole periods is 500 m, times the fine style's
+ * exaggeration of 1.5.
+ *
+ * A flat quad here is above the terrain on both flanks and below it across the middle, which is the
+ * "cutting through a ridge" picture ADR 0040 replaces -- and is why the mean rather than the summit or
+ * the base, either of which would put the flat quad entirely on one side and measure nothing.
+ */
+private const val MEAN_DRAWN_RIDGE_METRES: Double = 500.0 * 1.5
+
+/**
+ * 50 metres, which is the spike's own control offset, and about 7.5 logical pixels at zoom 13.
+ *
+ * Far enough above the ground to leave the coplanar fight outright -- the spike's quantum probe puts
+ * the depth buffer's resolution at well under a millimetre of terrain height here -- and near enough
+ * that the raised quad's footprint is the drape's to within about a pixel of fringe, which is what
+ * lets it stand in for "the pixels the content covers".
+ */
+private const val DRAPE_CONTROL_METRES: Double = 50.0
+
+/** 200 km, which is 49 logical pixels at zoom 4 and 10 at zoom 2: visible in both, absurd in neither. */
+private const val PLAIN_SENSITIVITY_METRES: Double = 200_000.0
+
+/**
+ * A 32 x 32 sticker is 1,024 pixels; a quarter of that is the floor, which leaves room for a rasteriser
+ * and for the frame edge without leaving room for a sticker that never drew.
+ */
+private const val MINIMUM_STICKER_PIXELS: Int = 256
+
+/**
+ * 16 pixels of a 1,024-pixel sticker: a billboard buried under half a million metres of terrain is
+ * gone, and the budget is for a fill-rule sliver at the quad's own edge rather than for a fraction of
+ * it showing.
+ */
+private const val MAXIMUM_BURIED_STICKER_PIXELS: Int = 16
+
+/** [ridgeGeometry] runs off every edge of the frame, so a draped one covers essentially all of it. */
+private const val MINIMUM_DRAPED_PIXELS: Int = 400_000
+
+/**
+ * A flat quad at the ridge's mean height keeps its two flanks and loses its middle, which is about
+ * half of it. 75 per cent is a ceiling that a genuinely draped quad -- which keeps essentially all of
+ * it -- cannot slip under, stated with room for a rasteriser at the boundary between the two.
+ */
+private const val MAXIMUM_CUT_QUAD_PERCENT: Int = 75
+
+/** And it must still draw its flanks, or the ceiling above is satisfied by a quad that never drew. */
+private const val MINIMUM_CUT_QUAD_PIXELS: Int = 50_000
+
+/** A quad at sea level under a 1,477 m ridge is gone; the budget is the frame's own edge fringe. */
+private const val MAXIMUM_BURIED_QUAD_PIXELS: Int = 512
+
+/**
+ * The coplanar case needs the drape and the ground over a real area before a percentage of it means
+ * anything. [ridgeGeometry] and the ground share essentially the whole 589,824-pixel frame; two thirds
+ * of it is the floor.
+ */
+private const val MINIMUM_CONTESTED_PIXELS: Int = 400_000
+
+/**
+ * **95 per cent**, and the gap between that and 100 is a measurement rather than slack.
+ *
+ * Task 14's spike measured **102,370 of 102,400** -- 99.97 per cent -- for a four-metre lift on the
+ * offset lattice at zoom 13 and pitch 0, and **53,048 of 102,400** for no lift at all. This fixture
+ * measures **579,754 of 589,824** (98.29 per cent) and **293,346** (49.73 per cent) with the lift
+ * deleted, so it reproduces the spike's "no lift keeps about half" almost exactly and falls 1.7 points
+ * short of its whole.
+ *
+ * **That shortfall is the fixture being harsher, and the spike predicted it in as many words**: "the
+ * vertical errors ... scale with the relief per cell and the numbers above should be read as that
+ * profile's, not as constants". [DEM_RIDGE_PNG] steps **46.9 m** of drawn relief per ground cell where
+ * the spike's fixture stepped 28, and the residual the lift is fighting lives along the creases, whose
+ * height is exactly what that step is. So `GROUND_DRAPE_LIFT_METRES` is under-sized for a ridge this
+ * steep, by about 10,000 pixels of speckle along fold lines -- which is a different thing from ADR
+ * 0027's half-erased quad, and is the cost recorded rather than repaired.
+ *
+ * 95 sits below the measurement with room for a rasteriser (the spike's two software runs agree with
+ * the GPU to within one per cent) and 45 points above the lift's absence.
+ */
+private const val MINIMUM_SURVIVOR_PERCENT: Int = 95
+
+/**
+ * And the sunk control must keep essentially none, or the survivor count above is measuring a ground
+ * that cannot delete anything. Two per cent rather than zero for the fringe where the sunk quad's
+ * slightly smaller footprint falls outside the contested set's own edge.
+ */
+private const val MAXIMUM_SUNK_SURVIVOR_PERCENT: Int = 2
+
+/** [plainGeometry] covers a 16 x 10 degree box; a few thousand pixels of it is a real quad. */
+private const val MINIMUM_PLAIN_GEOMETRY_PIXELS: Int = 2_048
+
+/** The same quad on a globe over relief, which the ridge's own dips take a bite out of. */
+private const val MINIMUM_GLOBE_DRAPED_PIXELS: Int = 1_024
+
+/**
+ * 100 km, which is about five logical pixels at [LIMB_ZOOM] against a ridge 25 pixels tall: enough for
+ * a globe drape to leave the coplanar fight outright, and a clearance a consumer might really declare.
+ */
+private const val GLOBE_DRAPE_CLEARANCE_METRES: Double = 100_000.0
+
+
+/**
+ * Raising both by [PLAIN_SENSITIVITY_METRES] moves 33,964 pixels under Mercator and **574** on the
+ * globe, where 200 km is three per cent of the earth's radius and the quad is a small one; 256 is
+ * under half the smaller measurement.
+ */
+private const val MINIMUM_PLAIN_SENSITIVITY_PIXELS: Int = 256
+
 // ---- the fixture's bytes --------------------------------------------------------------------------
 
 private const val TERRAIN_STYLE_URL: String = "https://styles.example/terrain-frame.json"
 private const val PLAIN_STYLE_URL: String = "https://styles.example/terrain-frame-plain.json"
+private const val FINE_TERRAIN_STYLE_URL: String = "https://styles.example/terrain-frame-fine.json"
+private const val TERRAIN_STICKER_URL: String = "https://images.example/terrain-frame-sticker.png"
 private const val TERRAIN_TILE_TEMPLATE: String = "https://tiles.example/tf/{z}/{x}/{y}.png"
 private const val TERRAIN_DEM_TEMPLATE: String = "https://tiles.example/tfd/{z}/{x}/{y}.png"
 
@@ -1123,6 +1880,30 @@ private val TERRAIN_STYLE_JSON: String =
         """"dem":{"type":"raster-dem","tiles":["$TERRAIN_DEM_TEMPLATE"],"tileSize":64,""" +
         """"encoding":"mapbox","minzoom":0,"maxzoom":22}},""" +
         """"terrain":{"source":"dem","exaggeration":500},""" +
+        """"layers":[{"id":"bg","type":"background","paint":{"background-color":"#000000"}},""" +
+        """{"id":"r","type":"raster","source":"s"}]}"""
+
+/**
+ * [TERRAIN_STYLE_JSON] at **`"exaggeration": 1.5`**, which is the whole difference and the reason a
+ * third renderer exists.
+ *
+ * The other two styles exaggerate by 500 so that a 1,000 m DEM is half a million metres of relief and
+ * a displacement is unmissable at zoom 4. Tasks 16 and 17 need the opposite: the coplanar fight ADR
+ * 0039's erratum measures is a fight in *metres* against a depth budget that scales with zoom, and
+ * `GROUND_DRAPE_LIFT_METRES` is four of them. At zoom 4 a metre is 0.0002 logical pixels, so a
+ * four-metre lift would be eight ten-thousandths of a pixel and a survivor count there would measure
+ * a driver's rounding. At `1.5` and zoom 13 the same DEM stands 1,477 m tall -- about 220 logical
+ * pixels -- and a metre is 0.149 of one, which is the regime the spike ran in.
+ *
+ * **`1.5` rather than `1`** for this cycle's standing reason: at 1 an honoured exaggeration and a
+ * dropped one draw the same picture. It is also the spike's own value.
+ */
+private val FINE_TERRAIN_STYLE_JSON: String =
+    """{"version":8,"name":"reng-terrain-frame-fine",""" +
+        """"sources":{"s":{"type":"raster","tiles":["$TERRAIN_TILE_TEMPLATE"],"tileSize":512},""" +
+        """"dem":{"type":"raster-dem","tiles":["$TERRAIN_DEM_TEMPLATE"],"tileSize":64,""" +
+        """"encoding":"mapbox","minzoom":0,"maxzoom":22}},""" +
+        """"terrain":{"source":"dem","exaggeration":1.5},""" +
         """"layers":[{"id":"bg","type":"background","paint":{"background-color":"#000000"}},""" +
         """{"id":"r","type":"raster","source":"s"}]}"""
 
@@ -1157,15 +1938,21 @@ private class TerrainFrameTransport : Transport {
 
     override suspend fun execute(request: TransportRequest): TransportResponse {
         val url = request.locator.value
-        if (url == TERRAIN_STYLE_URL || url == PLAIN_STYLE_URL) {
-            val body = if (url == TERRAIN_STYLE_URL) TERRAIN_STYLE_JSON else PLAIN_STYLE_JSON
+        val style = when (url) {
+            TERRAIN_STYLE_URL -> TERRAIN_STYLE_JSON
+            PLAIN_STYLE_URL -> PLAIN_STYLE_JSON
+            FINE_TERRAIN_STYLE_URL -> FINE_TERRAIN_STYLE_JSON
+            else -> null
+        }
+        if (style != null) {
             return TransportResponse(
                 statusCode = 200,
-                body = body.encodeToByteArray(),
+                body = style.encodeToByteArray(),
                 metadata = TransportResponseMetadata(contentType = "application/json"),
             )
         }
         val body = when {
+            url == TERRAIN_STICKER_URL -> STICKER_PNG
             url.startsWith(TERRAIN_DEM_URL_PREFIX) -> demPng(url)
             url.startsWith(TERRAIN_TILE_URL_PREFIX) -> tilePng(url)
             else -> error("the terrain frame fixture serves no body for $url")
@@ -1248,6 +2035,38 @@ private val DEM_SUMMIT_PNG: ByteArray = Base64.decode(
     "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAZUlEQVR42u3QQREAAAQAMPpncachOZw9VmCR1fNZCBAg" +
         "QIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAAAQIECBAgQIAA" +
         "Afcth+fSLKgN2FYAAAAASUVORK5CYII=",
+)
+
+/**
+ * 64 x 64, a north-south triangular ridge: column `x` carries
+ * `1000 * (1 - |2 * (x + 0.5) / 64 - 1|)` metres, quantised to the Mapbox packing's own tenth of a
+ * metre, and every row is identical.
+ *
+ * So it runs **15.6 m at either edge to 984.4 m at columns 31 and 32**, and the two edge columns carry
+ * the same height, which is what lets the padded ring join one tile to the next without a step and
+ * makes the ridge repeat seamlessly across a frame.
+ *
+ * **Its point is relief *inside* a tile.** Every other DEM here is uniform within a tile, which is the
+ * exact symmetry point at which a ground cell's four corners and the texel under a point are the same
+ * number -- so a lookup that read the texel instead of the cell would pass every case this suite had
+ * before task 16.
+ *
+ * Generated by the same CPython recipe as the other DEMs, with
+ * `n = round((metres + 10000) / 0.1)` split big-endian across red, green and blue.
+ */
+private val DEM_RIDGE_PNG: ByteArray = Base64.decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABHElEQVR42u3QQUoCcRzF8Xl3CFwEHSJoEXSIoIV3" +
+        "cBG06AxqTImmaEUZakMZHkJw0R1cBC26Qwt5+vAUwXcxMMz8/7/fe59CzTOrdW21F9bNr1UeWbd1665jdb6sbmH1" +
+        "Tq37K6s/twY/1vDQGl1YD6X1uLKeNtbzifVyaY0r6/XbmtSs6bk1a1lvS6v6s96PrY+GNZ9an2trcbB/8p5v+Zcz" +
+        "OZs7uZsZmZWZmZ0d2ZWd2Z0MyZJMyZaMyZrMyZ4O6ZJO6ZaO6ZrOu+4FAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8f4At0IWccCbFZPgA" +
+        "AAAASUVORK5CYII=",
+)
+
+/** 16 x 16, every texel opaque white, which is [STICKER_INK]. */
+private val STICKER_PNG: ByteArray = Base64.decode(
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFklEQVR42mP4TyFgGDVg1IBRA4aLAQBdePwurSGp" +
+        "XgAAAABJRU5ErkJggg==",
 )
 
 /** 2 x 2, every texel [EVEN_TILE]. */

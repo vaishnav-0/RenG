@@ -1,11 +1,13 @@
 package com.rohittp.reng.internal.gl
 
+import com.rohittp.reng.AltitudeMode
 import com.rohittp.reng.Geometry
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.Placement
 import com.rohittp.reng.PipelineStage
 import com.rohittp.reng.RenGErrorCode
 import com.rohittp.reng.ShaderValue
+import com.rohittp.reng.Vector3
 import com.rohittp.reng.internal.failureContextDiagnostic
 import com.rohittp.reng.internal.math.DoubleMatrix3
 import com.rohittp.reng.internal.math.DoubleMatrix4
@@ -27,6 +29,7 @@ import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
 import com.rohittp.reng.internal.projection.globeMetresToLogicalPixels
 import com.rohittp.reng.internal.terrain.DemTileWindow
+import com.rohittp.reng.internal.terrain.GroundSurface
 import com.rohittp.reng.internal.terrain.groundCellsPerTileSide
 import com.rohittp.reng.internal.renGFailure
 
@@ -143,6 +146,17 @@ internal class SceneTerrain(
     val interiorSizePx: Int,
     val exaggeration: Double,
     val cellsPerTileSide: Int,
+    /**
+     * The same displaced surface, readable on the CPU, or `null` when nothing in this frame asked a
+     * question of it.
+     *
+     * **It is built per frame and only on demand**, because holding it costs one `rgbaSnapshot` per
+     * distinct source DEM and a frame with no `GROUND_RELATIVE` content would pay that for nothing.
+     * That conditional construction is the whole of what survives the design's §6 "sparse CPU decode":
+     * Rentile `0.7.0` hands over decoded texels, so there is no decode to be sparse about, only a
+     * copy to be avoided.
+     */
+    val surface: GroundSurface? = null,
 ) {
     /** [com.rohittp.reng.internal.gl.demDecodeCoefficients] for the source's own encoding. */
     val decode: FloatArray = decode.copyOf()
@@ -440,6 +454,48 @@ internal class SceneContent(
     private val globeGroundPipeline: GlobeGroundPipeline? = null,
 ) : GlFrameContent {
 
+    /**
+     * The granularity this frame's whole ground is drawn at, reconciled once.
+     *
+     * [drawGroundPhase] used to compute this twice, once per projection arm, and it is hoisted
+     * because [groundSurface] must answer against the *same* number: the CPU lookup finds the ground
+     * grid cell containing a point, and a lookup at terrain's unreconciled claim would find the wrong
+     * cell on every globe frame whose curvature asks for more cells than the DEM does.
+     *
+     * `1` with no ground tiles, where nothing reads it: the globe's curvature claim needs a LOD and a
+     * frame with no ground has none.
+     */
+    private val frameGroundCells: Int = if (scene.groundTiles.isEmpty()) {
+        1
+    } else {
+        when (camera) {
+            is ResolvedMercatorCamera -> groundCellsPerTileSide(
+                curvatureCells = 1,
+                terrainCells = scene.terrain?.cellsPerTileSide ?: 1,
+            )
+
+            is ResolvedGlobeCamera -> groundCellsPerTileSide(
+                curvatureCells = globeGroundCellsPerTileSide(
+                    camera,
+                    scene.groundTiles.first().instance.lod,
+                ),
+                terrainCells = scene.terrain?.cellsPerTileSide ?: 1,
+            )
+        }
+    }
+
+    /**
+     * The surface a `GROUND_RELATIVE` altitude is measured from, or `null` when this frame drew none.
+     *
+     * `null` is ADR 0040's stated cost -- "where terrain is absent or degraded, `GROUND_RELATIVE`
+     * resolves against the flat ground and therefore means `ABSOLUTE`" -- and it is why every frame
+     * RenG has ever drawn is unchanged by this cycle rather than merely believed to be: a style with
+     * no `terrain` block has no [SceneTerrain] at all, and a frame with no ground tiles has nothing
+     * to ride.
+     */
+    private val groundSurface: GroundSurface? = scene.terrain?.surface
+        ?.takeIf { scene.groundTiles.isNotEmpty() && !it.isEmpty }
+
     override fun draw(binding: GlBinding) {
         if (scene.groundTiles.isEmpty() &&
             scene.geometries.isEmpty() &&
@@ -494,9 +550,14 @@ internal class SceneContent(
                 // 2026-08-29 erratum). Under Mercator the camera implies a single cell, so this
                 // resolves the same four corners `resolveGeometry` always did and the frame is the
                 // one `0.3.0` drew.
+                val drape = groundDrapeFor(sceneGeometry.geometry)
+                val cellsPerSide = geometryCellsPerSideFor(sceneGeometry.geometry, drape)
                 val grid = when (camera) {
-                    is ResolvedMercatorCamera -> geometryGrid(sceneGeometry.geometry, camera)
-                    is ResolvedGlobeCamera -> geometryGrid(sceneGeometry.geometry, camera)
+                    is ResolvedMercatorCamera ->
+                        geometryGrid(sceneGeometry.geometry, camera, cellsPerSide, drape)
+
+                    is ResolvedGlobeCamera ->
+                        geometryGrid(sceneGeometry.geometry, camera, cellsPerSide, drape)
                 }.requireResolvedAtDrawTime()
                 drawGeometry(
                     binding = binding,
@@ -714,10 +775,7 @@ internal class SceneContent(
                 // Mercator has no curvature claim on the granularity, so terrain's is the whole
                 // answer -- and `groundCellsPerTileSide` is still where it is spent, so the cap and
                 // the reconciliation rule live in one place for both projections.
-                cellsPerTileSide = groundCellsPerTileSide(
-                    curvatureCells = 1,
-                    terrainCells = terrain?.cellsPerTileSide ?: 1,
-                ),
+                cellsPerTileSide = frameGroundCells,
                 elevation = dem?.let {
                     MercatorGroundElevationFrame(
                         dem = it,
@@ -781,13 +839,7 @@ internal class SceneContent(
                 // by `max` and capped by the grid's own 16-bit-index ceiling. Two meshes sharing an
                 // edge on the sphere must be subdivided identically, so this is one number for the
                 // whole ground and never one per tile.
-                cellsPerTileSide = groundCellsPerTileSide(
-                    curvatureCells = globeGroundCellsPerTileSide(
-                        camera,
-                        scene.groundTiles.first().instance.lod,
-                    ),
-                    terrainCells = terrain?.cellsPerTileSide ?: 1,
-                ),
+                cellsPerTileSide = frameGroundCells,
                 elevation = dem?.let {
                     GlobeGroundElevationFrame(
                         dem = it,
@@ -862,12 +914,107 @@ internal class SceneContent(
      *
      * Under Mercator this is `resolvePlacement` and nothing else, so no mercator pixel moves.
      */
-    private fun drawTimePlacement(placement: Placement): ResolvedPlacement? = when (camera) {
-        is ResolvedMercatorCamera -> resolvePlacement(placement, camera).requireResolvedAtDrawTime()
-        is ResolvedGlobeCamera -> {
-            val resolved = resolveGlobePlacement(placement, camera).requireResolvedAtDrawTime()
-            if (resolved.beyondHorizon) null else resolved.placement
+    private fun drawTimePlacement(rawPlacement: Placement): ResolvedPlacement? {
+        val placement = groundResolved(rawPlacement)
+        return when (camera) {
+            is ResolvedMercatorCamera -> resolvePlacement(placement, camera).requireResolvedAtDrawTime()
+            is ResolvedGlobeCamera -> {
+                val resolved = resolveGlobePlacement(placement, camera).requireResolvedAtDrawTime()
+                if (resolved.beyondHorizon) null else resolved.placement
+            }
         }
+    }
+
+    /**
+     * ADR 0040's `GROUND_RELATIVE`, spent: the declared altitude becomes an offset above the surface
+     * the ground drew under the anchor in this same frame.
+     *
+     * **The whole of the resolution is an addition in metres, and that is not a shortcut.** Both
+     * projections already carry altitude in metres all the way to their own conversion --
+     * `projectMercator`'s `altitude / (C * cos latitude)` and `projectGlobe`'s `R + altitude * R / a`
+     * -- and both of those conversions are the *same expression* the corresponding ground vertex
+     * shader applies to its DEM metres. So adding here puts the anchor on the ground in both modes
+     * with no mode-specific arithmetic, and a second conversion would be the drift ADR 0039's erratum
+     * warns about wearing a helpful face.
+     *
+     * **No lift.** [GROUND_DRAPE_LIFT_METRES] exists for a surface drawn coplanar with the ground; a
+     * sticker is a screen-parallel billboard carrying one depth and a model has volume and writes its
+     * own, so neither is a second copy of the terrain. Task 14's spike says so in as many words, and
+     * lifting them would move a pin off the ridge it was asked to stand on to fix a defect it does
+     * not have.
+     *
+     * `GROUND_RELATIVE` on a `SCREEN` position cannot reach here: `Placement`'s own `require` refuses
+     * that pairing at construction, which is why this reads the mode and never the anchoring.
+     */
+    private fun groundResolved(placement: Placement): Placement {
+        if (placement.altitudeMode != AltitudeMode.GROUND_RELATIVE) return placement
+        val surface = groundSurface ?: return placement
+        val metres = surface.elevationMetresBeneath(
+            latitude = placement.position.x,
+            unwrappedLongitude = placement.position.y,
+            cellsPerTileSide = frameGroundCells,
+        ) ?: return placement
+        // Rebuilt rather than copied: `Placement` is a hand-written class with an `init` contract and
+        // no `copy`, and every field is carried across so that a field added later fails to compile
+        // here instead of being silently dropped from every ground-relative placement.
+        return Placement(
+            positionMode = placement.positionMode,
+            position = Vector3(placement.position.x, placement.position.y, placement.position.z + metres),
+            rotationMode = placement.rotationMode,
+            rotation = placement.rotation,
+            scaleMode = placement.scaleMode,
+            scale = placement.scale,
+            altitudeMode = placement.altitudeMode,
+        )
+    }
+
+    /**
+     * The drape a `GROUND_RELATIVE` [Geometry] rides, or `null` for every other geometry and every
+     * frame with no drawn terrain.
+     *
+     * **[GROUND_DRAPE_LIFT_METRES] is added here rather than by the caller** so that the one place
+     * that decides a geometry is coplanar with the ground is the one place that pays for it, and so
+     * that a node over a coverage gap -- where the lookup answers `null` -- gets neither the surface
+     * nor the lift, which is what keeps the gap flat at exactly the altitude the consumer declared.
+     */
+    private fun groundDrapeFor(geometry: Geometry): GroundDrape? {
+        if (geometry.altitudeMode != AltitudeMode.GROUND_RELATIVE) return null
+        val surface = groundSurface ?: return null
+        return GroundDrape { mercatorX, mercatorY ->
+            surface.elevationMetresAt(mercatorX, mercatorY, frameGroundCells)
+                ?.plus(GROUND_DRAPE_LIFT_METRES)
+                ?: 0.0
+        }
+    }
+
+    /**
+     * How many cells a [Geometry] is subdivided into: the camera's own answer, raised to the ground's
+     * node spacing when the geometry is draped.
+     *
+     * An undraped geometry gets exactly what it got in `0.3.0` -- one cell under Mercator, the
+     * curvature count on a globe -- because [drapeCellsPerSide] is consulted only through a non-null
+     * drape.
+     */
+    private fun geometryCellsPerSideFor(geometry: Geometry, drape: GroundDrape?): Int {
+        val fromCamera = when (camera) {
+            is ResolvedMercatorCamera -> geometryCellsPerSide(geometry, camera)
+            is ResolvedGlobeCamera -> geometryCellsPerSide(geometry, camera)
+        }
+        if (drape == null) return fromCamera
+        val lod = scene.groundTiles.firstOrNull()?.instance?.lod ?: return fromCamera
+        val worldSize = when (camera) {
+            is ResolvedMercatorCamera -> camera.worldSizeLogicalPixels
+            is ResolvedGlobeCamera -> camera.worldSizeLogicalPixels
+        }
+        return maxOf(
+            fromCamera,
+            drapeCellsPerSide(
+                geometry = geometry,
+                worldSizeLogicalPixels = worldSize,
+                groundCellsPerTileSide = frameGroundCells,
+                selectedLod = lod,
+            ),
+        )
     }
 
     /**

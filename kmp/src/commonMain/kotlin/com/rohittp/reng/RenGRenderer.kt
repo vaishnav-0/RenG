@@ -141,6 +141,8 @@ import com.rohittp.reng.internal.resource.ResourceOperationOutcome
 import com.rohittp.reng.internal.terrain.DemEncoding
 import com.rohittp.reng.internal.terrain.DemTexels
 import com.rohittp.reng.internal.terrain.DemTileCoordinate
+import com.rohittp.reng.internal.terrain.GroundSurface
+import com.rohittp.reng.internal.terrain.GroundSurfaceTile
 import com.rohittp.reng.internal.terrain.TerrainGranularityInputs
 import com.rohittp.reng.internal.terrain.canPadDemTexture
 import com.rohittp.reng.internal.terrain.demTileWindowFor
@@ -314,6 +316,41 @@ internal class PreparedTerrain(
 
     /** Every acquired DEM, visible tiles and ring alike, in request order. */
     internal val demTiles: Map<CanonicalBasemapTile, AcquiredDemTile> get() = LinkedHashMap(demSnapshot)
+
+    /**
+     * The same terrain as a CPU-readable surface, or `null` when nothing at [lod] displaces.
+     *
+     * **It is assembled from [elevatedTiles] and [demTileWindowFor], which is `resolveDemTextures`'
+     * own pair**, so the surface a `GROUND_RELATIVE` altitude rides and the surface the GPU draws are
+     * built from one answer about which tiles displace and one answer about where each one samples.
+     * The two could otherwise disagree tile by tile, and the picture of that disagreement -- content
+     * riding a surface the ground is not drawing -- looks exactly like a lookup that is merely
+     * imprecise.
+     *
+     * [texelsBySource] is handed over whole rather than filtered to the displacing tiles, because the
+     * ring is what a padded lookup at a tile's far edge reads and a filtered map would replicate the
+     * tile's own edge there instead -- reopening, for the drape alone, the seam
+     * [com.rohittp.reng.internal.terrain.padDemTexture] closed for the ground.
+     */
+    internal fun groundSurface(lod: Int): GroundSurface? {
+        val tiles = LinkedHashMap<DemTileCoordinate, GroundSurfaceTile>(elevatedTiles.size)
+        elevatedTiles.forEach { tile ->
+            if (tile.lod != lod) return@forEach
+            val dem = demSnapshot[tile] ?: return@forEach
+            val window = demTileWindowFor(dem.requestedTile, dem.sourceTile) ?: return@forEach
+            tiles[DemTileCoordinate(z = tile.lod, x = tile.canonicalX, y = tile.tileY)] =
+                GroundSurfaceTile(source = dem.sourceTile, window = window)
+        }
+        if (tiles.isEmpty()) return null
+        return GroundSurface(
+            lod = lod,
+            interiorSizePx = tileSizePx,
+            exaggeration = exaggeration,
+            encoding = encoding,
+            tiles = tiles,
+            texelsBySource = texelsBySource,
+        )
+    }
 
     internal fun demTileFor(tile: CanonicalBasemapTile): AcquiredDemTile? = demSnapshot[tile]
 
@@ -2243,8 +2280,26 @@ internal class RenGRenderer(
                 latitude = frame.camera.latitude,
                 selectedLod = selectedLod,
             ),
+            surface = if (frame.ridesTheGround()) terrain.groundSurface(selectedLod) else null,
         )
     }
+
+    /**
+     * Whether anything in this frame asked where the ground is.
+     *
+     * **This is the whole of what the design's "sparse CPU decode" becomes.** §6 argued that a CPU
+     * elevation lookup must decode only the tiles containing ground-relative content, because decoding
+     * the visible set would be about 224 MiB against a `maximumDecodedImageBytes` shared with every
+     * raster. Rentile `0.7.0` deleted that premise -- `ValidatedDemTile.texels` arrives decoded and
+     * `PreparedTerrain` already holds it -- so the only cost left to be sparse about is
+     * `GroundSurface`'s one `rgbaSnapshot` per source image, and the sparsity that matters is *per
+     * frame* rather than per tile: a frame with no `GROUND_RELATIVE` content pays nothing, and a frame
+     * with one pays for the ground it is riding, which is the ground it already drew.
+     */
+    private fun RenGPreparedFrame.ridesTheGround(): Boolean =
+        geometries.any { it.geometry.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
+            stickers.any { it.placement.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
+            models.any { it.placement.altitudeMode == AltitudeMode.GROUND_RELATIVE }
 
     /**
      * ADR 0034's fourth scene list, assembled from what `prepare()` already decided.

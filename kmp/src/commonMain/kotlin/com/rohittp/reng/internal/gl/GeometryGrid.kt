@@ -14,10 +14,14 @@ import com.rohittp.reng.internal.projection.MercatorPosition
 import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
 import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.projection.WGS84_SEMI_MAJOR_AXIS_METRES
+import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
 import com.rohittp.reng.internal.projection.globeCameraRelativePosition
 import com.rohittp.reng.internal.projection.globeGroundFootprint
 import com.rohittp.reng.internal.projection.projectMercator
 import com.rohittp.reng.internal.projection.validateMercatorGeometryPosition
+import kotlin.math.PI
+import kotlin.math.ceil
+import kotlin.math.cosh
 
 /**
  * A `Geometry` subdivided into a grid whose vertices RenG has already projected, in exactly the
@@ -174,6 +178,105 @@ internal fun geometryCellsPerSide(geometry: Geometry, camera: ResolvedGlobeCamer
     )
 
 /**
+ * How much a **draped** node stands above the ellipsoid, in metres, at one normalised Mercator
+ * position.
+ *
+ * It is a metre count rather than a height in logical pixels because the two projections spend it
+ * differently — Mercator by `1 / cos(latitude)` per vertex, a sphere radially and uniformly — and
+ * because ADR 0040 states a `GROUND_RELATIVE` altitude in metres. Zero is the honest answer where the
+ * frame drew no displaced ground: ADR 0040 resolves `GROUND_RELATIVE` as `ABSOLUTE` there, which is
+ * exactly "add nothing".
+ *
+ * The lift a coplanar drape needs is folded in by whoever builds this, not by its callers — see
+ * [com.rohittp.reng.internal.gl.GROUND_DRAPE_LIFT_METRES].
+ */
+internal fun interface GroundDrape {
+    fun altitudeMetresAt(mercatorX: Double, mercatorY: Double): Double
+}
+
+/**
+ * **Four metres, and every digit of it is a measurement rather than a taste.**
+ *
+ * A `GROUND_RELATIVE` `Geometry` at altitude 0 is a second copy of the terrain surface drawn through
+ * a different pipeline, and ADR 0027's original defect is exactly what two pipelines agreeing about a
+ * surface produce: a quad erased and redealt frame by frame. ADR 0039 quarantined the case into wave
+ * 2 and named a mitigation -- a shared nearest-texel rule -- which task 14's spike then refuted, at
+ * 61,996 survivors of a 102,400-pixel probe against 53,048 for doing nothing at all. Its 2026-08-30
+ * erratum records the refutation and the replacement: **a lift is what works**, and nothing else
+ * measured does.
+ *
+ * The spike's lift ladder, at pitch 0, zoom 13, Apple M3 Max, on the **offset lattice** -- a drape
+ * whose node spacing equals the ground's but whose nodes land wherever the consumer's declared
+ * corners put them:
+ *
+ * | lift | 0 | +0.25 m | +1 m | +2 m | **+4 m** | +16 m |
+ * |---|---|---|---|---|---|---|
+ * | survivors of 102,400 | 53,048 | 63,446 | 83,589 | 95,499 | **102,370** | 102,400 |
+ *
+ * **Why not one metre.** One metre is the *snapped* lattice's number -- the spike's arm P2, whose
+ * nodes sit on the ground's own grid lines. RenG cannot have that: a `Geometry`'s corners are two
+ * latitudes and two longitudes a consumer wrote down, and snapping the mesh to a lattice means moving
+ * the rectangle. What RenG can have, and [drapeCellsPerSide] takes, is the ground's node *spacing* on
+ * an offset phase, which is arm E's condition exactly -- so arm E's ladder is the one that applies
+ * and 4 m is where it reaches 99.97 per cent.
+ *
+ * **Why not sixteen.** 16 m is the first whole reading, and a lift is drawn rather than notional: at
+ * zoom 13 and latitude 45 a metre is about 0.15 logical pixels, so 4 m stands about half a pixel off
+ * the ground and 16 m about two and a half. The 30 pixels 4 m leaves are 0.03 per cent of the probe,
+ * spread along crease lines, against a defect that erases half a quad.
+ *
+ * **What this constant cannot be tested at the boundaries of, stated rather than discovered.** A lift
+ * in metres is a fixed *height* against a depth budget that scales with zoom: the same spike measured
+ * a centimetre buying 100 per cent of a relief-free ground at zoom 13 and 66 per cent at zoom 11, so
+ * the direction of the error is known and its size at an arbitrary camera is not. This is the shader
+ * depth bias ADR 0027 rejected wearing different clothes, chosen here because ADR 0039's erratum
+ * measured the alternatives -- the shared texel rule, and drawing the drape before the ground at
+ * **0** survivors under every camera -- and both are worse.
+ *
+ * It applies to a drape and to nothing else. A map-anchored sticker is a billboard carrying one
+ * depth and a model has volume and writes its own; neither is a second copy of the terrain, and
+ * lifting them would move content off the surface it asked to stand on.
+ */
+internal const val GROUND_DRAPE_LIFT_METRES: Double = 4.0
+
+/**
+ * How finely a draped [geometry] must be subdivided to follow the ground rather than to cut a chord
+ * through it: **the ground's own node spacing**, rounded up to the grid's power-of-two shape.
+ *
+ * A `Geometry` under Mercator is one cell ([geometryCellsPerSide] on an infinite curvature radius),
+ * which is the whole of `0.3.0`'s cost model and is exactly wrong for a drape — four corners on the
+ * terrain and a flat quad between them is the "cutting through the ridge" picture ADR 0040 exists to
+ * replace. On a globe the curvature claim is real but is about the sphere rather than about the
+ * relief, so it is reconciled by `max` here for `groundCellsPerTileSide`'s reason: one number, chosen
+ * by whichever claim is finer.
+ *
+ * **Matching the ground's spacing is not matching the ground's lattice, and the difference is
+ * measured.** A consumer's `Geometry` carries the consumer's own lat/lons, so its nodes land wherever
+ * they land inside the ground's cells; task 14's spike calls that the offset lattice and measures a
+ * drape on it needing a **four metre** lift where one snapped to the ground's own grid lines needs
+ * one. RenG cannot snap a declared rectangle to a lattice without moving the rectangle, so the offset
+ * lattice is what [GROUND_DRAPE_LIFT_METRES] is sized against.
+ */
+internal fun drapeCellsPerSide(
+    geometry: Geometry,
+    worldSizeLogicalPixels: Double,
+    groundCellsPerTileSide: Int,
+    selectedLod: Int,
+): Int {
+    require(groundCellsPerTileSide >= 1) { "a ground grid has at least one cell a side" }
+    require(selectedLod >= 0) { "a tile LOD is not negative" }
+    val tileSideLogicalPixels = worldSizeLogicalPixels / (1L shl selectedLod).toDouble()
+    if (!tileSideLogicalPixels.isFinite() || tileSideLogicalPixels <= 0.0) return 1
+    val spanLogicalPixels = geometrySpanArcLogicalPixels(geometry, worldSizeLogicalPixels)
+    if (!spanLogicalPixels.isFinite() || spanLogicalPixels <= 0.0) return 1
+    val wanted = ceil(spanLogicalPixels * groundCellsPerTileSide.toDouble() / tileSideLogicalPixels)
+    if (!wanted.isFinite() || wanted <= 1.0) return 1
+    var cells = 1
+    while (cells < MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE && cells.toDouble() < wanted) cells *= 2
+    return cells
+}
+
+/**
  * [geometry] as a grid on the Mercator plane.
  *
  * Every node is a bilinear interpolation of the four corners [resolveGeometry] already produced —
@@ -190,6 +293,7 @@ internal fun geometryGrid(
     geometry: Geometry,
     camera: ResolvedMercatorCamera,
     cellsPerSide: Int = geometryCellsPerSide(geometry, camera),
+    drape: GroundDrape? = null,
 ): SpatialOutcome<GeometryGrid> {
     val resolvedOutcome = resolveGeometry(geometry, camera)
     if (resolvedOutcome is SpatialOutcome.Failure) return resolvedOutcome
@@ -199,13 +303,41 @@ internal fun geometryGrid(
     val bottomRight = corners[2]
     val bottomLeft = corners[3]
 
+    if (drape == null) {
+        return assembleGeometryGrid(
+            cellsPerSide = cellsPerSide,
+            admitsCell = { _, _, _, _ -> true },
+            nodePosition = { u, v ->
+                SpatialOutcome.Success(
+                    lerp(lerp(topLeft, topRight, u), lerp(bottomLeft, bottomRight, u), v),
+                )
+            },
+        )
+    }
+
+    val boundsOutcome = validatedGeometryMercatorBounds(geometry)
+    if (boundsOutcome is SpatialOutcome.Failure) return boundsOutcome
+    val bounds = (boundsOutcome as SpatialOutcome.Success).value
+    val logicalPixelsPerEquatorialMetre = camera.worldSizeLogicalPixels / WORLD_CIRCUMFERENCE_METRES
+
     return assembleGeometryGrid(
         cellsPerSide = cellsPerSide,
+        foldsOnTheGroundsDiagonal = true,
         admitsCell = { _, _, _, _ -> true },
         nodePosition = { u, v ->
-            SpatialOutcome.Success(
-                lerp(lerp(topLeft, topRight, u), lerp(bottomLeft, bottomRight, u), v),
-            )
+            val flat = lerp(lerp(topLeft, topRight, u), lerp(bottomLeft, bottomRight, u), v)
+            val mercatorY = lerp(bounds.northY, bounds.southY, v)
+            // `cosh(PI * (1 - 2y))` is `1 / cos(latitude)` written in the frame the ground's own
+            // vertex shader writes it in, so the drape's rise and the ground's are the same
+            // expression evaluated at the same point rather than two derivations that agree today.
+            val rise = drape.altitudeMetresAt(lerp(bounds.westX, bounds.eastX, u), mercatorY) *
+                logicalPixelsPerEquatorialMetre * cosh(PI * (1.0 - 2.0 * mercatorY))
+            val draped = DoubleVector3(flat.x, flat.y, flat.z + rise)
+            if (!isGpuRepresentable(draped.z)) {
+                gpuRepresentabilityFailure(DiagnosticField.GEOMETRY_ALTITUDE)
+            } else {
+                SpatialOutcome.Success(draped)
+            }
         },
     )
 }
@@ -227,6 +359,7 @@ internal fun geometryGrid(
     geometry: Geometry,
     camera: ResolvedGlobeCamera,
     cellsPerSide: Int = geometryCellsPerSide(geometry, camera),
+    drape: GroundDrape? = null,
 ): SpatialOutcome<GeometryGrid> {
     val boundsOutcome = validatedGeometryMercatorBounds(geometry)
     if (boundsOutcome is SpatialOutcome.Failure) return boundsOutcome
@@ -240,6 +373,7 @@ internal fun geometryGrid(
 
     return assembleGeometryGrid(
         cellsPerSide = cellsPerSide,
+        foldsOnTheGroundsDiagonal = drape != null,
         // The descent hands out the cell's own `(u, v)` corners, so they are lerped into Mercator
         // coordinates here: the footprint decides in the frame the basemap tiles are cut in, which
         // is what lets a geometry and the ground beneath it be culled by one machine.
@@ -252,16 +386,23 @@ internal fun geometryGrid(
             )
         },
         nodePosition = { u, v ->
+            val mercatorX = lerp(bounds.westX, bounds.eastX, u)
+            // The convex combination below can leave the Mercator domain by a single ULP when both
+            // endpoints sit on it, and `unitSphereDirection` refuses a `y` outside [0, 1] rather than
+            // returning a plausible wrong answer. This is that ULP and nothing wider: it clamps to the
+            // geometry's OWN declared band, so it cannot hide a coordinate that is actually out of
+            // range.
+            val mercatorY = lerp(bounds.northY, bounds.southY, v).coerceIn(bounds.northY, bounds.southY)
             val position = globeCameraRelativePosition(
                 camera = camera,
-                mercatorX = lerp(bounds.westX, bounds.eastX, u),
-                // The convex combination below can leave the Mercator domain by a single ULP when
-                // both endpoints sit on it, and `unitSphereDirection` refuses a `y` outside [0, 1]
-                // rather than returning a plausible wrong answer. This is that ULP and nothing wider:
-                // it clamps to the geometry's OWN declared band, so it cannot hide a coordinate that
-                // is actually out of range.
-                mercatorY = lerp(bounds.northY, bounds.southY, v).coerceIn(bounds.northY, bounds.southY),
-                altitudeMetres = lerp(bounds.northAltitudeMetres, bounds.southAltitudeMetres, v),
+                mercatorX = mercatorX,
+                mercatorY = mercatorY,
+                // A sphere displaces radially and by the same fraction everywhere, so the drape's
+                // metres go in where the declared altitude's do rather than being converted twice --
+                // `projectGlobe` owns the one conversion and a second one here would be the
+                // `1 / cos(latitude)` term `globeMetresToLogicalPixels` forbids on a globe.
+                altitudeMetres = lerp(bounds.northAltitudeMetres, bounds.southAltitudeMetres, v) +
+                    (drape?.altitudeMetresAt(mercatorX, mercatorY) ?: 0.0),
             )
             if (!isGpuRepresentable(position.x)) {
                 gpuRepresentabilityFailure(DiagnosticField.GEOMETRY_UNWRAPPED_LONGITUDE)
@@ -327,17 +468,39 @@ private fun geometryVisibilityFootprint(
  * does. That is the second half of the same economy, and it is why the vertices are emitted through a
  * dedupe map rather than as a dense `(cellsPerSide + 1)^2` array.
  *
- * The two triangles per cell share the **north-west to south-east** diagonal, which is the diagonal
- * the four-corner triangle strip this replaces already used (`bottomLeft, bottomRight, topLeft,
- * topRight` strips into a shared `bottomRight`-`topLeft` edge). Under a projective map of a plane the
- * choice cannot change a pixel in exact arithmetic; keeping it is what removes the last floating-point
- * reason for a Mercator frame to differ from the one `0.3.0` drew.
+ * ## The diagonal, which is two rules because one of them is three releases old
+ *
+ * By default a cell folds on its **north-west to south-east** diagonal, which is the diagonal the
+ * four-corner triangle strip this grid replaced already used (`bottomLeft, bottomRight, topLeft,
+ * topRight` strips into a shared `bottomRight`-`topLeft` edge). Nobody ever wrote that choice down —
+ * it arrived with the strip — and [groundGridIndices] folds the *other* way, so a `Geometry` and the
+ * ground beneath it have disagreed about the diagonal since the ground got a grid. Task 14's spike
+ * measured what that disagreement costs a drape
+ * (`docs/research/2026-08-30-e-terrain-coplanar-depth-spike.md`): matching the ground's lattice *and*
+ * its triangulation takes the lift a whole coplanar drape needs from four metres to one.
+ *
+ * [foldsOnTheGroundsDiagonal] therefore switches a cell to `(NW, SW, NE)` then `(NE, SW, SE)` —
+ * [groundGridIndices]' own order — and **only a drape sets it.** Flipping it for every geometry was
+ * measured rather than reasoned about, and it is not free: `runGeometrySubdivisionReadbackSuite`'s
+ * one-cell case compares the grid against that shipped four-corner strip and requires **byte**
+ * identity, and the flip moves **39 pixels on `Apple M3 Max` and 8 on `Apple Software Renderer`,
+ * with the coverage of every one of them unchanged.** That is the shape the projective argument
+ * predicts — the two triangulations of a plane cover exactly the same pixels, and what moves is which
+ * triangle a pixel on the fold belongs to and therefore how its attributes interpolate — but it is
+ * still a change to a frame three published releases have drawn, for no gain to those frames. A
+ * draped `Geometry` has drawn no released frame at all, so it pays nothing to adopt the ground's
+ * diagonal and the undraped path keeps the one it shipped with.
+ *
+ * On a globe the four nodes of a cell are genuinely not coplanar, so there the two diagonals describe
+ * two different surfaces rather than one surface cut two ways — another reason the switch is per-grid
+ * rather than global.
  */
 private fun assembleGeometryGrid(
     cellsPerSide: Int,
     /** Whether the cell whose grid coordinates are `(westU, eastU, northV, southV)` may be seen. */
     admitsCell: (Double, Double, Double, Double) -> Boolean,
     nodePosition: (Double, Double) -> SpatialOutcome<DoubleVector3>,
+    foldsOnTheGroundsDiagonal: Boolean = false,
 ): SpatialOutcome<GeometryGrid> {
     require(cellsPerSide >= 1 && cellsPerSide <= MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE) {
         "a geometry grid needs between one and $MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE cells a side"
@@ -380,12 +543,21 @@ private fun assembleGeometryGrid(
         val southWest = node(column, row + 1)
         val southEast = node(column + 1, row + 1)
         if (failure != null) return
-        indices += northWest.toShort()
-        indices += southWest.toShort()
-        indices += southEast.toShort()
-        indices += northWest.toShort()
-        indices += southEast.toShort()
-        indices += northEast.toShort()
+        if (foldsOnTheGroundsDiagonal) {
+            indices += northWest.toShort()
+            indices += southWest.toShort()
+            indices += northEast.toShort()
+            indices += northEast.toShort()
+            indices += southWest.toShort()
+            indices += southEast.toShort()
+        } else {
+            indices += northWest.toShort()
+            indices += southWest.toShort()
+            indices += southEast.toShort()
+            indices += northWest.toShort()
+            indices += southEast.toShort()
+            indices += northEast.toShort()
+        }
     }
 
     fun descend(level: Int, column: Int, row: Int) {
