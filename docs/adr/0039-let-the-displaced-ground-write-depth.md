@@ -96,3 +96,47 @@ writes" (`:405`) stays exactly true of every frame without terrain, and becomes 
 stickers. The coplanar sweep must stay green **unwidened**, which is the test of the condition rather than
 of the write. And the write itself is gated on relief: a model behind a ridge is occluded by it, a model in
 front of the same ridge is not. Pixel verification remains Cycle J's.
+
+---
+
+## Erratum, 2026-08-30 — the mitigation this ADR named is refuted by measurement
+
+This ADR deferred the coplanar hazard to wave 2 and named the mitigation it expected to work: a **shared
+nearest-texel rule** against the same padded texture, so the CPU lookup and the GPU fetch would read the
+identical value and `GL_GEQUAL` would let the tie pass. Task 14's spike measured it
+(`docs/research/2026-08-30-e-terrain-coplanar-depth-spike.md`) and **it does not work, because it fixes the
+wrong term.**
+
+A shared texel decides *where ground-relative content sits*. It does not make the content's depth agree
+with the ground's, because the two are computed by different pipelines over different geometry. Survivors
+of a 102,400-pixel probe on Apple M3 Max at zoom 13, pitch 0:
+
+| approach | vertical error | survivors |
+|---|---|---|
+| drawn as a second **ground tile** — the ground's own vertex path | 0.000 m | **102,400 / 102,400** |
+| shared nearest texel — *this ADR's proposal* | 3.049 m | 61,996 / 102,400 |
+| exact ground-surface reconstruction | 0.000 m | 53,048 / 102,400 |
+| …plus a matched lattice and the ground's own triangulation | 0.000 m | 50,263 / 102,400 |
+| …plus a **1 m lift** | 1.000 m | **102,400 / 102,400** |
+| drawn **before** the ground | 0.000 m | **0 / 102,400** |
+
+Two of those rows overturn expectations this ADR encoded. **Reconstructing the ground's surface exactly is
+not sufficient** — zero vertical error still loses half the probe, because the disagreement is in the
+rasterised depth rather than in the height. And **drawing ground-relative content before the ground is
+refuted outright**, at zero survivors under every camera, which was the obvious fallback and is not one.
+
+What works is a **lift**: one metre with the lattice and triangulation matched, four without. `Apple
+Software Renderer` through CGL and through EAGL agree with the GPU to within one per cent.
+
+Three consequences the implementing tasks must carry:
+
+- **A CPU lookup must reconstruct the ground's *drawn surface***, not the texel beneath the point — a ground
+  cell spans four DEM texels, and interpolation must follow the ground's own NE–SW diagonal. The plan's
+  original test, that CPU and GPU "agree on a shared texel", passes against a lookup still 3.049 m wrong.
+- **The geometry grid triangulates on the opposite diagonal to the ground**, by accident rather than
+  decision, and that alone costs survivors.
+- **Labels carry no coplanar hazard at all**: `drawLabels` and `drawIcons` both `disable(GL_DEPTH_TEST)`.
+
+The decision this ADR makes — that the displaced ground writes depth, conditionally — is unaffected. Only
+its guess at the wave-2 mitigation was wrong, and it was wrong in the direction that a spike exists to
+catch: it sounded principled, and it moved the number that was not the problem.
