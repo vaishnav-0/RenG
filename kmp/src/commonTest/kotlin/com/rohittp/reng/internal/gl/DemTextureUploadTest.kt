@@ -15,13 +15,12 @@ import kotlin.test.assertTrue
  * Cycle E-terrain task 5, the GL half. What these assertions can prove and what they deliberately do
  * not, in [GlyphAtlasUploadTest]'s spirit:
  *
- * **The sampler is the load-bearing claim.** A DEM that passed `decodeDemTexels` is opaque in every
- * texel, and premultiplying by an alpha of 255 is the identity -- so a "the bytes are
- * unpremultiplied" assertion over a *legal* DEM passes under both [TextureContent] values and proves
- * nothing at all. That is F-2's premultiplication-on-a-colour-type-2-PNG vacuity exactly.
- * [theTexelsReachTheGpuUntouchedAndTheFixtureProvesItCould] therefore uses a deliberately translucent
- * fixture -- one no acquisition can produce -- and shows the two contents genuinely disagree on it,
- * so the claim it makes about the real path is a claim the assertion is capable of failing.
+ * **The sampler is the load-bearing claim.** Premultiplying by an alpha of 255 is the identity, so a
+ * "the bytes are unpremultiplied" assertion over an *opaque* DEM passes under both [TextureContent]
+ * values and proves nothing at all. That is F-2's premultiplication-on-a-colour-type-2-PNG vacuity
+ * exactly. [theTexelsReachTheGpuUntouchedAndTheFixtureProvesItCould] therefore uses a deliberately
+ * translucent fixture and shows the two contents genuinely disagree on it, so the claim it makes
+ * about the real path is a claim the assertion is capable of failing.
  *
  * `GL_NEAREST` is the assertion with a visible consequence, and it is what design section 3 makes
  * non-negotiable: a bilinear tap across a Mapbox channel carry decodes hundreds of metres wrong.
@@ -75,9 +74,10 @@ class DemTextureUploadTest {
 
     @Test
     fun theTexelsReachTheGpuUntouchedAndTheFixtureProvesItCould() {
-        // No acquisition can produce this -- decodeDemTexels refuses a translucent DEM outright. It is
-        // here so the assertion below is falsifiable: over an opaque DEM, DATA and IMAGE agree byte
-        // for byte and the claim would be empty.
+        // An acquisition can now produce this: RenG stopped refusing a translucent DEM when Rentile
+        // began handing over unpremultiplied texels, so the tile's R, G and B are the ones it packed
+        // whatever its alpha is. The fixture is what makes the assertion below falsifiable -- over an
+        // opaque DEM, DATA and IMAGE agree byte for byte and the claim would be empty.
         val translucent = paddedDem(alpha = 128)
         val demBinding = RecordingGlBinding()
         val premultiplyingBinding = RecordingGlBinding()

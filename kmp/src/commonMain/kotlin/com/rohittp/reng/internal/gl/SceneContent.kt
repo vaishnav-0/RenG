@@ -124,7 +124,7 @@ internal class SceneGroundTile(
 internal class SceneTileDem(val demTexture: Int, val window: DemTileWindow)
 
 /**
- * What a frame's terrain is, once acquisition, decode, padding and upload have all happened: how to
+ * What a frame's terrain is, once acquisition, padding and upload have all happened: how to
  * read a texel, how big the source DEM is, how far to exaggerate it, and how finely terrain alone
  * would like the ground subdivided.
  *

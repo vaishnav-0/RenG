@@ -397,10 +397,14 @@ _Avoid_: Output tile, source tile, map tile, raster
 
 **Terrain Sample**:
 Elevation acquired for the style-selected terrain source, encoded as eight-bit channels in one of the two
-supported DEM encodings and validated for its declared encoding before use. RenG decodes and validates
-terrain where it is acquired and displaces the ground with it where the ground is drawn; the tile's own
-decoded samples must be bit-exact, with no premultiplication, scaling, or colour transform, because any of
-those silently change elevations.
+supported DEM encodings and validated for its declared encoding before use. **The engine decodes the
+container and RenG decodes the elevation**: Rentile hands over the pixels it decoded to validate the tile,
+so the DEM's format — PNG, WebP, whatever the provider serves — is never RenG's question, and RenG's own
+check where a sample is acquired is that the image is the square size the style's terrain source declared.
+RenG displaces the ground with it where the ground is drawn; the tile's own decoded samples must be
+bit-exact, with no premultiplication, scaling, or colour transform, because any of those silently change
+elevations — which is why the engine's texels are required to be unpremultiplied rather than merely
+opaque.
 _Avoid_: Height map, DEM image, hillshade, terrain texture
 
 **Scene Light**:

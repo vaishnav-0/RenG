@@ -1,9 +1,5 @@
 package com.rohittp.reng.internal.terrain
 
-import com.rohittp.reng.internal.driver.validatesDemTerrainEncoding
-import com.rohittp.reng.internal.image.PngDecodeResult
-import com.rohittp.reng.internal.image.decodePng
-
 /**
  * Which of the two DEM channel packings a terrain source declares, as **RenG's own** enum rather than
  * Rentile's `TerrainDemEncoding`.
@@ -25,36 +21,11 @@ internal enum class DemEncoding {
 }
 
 /**
- * Why [decodeDemElevation] refused a DEM tile's bytes. Each of the three is a check Rentile's
- * `ValidatedDemTile` does **not** perform, so each is genuinely RenG's to make:
- *
- * - [UNDECODABLE] — Rentile validates a DEM with `Image.makeFromEncoded`, which is multi-format, so
- *   "validated" does not mean PNG. RenG owns exactly one decoder and it is a PNG decoder.
- * - [DIMENSIONS] — Rentile checks dimensions against its *policy limits*, never against the
- *   `tileSizePx` its own `TerrainSourceDescriptor` declares, so a source can hand back an image of a
- *   size the caller's sampling arithmetic was never built for.
- * - [NON_OPAQUE] — Rentile decodes DEM pixels into a **premultiplied** N32 bitmap
- *   (`DefaultBasemapRasterizer.kt:1671-1672`), which silently scales R/G/B by alpha before any elevation
- *   formula reads them. A DEM with a translucent pixel is therefore not a DEM whose height RenG can
- *   state; `CONTEXT.md`'s **Terrain Sample** entry says the samples must be bit-exact with no
- *   premultiplication for exactly this reason.
- */
-internal enum class DemReject {
-    UNDECODABLE,
-    DIMENSIONS,
-    NON_OPAQUE,
-}
-
-/** The outcome of decoding one DEM tile's bytes into elevations. */
-internal sealed interface DemDecodeResult {
-    data class Success(val tile: DemElevationTile) : DemDecodeResult
-    data class Rejected(val reason: DemReject) : DemDecodeResult
-}
-
-/**
  * One DEM tile's elevations in **metres**, one per texel, row-major with row `0` the image's first
- * PNG row — which under the XYZ scheme every RenG tile uses is the tile's **northern** edge. `x`
- * therefore increases eastward and `y` southward, matching [DemTileWindow]'s `v`.
+ * row — which is top-down from the tile's own top edge in both the engine's decoded texels and RenG's
+ * canonical form, and which under the XYZ scheme every RenG tile uses is the tile's **northern**
+ * edge. `x` therefore increases eastward and `y` southward, matching [DemTileWindow]'s `v`. Walking
+ * these rows bottom-up mirrors every tile about its own centre line.
  *
  * Metres, not logical pixels: the plan's standing obligation is that "elevation arrives in metres and
  * is converted once", and this is the arriving end. Whatever displaces the ground performs that
@@ -113,54 +84,35 @@ internal fun demElevationMetres(red: Int, green: Int, blue: Int, encoding: DemEn
     }
 
 /**
- * Decodes one acquired DEM tile's [bytes] into [DemElevationTile], or refuses them with the reason.
+ * Turns one acquired DEM tile's already-decoded [texels] into elevations in metres, or `null` when
+ * they are not a positive square this arithmetic describes.
  *
- * **This is where the three checks Rentile's `ValidatedDemTile` does not make are made** — see
- * [DemReject] for what each one closes and why the type name promises more than it delivers.
+ * **The bytes are never inflated here, and were the last place in RenG that would have been.**
+ * Rentile decodes a DEM to validate it and `0.7.0` keeps the result, so both of RenG's terrain paths
+ * -- this one and [demTexelsOf]'s texture path -- read the same pixels the engine already produced.
+ * What that deletes is not only a second decoder but a *format*: RenG owns a PNG decoder, and five of
+ * the corpus's six terrain styles serve WebP.
  *
- * Opacity is delegated to
- * [validatesDemTerrainEncoding][com.rohittp.reng.internal.driver.validatesDemTerrainEncoding], the
- * function ADR 0016's write-path obligation already calls, rather than being reimplemented here: one
- * definition of "an eight-bit RGB terrain encoding" is the point, and a second copy of the alpha scan
- * could drift from the firewall's. Its `private` helper `isEightBitRgbTerrainEncoding` is what this
- * would rather call, since that takes an already-decoded image; calling the public wrapper instead
- * means **the bytes are inflated twice on the accepting path**. That cost is deliberate and recorded
- * rather than paid down by duplicating the scan: it is the same shape as F-2's per-frame GLB reparse,
- * and it becomes one decode the moment `isEightBitRgbTerrainEncoding` is widened to `internal`.
+ * **The three checks this used to make are down to none, and each is accounted for rather than
+ * dropped.** PNG-ness was RenG's own restriction and was the defect. Dimension agreement against the
+ * source's declared `tileSizePx` is made once, at adoption, by [demTexelsOf] -- one authority for
+ * both paths rather than the two this file used to describe. Opacity was a guard against Rentile's
+ * old premultiplied bitmap; its texels are documented as never premultiplied, so a translucent
+ * texel's R, G and B are still the values the DEM packed and this formula still reads the height the
+ * tile encodes. What remains here is arithmetic, and the guard below is against a [DemTexels] some
+ * future caller assembled rather than against anything an acquisition can produce.
  *
- * Because [validatesDemTerrainEncoding] is exactly "decodes as PNG **and** every pixel is opaque", and
- * because this has already decoded these same bytes under this same ceiling immediately above, a
- * `false` here can only mean the alpha scan — which is why [DemReject.NON_OPAQUE] is an honest reason
- * rather than a guess.
- *
- * **Nothing here throws**, including for a descriptor declaring a non-positive `tileSizePx`: ADR 0041
- * makes terrain the one basemap resource that degrades instead of failing a frame, and a decode that
- * threw would take the frame with it. No guard is needed for that case — [decodePng] admits only
- * positive dimensions, so no decoded image can ever equal a non-positive `tileSizePx` and it lands in
- * [DemReject.DIMENSIONS] with the rest.
- *
- * [maximumDecodedBytes] is the caller's ceiling on the *declared* raster size, enforced by [decodePng]
- * from the PNG header alone before any array is allocated. RenG has no `maximumDecodedDemBytes`: the
- * limit a caller passes is `ResourceLimits.maximumDecodedImageBytes`, still shared with every raster
- * and every model texture, which is F-2's debt unchanged.
+ * **Nothing here throws** (ADR 0041): terrain is the one basemap resource that degrades instead of
+ * failing a frame, and [DemElevationTile]'s own `require`s would do exactly that.
  */
-internal fun decodeDemElevation(
-    bytes: ByteArray,
-    encoding: DemEncoding,
-    tileSizePx: Int,
-    maximumDecodedBytes: Long,
-): DemDecodeResult {
-    val image = (decodePng(bytes, maximumDecodedBytes) as? PngDecodeResult.Success)?.image
-        ?: return DemDecodeResult.Rejected(DemReject.UNDECODABLE)
-    if (image.width != tileSizePx || image.height != tileSizePx) {
-        return DemDecodeResult.Rejected(DemReject.DIMENSIONS)
-    }
-    if (!validatesDemTerrainEncoding(bytes, maximumDecodedBytes)) {
-        return DemDecodeResult.Rejected(DemReject.NON_OPAQUE)
-    }
-
+internal fun demElevationTile(texels: DemTexels, encoding: DemEncoding): DemElevationTile? {
+    val image = texels.image
+    val sizePx = image.width
+    if (sizePx <= 0 || image.height != sizePx) return null
     val rgba = image.rgbaSnapshot()
-    val metres = DoubleArray(tileSizePx * tileSizePx)
+    if (rgba.size.toLong() != sizePx.toLong() * sizePx.toLong() * 4L) return null
+
+    val metres = DoubleArray(sizePx * sizePx)
     var texel = 0
     while (texel < metres.size) {
         val channel = texel * 4
@@ -172,5 +124,5 @@ internal fun decodeDemElevation(
         )
         texel++
     }
-    return DemDecodeResult.Success(DemElevationTile(tileSizePx, metres))
+    return DemElevationTile(sizePx, metres)
 }

@@ -22,6 +22,15 @@ import com.rohittp.reng.internal.terrain.DemNeighbourFill
  * consumer to stop reading it. [reportTerrainDegradation] therefore takes the frame's whole ground-tile
  * list rather than a tile, and there is no per-tile entry point to misuse.
  *
+ * **The count is over what the frame achieved, never over what the acquisition returned, and that
+ * distinction is a repaired defect rather than a nicety.** Task 13's harness pass rendered a frame
+ * whose every DEM had been acquired, refused and dropped, and printed `diagnostics: none` -- because
+ * this function was handed the *acquisition* outcome, which had succeeded, while the refusal happened
+ * later and silently. The set of ground tiles that will actually displace is therefore what
+ * [reportTerrainDegradation] is given: a tile that acquired and cannot be used is not in it, and is
+ * counted with the tiles that never arrived, because a consumer's remedy for both is the same and the
+ * picture is identical.
+ *
  * **Neither report is a failure.** The frame prepared and it drew, so both are
  * [com.rohittp.reng.Diagnostic]s rather than [com.rohittp.reng.RenGException]s -- and both are
  * warnings rather than errors, because [com.rohittp.reng.DiagnosticSeverity.ERROR] is what a failed
@@ -30,6 +39,7 @@ import com.rohittp.reng.internal.terrain.DemNeighbourFill
 internal fun reportTerrainDegradation(
     outcome: TerrainAcquisitionOutcome,
     groundTiles: List<CanonicalBasemapTile>,
+    elevatedTiles: Set<CanonicalBasemapTile>,
     sink: DiagnosticSink,
 ) {
     when (outcome) {
@@ -44,7 +54,7 @@ internal fun reportTerrainDegradation(
         is TerrainAcquisitionOutcome.Degraded -> sink.emit(terrainUnavailableDiagnostic())
 
         is TerrainAcquisitionOutcome.Acquired -> {
-            val gaps = terrainCoverageGapCount(groundTiles, outcome)
+            val gaps = terrainCoverageGapCount(groundTiles, elevatedTiles)
             if (gaps > 0) sink.emit(terrainCoverageIncompleteDiagnostic(gaps.toLong()))
         }
     }
@@ -60,6 +70,12 @@ internal fun reportTerrainDegradation(
  * inflate every ordinary frame's number by the ring's `4*sqrt(T) + 4`. ADR 0041 says "the count of
  * tiles that drew flat", so the count is over [groundTiles].
  *
+ * **[elevatedTiles] is the frame's own answer rather than the acquisition's.** It is every requested
+ * tile that has usable texels, a window onto its source, and a source that can be padded -- the three
+ * things a ground tile needs before it displaces at all. A tile the engine returned and RenG cannot
+ * use is missing from it, which is the whole of the repair: the acquisition succeeding says nothing
+ * about whether a tile drew relief.
+ *
  * **[groundTiles] is reduced to distinct canonical tiles first.** A Mercator frame shows the same
  * canonical tile in as many world copies as the camera spans, and one absent DEM makes every one of
  * those copies draw flat -- but it is one tile, and a consumer deciding whether to raise a zoom or
@@ -67,8 +83,8 @@ internal fun reportTerrainDegradation(
  */
 internal fun terrainCoverageGapCount(
     groundTiles: List<CanonicalBasemapTile>,
-    acquired: TerrainAcquisitionOutcome.Acquired,
-): Int = groundTiles.distinct().count { terrainCoverageFillOf(it, acquired) == DemNeighbourFill.ABSENT }
+    elevatedTiles: Set<CanonicalBasemapTile>,
+): Int = groundTiles.distinct().count { terrainCoverageFillOf(it, elevatedTiles) == DemNeighbourFill.ABSENT }
 
 /**
  * Why one ground tile has no elevation of its own, or `null` when it has some.
@@ -90,10 +106,10 @@ internal fun terrainCoverageGapCount(
  */
 internal fun terrainCoverageFillOf(
     tile: CanonicalBasemapTile,
-    acquired: TerrainAcquisitionOutcome.Acquired,
+    elevatedTiles: Set<CanonicalBasemapTile>,
 ): DemNeighbourFill? = when {
     !existsInWorld(tile) -> DemNeighbourFill.WORLD_EDGE
-    acquired.demTileFor(tile) != null -> null
+    tile in elevatedTiles -> null
     else -> DemNeighbourFill.ABSENT
 }
 

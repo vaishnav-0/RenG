@@ -219,6 +219,19 @@ as the requested one.
   `else -> true` carries a specific argument that holds at Rentile 0.6.0 — its raster acquirer re-decodes
   and re-verifies the digest on a store hit and refetches on mismatch. The narrower gap (non-PNG, alpha,
   dimension disagreement) lands on **RenG's own terrain decode**, which must validate what it decodes anyway.
+
+  **Erratum, 2026-08-30 — two of those three are gone, and the first was the cycle's largest defect.**
+  Task 13's harness pass measured that five of the six corpus terrain styles serve **WebP**, so RenG's own
+  decode reached one style and silently discarded the rest; Rentile `0.7.0` exposes the texels it already
+  decoded, and RenG now decodes no DEM at all. **Non-PNG** was therefore never a gap but a restriction, and
+  it is removed. **Alpha** was a defence against Rentile's premultiplied bitmap, which corrupted R/G/B
+  before any elevation formula read them; `0.7.0`'s texels are documented as never premultiplied and as
+  preserving whatever alpha the image carried, so a translucent texel now decodes to the height its
+  channels pack and refusing it would trade a correct height for flat ground. **Dimension disagreement**
+  survives unchanged and is made once, at acquisition, for both terrain paths. ADR 0016's *write*-path
+  obligation is untouched and still requires a PNG that is opaque in every texel, so a WebP DEM is never
+  written to the consumer's `Store` — it renders and is refetched, which is a cost rather than a defect and
+  is recorded here rather than repaired.
 - **GPU residency stays at 512 MiB.** Terrain roughly doubles texture residency — 391 MiB at 167 tiles,
   which fits; 1,123 MiB at the declared 512-tile ceiling, which does not. X2's invariant that a *legal*
   frame cannot thrash therefore no longer holds, and that is recorded rather than repaired: the realistic

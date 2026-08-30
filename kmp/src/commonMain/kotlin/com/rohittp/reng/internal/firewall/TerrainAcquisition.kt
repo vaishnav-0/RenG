@@ -7,7 +7,9 @@ import com.rohittp.reng.internal.identity.PureKotlinSha256
 import com.rohittp.reng.internal.identity.Sha256Function
 import com.rohittp.reng.internal.planning.CanonicalBasemapTile
 import com.rohittp.reng.internal.terrain.DemEncoding
+import com.rohittp.reng.internal.terrain.DemTexels
 import com.rohittp.reng.internal.terrain.DemTileCoordinate
+import com.rohittp.reng.internal.terrain.demTexelsOf
 import com.rohittp.rentile.GroundRadianceDescriptor
 import com.rohittp.rentile.PreparedStyle
 import com.rohittp.rentile.TerrainDemEncoding
@@ -26,11 +28,18 @@ import com.rohittp.rentile.ValidatedDemTile
  *
  * **Nothing Rentile-shaped leaves this file.** `TerrainDemEncoding` becomes
  * [com.rohittp.reng.internal.terrain.DemEncoding] and `TileId` becomes
- * [com.rohittp.reng.internal.terrain.DemTileCoordinate] here, which is the same boundary
+ * [com.rohittp.reng.internal.terrain.DemTileCoordinate] here, and `ValidatedDemTile.texels` becomes
+ * [com.rohittp.reng.internal.terrain.DemTexels] here, which is the same boundary
  * [engineKeyedResourceClassOf] and [BasemapEngineHost.engineTileIdOf] already draw: an engine type is
- * named in `internal/firewall` and nowhere else, so terrain decode and terrain drawing never import the
- * engine's vocabulary to do arithmetic. The **encoded bytes cross untouched** -- Task 5 uploads them as a
- * texture and must not be routed through the CPU decode path to get them.
+ * named in `internal/firewall` and nowhere else, so terrain sampling and terrain drawing never import the
+ * engine's vocabulary to do arithmetic.
+ *
+ * **The pixels cross already decoded, and RenG decodes no DEM anywhere.** Rentile decodes a DEM to
+ * validate it and, since `0.7.0`, keeps the result; RenG used to re-decode the encoded bytes with its own
+ * PNG decoder, and five of the corpus's six terrain styles serve **WebP**, so every one of those tiles
+ * fetched 200 and was silently thrown away. The encoded bytes are therefore **not** carried onward: they
+ * had exactly one consumer, that decode, and holding a megabyte a tile for nothing is not free at a
+ * hundred tiles a frame.
  *
  * **The ring is why this is not a one-line call.** A DEM grid is edge-*exclusive*: texel `i` is centred at
  * `(i + 0.5)/N`, so a tile boundary sits half a texel outside the outermost texel centre and is
@@ -144,7 +153,11 @@ internal class TerrainAcquisition(
                 failure = failure,
             )
         }
-        return TerrainAcquisitionOutcome.Acquired(source, requested, matchDemTiles(requested, results))
+        return TerrainAcquisitionOutcome.Acquired(
+            source,
+            requested,
+            matchDemTiles(requested, results, source.tileSizePx),
+        )
     }
 
     /**
@@ -160,16 +173,25 @@ internal class TerrainAcquisition(
      * every `requestedTile` from the list it was handed -- `sampleFor` copies the argument into
      * `outputTile` -- so an unrequested one cannot arise, and inventing a failure for it would be a second
      * opinion about the engine's own bookkeeping.
+     *
+     * **A result whose texels disagree with [tileSizePx] is dropped in exactly the same way**, and that
+     * placement is the point rather than a convenience: ADR 0041 already counts a requested tile with no
+     * entry here, so a DEM that arrives unusable becomes *absent* in the one sense the coverage
+     * diagnostic already reports. Rentile bounds a DEM's dimensions against its own policy ceiling and
+     * never against the `tileSizePx` its own `TerrainSourceDescriptor` declares, which is why this is
+     * still RenG's check to make.
      */
     internal fun matchDemTiles(
         requested: List<CanonicalBasemapTile>,
         results: List<ValidatedDemTile>,
+        tileSizePx: Int,
     ): Map<CanonicalBasemapTile, AcquiredDemTile> {
         if (results.isEmpty()) return emptyMap()
         val byRequestedTile = results.associateBy { it.requestedTile }
         val matched = LinkedHashMap<CanonicalBasemapTile, AcquiredDemTile>(requested.size)
         requested.forEach { tile ->
-            byRequestedTile[host.engineTileIdOf(tile)]?.let { dem -> matched[tile] = acquiredDemTileOf(dem) }
+            val dem = byRequestedTile[host.engineTileIdOf(tile)] ?: return@forEach
+            acquiredDemTileOf(dem, tileSizePx)?.let { matched[tile] = it }
         }
         return matched
     }
@@ -195,14 +217,30 @@ private fun terrainSourceOf(descriptor: TerrainSourceDescriptor, styleSourceId: 
         maximumZoom = descriptor.maximumZoom,
     )
 
-/** One engine DEM result in RenG's own vocabulary, with its encoded bytes untouched. */
-private fun acquiredDemTileOf(dem: ValidatedDemTile): AcquiredDemTile = AcquiredDemTile(
-    requestedTile = demTileCoordinateOf(dem.requestedTile),
-    sourceTile = demTileCoordinateOf(dem.sourceTile),
-    encoding = demEncodingOf(dem.encoding),
-    bytes = dem.bytes,
-    contentDigest = dem.contentDigest,
-)
+/**
+ * One engine DEM result in RenG's own vocabulary, or `null` when its texels are not the square the
+ * style's own `TerrainSourceDescriptor` declared -- see [TerrainAcquisition.matchDemTiles].
+ *
+ * `dem.texels` is the engine's `DemTexels`: tightly packed RGBA8, four bytes a texel in R, G, B, A
+ * order, rows top-down from the tile's north edge, never premultiplied and with no colour-space
+ * conversion. That is byte-for-byte RenG's own canonical decoded form, which is why
+ * [com.rohittp.reng.internal.terrain.demTexelsOf] copies rather than converts.
+ */
+private fun acquiredDemTileOf(dem: ValidatedDemTile, tileSizePx: Int): AcquiredDemTile? {
+    val texels = demTexelsOf(
+        width = dem.texels.width,
+        height = dem.texels.height,
+        rgba = dem.texels.rgba,
+        tileSizePx = tileSizePx,
+        contentDigest = dem.contentDigest,
+    ) ?: return null
+    return AcquiredDemTile(
+        requestedTile = demTileCoordinateOf(dem.requestedTile),
+        sourceTile = demTileCoordinateOf(dem.sourceTile),
+        encoding = demEncodingOf(dem.encoding),
+        texels = texels,
+    )
+}
 
 /**
  * `TerrainDemEncoding` to [DemEncoding], in a `when` with no `else` and over Rentile's enum rather than
@@ -284,7 +322,7 @@ internal fun terrainTileRequest(visibleTiles: List<CanonicalBasemapTile>): List<
  * a request an overzoom of an ancestor, which is what
  * [com.rohittp.reng.internal.terrain.demTileWindowFor] exists to resolve. [tileSizePx] is the size the
  * style declares rather than the size the image turns out to be -- Rentile never compares the two, which
- * is why the DEM decode checks it.
+ * is why [TerrainAcquisition.matchDemTiles] does, on the way past.
  */
 internal class TerrainSource(
     /** The style's own `terrain.source` id, un-hashed. */
@@ -300,26 +338,28 @@ internal class TerrainSource(
 }
 
 /**
- * One acquired DEM tile: still encoded, already in RenG's vocabulary.
+ * One acquired DEM tile: already decoded by the engine, already in RenG's vocabulary, and already
+ * agreed with the size the style declared.
  *
  * [requestedTile] and [sourceTile] differ exactly when the request overzooms the source or wraps the
  * world, and the pair is what [com.rohittp.reng.internal.terrain.demTileWindowFor] turns into the
- * sub-rectangle to sample. [bytes] is held rather than copied, the way [RenderedBasemapTile] holds its
- * own: Rentile already copied on the way out, a DEM at 512 square is a megabyte, and a frame carries
- * upwards of a hundred of them.
+ * sub-rectangle to sample.
+ *
+ * **The engine's encoded bytes are deliberately not here.** Their only consumer was RenG's own PNG
+ * decode, which `0.7.0` removed the need for; keeping them would retain a megabyte a tile, a hundred
+ * tiles a frame, for a decode that no longer happens. Rentile still holds them as the value to hash
+ * for cache identity, and [DemTexels.contentDigest] is that identity carried onward.
  */
 internal class AcquiredDemTile(
     val requestedTile: DemTileCoordinate,
     val sourceTile: DemTileCoordinate,
     val encoding: DemEncoding,
-    val bytes: ByteArray,
-    /** Rentile's own content identity for these bytes; RenG derives its resource keys separately. */
-    val contentDigest: String,
+    val texels: DemTexels,
 ) {
-    /** The byte *count* rather than the bytes: a megabyte of DEM payload is not a `toString`. */
+    /** The tile's edge length rather than its texels: a megabyte of DEM payload is not a `toString`. */
     override fun toString(): String =
         "AcquiredDemTile(requested=$requestedTile, source=$sourceTile, encoding=$encoding, " +
-            "bytes=${bytes.size})"
+            "sizePx=${texels.image.width})"
 }
 
 /** Which `terrain` source this frame has, or why it has none. */

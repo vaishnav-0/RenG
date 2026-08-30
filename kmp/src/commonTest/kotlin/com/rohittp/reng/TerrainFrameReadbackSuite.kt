@@ -1231,8 +1231,13 @@ private class TerrainFrameStore : Store {
 // 1,000 m is (1, 173, 176). Nothing on the expected side of any assertion runs decodePng or
 // demElevationMetres, so a decoder or an encoding regression can only make this suite fail.
 
-/** 64 x 64, every texel Mapbox `(1, 134, 160)`, which decodes to exactly 0 m. */
-private val DEM_SEA_LEVEL_PNG: ByteArray = Base64.decode(
+/**
+ * 64 x 64, every texel Mapbox `(1, 134, 160)`, which decodes to exactly 0 m.
+ *
+ * `internal` because `RendererTerrainTest` needs a DEM body of a size a `raster-dem` source can
+ * legally declare, and a second copy of a base64 blob is a second thing to regenerate.
+ */
+internal val DEM_SEA_LEVEL_PNG: ByteArray = Base64.decode(
     "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAZElEQVR42u3QQREAAAQAMMrLoSk5nD1WYJHV81kIECBA" +
         "gAABAgQIECBAgAABAgQIECBAgAABAgQIECBAgAABAgQIECBAgAABAgQIECBAgAABAgQIECBAgAABAgQIECBAgAAB" +
         "9y1XDGH/EBLYbAAAAABJRU5ErkJggg==",

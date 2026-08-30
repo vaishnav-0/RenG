@@ -1,21 +1,20 @@
 package com.rohittp.reng.internal.terrain
 
-import com.rohittp.reng.internal.driver.validatesDemTerrainEncoding
 import com.rohittp.reng.internal.image.DecodedImage
-import com.rohittp.reng.internal.image.PngDecodeResult
-import com.rohittp.reng.internal.image.decodePng
 
 /**
  * One DEM tile's texels in RenG's canonical decoded form, paired with the engine's own identity for
  * the bytes they came from.
  *
- * **The texels are the DEM's *encoded* channels, not elevations.** [decodeDemElevation] is the CPU
+ * **The texels are the DEM's *encoded* channels, not elevations.** [demElevationTile] is the CPU
  * path -- wave 2's sparse lookups and the readback gates -- and it produces metres. This is the GPU
  * path, where the vertex shader decodes the same formula from the same RGB triple itself (design
  * section 3), so anything that rewrote a channel on the way to the texture would rewrite the height.
  * [DecodedImage] is exactly the right carrier for that: Cycle C's canonical form is tightly packed,
  * **unpremultiplied** RGBA8, which is what `CONTEXT.md`'s **Terrain Sample** entry demands when it
- * says the samples must be bit-exact with no premultiplication.
+ * says the samples must be bit-exact with no premultiplication -- and it is byte-for-byte the form
+ * Rentile's `ValidatedDemTile.texels` is documented to arrive in, so adopting one is a copy rather
+ * than a conversion.
  *
  * [contentDigest] is Rentile's `ValidatedDemTile.contentDigest`, carried through
  * [com.rohittp.reng.internal.firewall.AcquiredDemTile]. It is here rather than alongside because
@@ -24,47 +23,47 @@ import com.rohittp.reng.internal.image.decodePng
  */
 internal class DemTexels(val image: DecodedImage, val contentDigest: String)
 
-/** The outcome of decoding one DEM tile's bytes into the texels a texture is assembled from. */
-internal sealed interface DemTexelDecodeResult {
-    data class Success(val texels: DemTexels) : DemTexelDecodeResult
-    data class Rejected(val reason: DemReject) : DemTexelDecodeResult
-}
-
 /**
- * Decodes one acquired DEM tile's [bytes] into canonical RGBA8 texels, or refuses them for one of
- * [DemReject]'s three reasons.
+ * Adopts one acquired DEM tile's **already-decoded** texels, or refuses them for the one thing the
+ * engine that decoded them does not check.
  *
- * **The same three checks [decodeDemElevation] makes, for the same reason and in the same order**:
- * Rentile's `ValidatedDemTile` covers status, size, that Skia decoded *something*, dimensions against
- * its own policy limits, and a digest -- not PNG-ness, not the `tileSizePx` its own
- * `TerrainSourceDescriptor` declares, and not opacity. Design section 10 puts all three on RenG's own
- * terrain decode, and there are two of those because the CPU wants metres and the GPU wants bytes.
+ * **RenG no longer decodes a DEM at all, and that is this cycle's largest correction.** Rentile
+ * validates a DEM by decoding it, and until `0.7.0` it threw the pixels away -- so RenG re-decoded
+ * the encoded bytes with its own PNG decoder, and five of the corpus's six terrain styles serve
+ * **WebP**. Every one of those tiles fetched 200, passed the engine's validation, and was silently
+ * discarded (`docs/research/2026-08-30-e-terrain-harness-pass.md`). The container question now
+ * belongs to the engine, which owns a multi-format decoder, and RenG owns none of it.
  *
- * **This is the second caller of [validatesDemTerrainEncoding] and it inherits that function's cost**
- * -- one extra inflate of the accepting path's bytes, because the `private`
- * `isEightBitRgbTerrainEncoding` that would take the already-decoded image is not visible here.
- * [decodeDemElevation] records the same debt and the same one-line fix; duplicating the alpha scan
- * instead would put a third definition of "an eight-bit RGB terrain encoding" in the tree, free to
- * drift from the firewall's.
+ * **Exactly one of the three checks RenG used to make survives, and it survives because nothing else
+ * makes it.** Rentile bounds a DEM's dimensions against its *own* policy ceiling and never against
+ * the `tileSizePx` the style's own `TerrainSourceDescriptor` declares, so a source can still answer
+ * with an image of a size this file's sampling arithmetic was never built for. The other two are
+ * gone rather than moved: **PNG-ness** was RenG's own restriction and was the defect; **opacity** was
+ * a defence against premultiplication, and Rentile's texels are documented as never premultiplied
+ * and as preserving whatever alpha the image carried, so a translucent texel's R, G and B are still
+ * exactly the ones the DEM packed and the height RenG decodes from them is still the right one.
+ * ADR 0016's write-path obligation ([com.rohittp.reng.internal.driver.validatesDemTerrainEncoding])
+ * is a different question about what reaches the consumer's `Store` and is unchanged.
  *
- * **Nothing here throws** (ADR 0041): a decode that threw would take the frame with it, and terrain is
- * the one basemap resource that degrades to a picture RenG has already shipped.
+ * The [rgba] length is checked as well, because every offset in [assemblePaddedTexels] is derived
+ * from [width] alone and a short array would index outside itself rather than degrade. Rentile's own
+ * `DemTexels` requires the same thing, which makes this a guard against a future engine rather than
+ * against today's -- and it is why a non-positive [tileSizePx] cannot produce texels: the engine's
+ * dimensions are positive, so nothing can equal it.
+ *
+ * **Nothing here throws** (ADR 0041): a refusal that threw would take the frame with it, and terrain
+ * is the one basemap resource that degrades to a picture RenG has already shipped.
  */
-internal fun decodeDemTexels(
-    bytes: ByteArray,
+internal fun demTexelsOf(
+    width: Int,
+    height: Int,
+    rgba: ByteArray,
     tileSizePx: Int,
-    maximumDecodedBytes: Long,
     contentDigest: String,
-): DemTexelDecodeResult {
-    val image = (decodePng(bytes, maximumDecodedBytes) as? PngDecodeResult.Success)?.image
-        ?: return DemTexelDecodeResult.Rejected(DemReject.UNDECODABLE)
-    if (image.width != tileSizePx || image.height != tileSizePx) {
-        return DemTexelDecodeResult.Rejected(DemReject.DIMENSIONS)
-    }
-    if (!validatesDemTerrainEncoding(bytes, maximumDecodedBytes)) {
-        return DemTexelDecodeResult.Rejected(DemReject.NON_OPAQUE)
-    }
-    return DemTexelDecodeResult.Success(DemTexels(image = image, contentDigest = contentDigest))
+): DemTexels? {
+    if (tileSizePx <= 0 || width != tileSizePx || height != tileSizePx) return null
+    if (rgba.size.toLong() != width.toLong() * height.toLong() * RGBA_CHANNELS.toLong()) return null
+    return DemTexels(DecodedImage(width = width, height = height, rgba = rgba), contentDigest)
 }
 
 /**
@@ -127,12 +126,13 @@ internal enum class DemNeighbourFill {
 
     /**
      * The tile exists and RenG does not have it: Rentile dropped it below the source's `minimumZoom`
-     * or outside its `bounds` through `mapNotNull` with no diagnostic, its decode was refused, or the
-     * frame never asked for it. This is the case ADR 0041's coverage diagnostic reports.
+     * or outside its `bounds` through `mapNotNull` with no diagnostic, its texels disagreed with the
+     * size the source declared, or the frame never asked for it. This is the case ADR 0041's coverage
+     * diagnostic reports.
      *
-     * A neighbour whose edge length disagrees with the centre's also lands here. [decodeDemTexels]
-     * makes that unreachable for tiles that came through it -- every one is exactly `tileSizePx`
-     * square -- and folding it in means a future caller that mixes sizes degrades rather than throws.
+     * A neighbour whose edge length disagrees with the centre's also lands here. [demTexelsOf] makes
+     * that unreachable for tiles that came through it -- every one is exactly `tileSizePx` square --
+     * and folding it in means a future caller that mixes sizes degrades rather than throws.
      */
     ABSENT,
 }
@@ -203,6 +203,31 @@ internal class PaddedDemTexture(
 }
 
 /**
+ * Whether [padDemTexture] would answer a texture for [centre] against this exact [texelsByTile], and
+ * therefore whether the ground tiles that sample it will displace at all.
+ *
+ * **It exists so that "this frame's terrain is incomplete" and "this frame's draw declined a tile"
+ * cannot be two different opinions.** ADR 0041's coverage diagnostic fires during `prepare()` and
+ * the padding happens during the draw; before Rentile handed over decoded texels those two moments
+ * held different information, and the draw's silent decline was reported by nothing at all -- the
+ * defect Task 13's harness pass caught. `prepare()` now asks this question with the same map the
+ * draw will pad from, so the answer is the same answer rather than a second one.
+ *
+ * The three refusals are [padDemTexture]'s own, stated once here and consumed there: a zoom outside
+ * the shift's honest range, a centre tile with no texels, and a centre image that is not a positive
+ * square. Nothing about a *neighbour* is in it -- an absent neighbour is a replicated border texel
+ * on a tile that still displaces from its own data.
+ */
+internal fun canPadDemTexture(
+    centre: DemTileCoordinate,
+    texelsByTile: Map<DemTileCoordinate, DemTexels>,
+): Boolean {
+    if (centre.z !in 0..MAXIMUM_PADDED_DEM_ZOOM) return false
+    val image = texelsByTile[centre]?.image ?: return false
+    return image.width > 0 && image.height == image.width
+}
+
+/**
  * Assembles the padded texture for [centre] out of [texelsByTile], or `null` when [centre] itself is
  * not in it.
  *
@@ -231,10 +256,9 @@ internal fun padDemTexture(
     centre: DemTileCoordinate,
     texelsByTile: Map<DemTileCoordinate, DemTexels>,
 ): PaddedDemTexture? {
-    if (centre.z !in 0..MAXIMUM_PADDED_DEM_ZOOM) return null
-    val centreTexels = texelsByTile[centre] ?: return null
+    if (!canPadDemTexture(centre, texelsByTile)) return null
+    val centreTexels = texelsByTile.getValue(centre)
     val interior = centreTexels.image.width
-    if (interior <= 0 || centreTexels.image.height != interior) return null
 
     val dimension = 1L shl centre.z
     val fills = LinkedHashMap<DemNeighbour, DemNeighbourFill>()

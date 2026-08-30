@@ -1,12 +1,11 @@
 package com.rohittp.reng.internal.terrain
 
 import com.rohittp.reng.internal.image.DecodedImage
-import kotlin.io.encoding.Base64
 import kotlin.math.floor
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -28,12 +27,16 @@ import kotlin.test.assertTrue
  * `t`, `x` and `y` are separately observable in every assertion below.
  *
  * [twoAdjacentTilesSampleBitIdenticalHeightsAtTheirSharedEdge] is the assertion the whole task exists
- * for, and it is the one case here driven by **real PNG bytes through the real decoder**, decoded to
- * real metres, rather than by the synthetic fixture.
+ * for, and it is the one case here read back as **real metres through the production formula** rather
+ * than as channel triples.
+ *
+ * **The fixtures are raw RGBA, not PNGs, and that is this task's correction rather than a
+ * simplification.** RenG no longer decodes a DEM at all: Rentile hands over the pixels it decoded to
+ * validate the tile, and five of the corpus's six terrain styles serve **WebP**, so a PNG fixture in
+ * this file would now assert the shape of a container RenG never sees. What arrives is exactly what
+ * [syntheticTile] builds -- tightly packed RGBA8, four bytes a texel, rows top-down.
  */
 class PaddedDemTextureTest {
-
-    private val ceiling = 64L * 1024L * 1024L
 
     // z = 2 puts four tiles on a side, so a centre at (1, 1) has all eight neighbours in the world
     // and a centre at (0, 1) has a western neighbour only across the antimeridian.
@@ -133,9 +136,9 @@ class PaddedDemTextureTest {
     }
 
     /**
-     * **The assertion the task exists for**, and the only one here driven by real PNG bytes: two real
-     * DEM tiles, decoded through [decodeDemTexels] and therefore through Cycle C's real PNG decoder,
-     * padded independently, and read back as real metres through [demElevationMetres].
+     * **The assertion the task exists for**: two DEM tiles padded independently and read back as real
+     * metres through the production [demElevationMetres], against heights computed by hand from the
+     * channel triples the fixture writes.
      *
      * Two claims, and the second is what makes the first non-vacuous:
      *
@@ -155,8 +158,8 @@ class PaddedDemTextureTest {
         val west = DemTileCoordinate(z = 2, x = 1, y = 1)
         val east = DemTileCoordinate(z = 2, x = 2, y = 1)
         val tiles = mapOf(
-            west to decodedTexels(westDemPng, "digest-west"),
-            east to decodedTexels(eastDemPng, "digest-east"),
+            west to syntheticTile(1, "digest-west"),
+            east to syntheticTile(2, "digest-east"),
         )
 
         val paddedWest = requireNotNull(padDemTexture(west, tiles))
@@ -347,8 +350,8 @@ class PaddedDemTextureTest {
     /**
      * The guard is load-bearing rather than defensive decoration: a zero-edge centre reaches
      * `copyCorner` with `interior - 1 == -1` and would index outside its own array, and ADR 0041 says
-     * terrain degrades instead of taking the frame with it. Unreachable through [decodeDemTexels] --
-     * `decodePng` admits only positive dimensions, so no decoded image can equal a non-positive
+     * terrain degrades instead of taking the frame with it. Unreachable through [demTexelsOf] --
+     * the engine's own texels are positive, so no adopted image can equal a non-positive
      * `tileSizePx` -- and reachable by any caller assembling a [DemTexels] itself.
      */
     @Test
@@ -369,40 +372,146 @@ class PaddedDemTextureTest {
     }
 
     @Test
-    fun demTexelsDecodeToCanonicalRgbaWithTheEnginesDigestCarriedThrough() {
-        val decoded = decodeDemTexels(westDemPng, FIXTURE_SIZE, ceiling, contentDigest = "digest-west")
+    fun demTexelsAdoptTheEnginesPixelsUntouchedAndCarryItsDigest() {
+        val texels = assertNotNull(
+            demTexelsOf(
+                width = FIXTURE_SIZE,
+                height = FIXTURE_SIZE,
+                rgba = mapboxTexelBytes(id = 1),
+                tileSizePx = FIXTURE_SIZE,
+                contentDigest = "digest-west",
+            ),
+        )
 
-        val texels = assertIs<DemTexelDecodeResult.Success>(decoded).texels
         assertEquals("digest-west", texels.contentDigest)
         assertEquals(FIXTURE_SIZE, texels.image.width)
-        // Row 0, column 3 of the western fixture: RGB(1, 3, 0) -> -10000 + (65536 + 768) * 0.1.
+        // Row 0, column 3: RGB(1, 3, 0) -> -10000 + (65536 + 768) * 0.1, computed by hand.
         assertEquals(-3369.6, metresAt(texels.image, 3, 0), 1e-9)
     }
 
+    /**
+     * **The one check of the three that survives Rentile `0.7.0`, and the reason it survives is that
+     * nothing else makes it.** Rentile bounds a DEM's dimensions against its own policy ceiling and
+     * never against the `tileSizePx` its own `TerrainSourceDescriptor` declares, so a source can
+     * still answer with an image this file's arithmetic was never built for.
+     *
+     * Both halves are checked, because a guard reading only `width` lets the second through.
+     */
     @Test
-    fun demTexelsRefuseTheThreeThingsRentileNeverChecked() {
-        assertEquals(
-            DemTexelDecodeResult.Rejected(DemReject.UNDECODABLE),
-            decodeDemTexels(byteArrayOf(1, 2, 3, 4), FIXTURE_SIZE, ceiling, "d"),
-            "Rentile validates a DEM with a multi-format decoder; RenG owns exactly one, and it is PNG",
+    fun demTexelsRefuseAnImageThatIsNotTheSizeTheStyleDeclared() {
+        assertNull(
+            demTexelsOf(FIXTURE_SIZE, FIXTURE_SIZE, mapboxTexelBytes(1), tileSizePx = 8, contentDigest = "d"),
+            "a 4x4 image is not the 8x8 the source declared",
         )
-        assertEquals(
-            DemTexelDecodeResult.Rejected(DemReject.DIMENSIONS),
-            decodeDemTexels(westDemPng, tileSizePx = 8, maximumDecodedBytes = ceiling, contentDigest = "d"),
-            "Rentile never compares the image against the tileSizePx its own descriptor declares",
+        assertNull(
+            demTexelsOf(FIXTURE_SIZE, 1, ByteArray(FIXTURE_SIZE * 4), tileSizePx = FIXTURE_SIZE, contentDigest = "d"),
+            "4 wide and 1 tall agrees with tileSizePx on one axis only",
         )
-        assertEquals(
-            DemTexelDecodeResult.Rejected(DemReject.NON_OPAQUE),
-            decodeDemTexels(translucentDemPng, tileSizePx = 2, maximumDecodedBytes = ceiling, contentDigest = "d"),
-            "a translucent DEM texel is not a height RenG can state",
+        assertNull(
+            demTexelsOf(0, 0, ByteArray(0), tileSizePx = 0, contentDigest = "d"),
+            "a descriptor declaring no size is refused rather than adopted as a zero-edge tile",
         )
     }
 
-    private fun decodedTexels(png: ByteArray, digest: String): DemTexels =
-        assertIs<DemTexelDecodeResult.Success>(decodeDemTexels(png, FIXTURE_SIZE, ceiling, digest)).texels
+    /**
+     * The two checks that are **gone rather than moved**, asserted as decisions rather than assumed.
+     *
+     * **PNG-ness** was RenG's own restriction: there are no encoded bytes here to be a container of
+     * any kind, so a WebP DEM -- five of the corpus's six terrain styles -- is now indistinguishable
+     * from a PNG one by the time it reaches this function, which is the whole of the repair.
+     *
+     * **Opacity** was a defence against Rentile's old premultiplied bitmap, where a translucent texel
+     * arrived with R, G and B already scaled and the height silently wrong. `0.7.0`'s texels are
+     * documented as never premultiplied, so the channels are the ones the DEM packed whatever the
+     * alpha is -- and refusing the tile would trade a correct height for flat ground. The assertion
+     * is that the height is *identical* to the opaque tile's, which is what makes the change safe.
+     */
+    @Test
+    fun aTranslucentTexelIsAdoptedAndKeepsTheHeightItsChannelsPack() {
+        val opaque = mapboxTexelBytes(id = 1)
+        val translucent = mapboxTexelBytes(id = 1).also { it[3] = 128.toByte() }
+
+        val adopted = assertNotNull(
+            demTexelsOf(FIXTURE_SIZE, FIXTURE_SIZE, translucent, FIXTURE_SIZE, contentDigest = "d"),
+        )
+        val reference = assertNotNull(
+            demTexelsOf(FIXTURE_SIZE, FIXTURE_SIZE, opaque, FIXTURE_SIZE, contentDigest = "d"),
+        )
+
+        assertNotEquals(
+            opaque.toList(),
+            translucent.toList(),
+            "the fixtures must genuinely differ in alpha or this case asserts nothing",
+        )
+        assertEquals(-3446.4, metresAt(adopted.image, 0, 0), 1e-9, "RGB(1, 0, 0) whatever the alpha is")
+        assertEquals(metresAt(reference.image, 0, 0), metresAt(adopted.image, 0, 0), 0.0)
+    }
+
+    /**
+     * The array length is the one thing [padDemTexture]'s arithmetic cannot survive being wrong
+     * about: every offset in it is derived from the width alone, so a short array indexes outside
+     * itself rather than degrading. Rentile's own `DemTexels` requires the same thing, which makes
+     * this a guard against a future engine rather than against today's.
+     */
+    @Test
+    fun demTexelsRefuseAnArrayThatIsNotOneRgbaTexelPerPixel() {
+        assertNull(
+            demTexelsOf(
+                width = FIXTURE_SIZE,
+                height = FIXTURE_SIZE,
+                rgba = ByteArray(FIXTURE_SIZE * FIXTURE_SIZE * 4 - 1),
+                tileSizePx = FIXTURE_SIZE,
+                contentDigest = "d",
+            ),
+        )
+    }
+
+    /**
+     * **`prepare()` and the draw must not hold two opinions about whether a tile displaces.** ADR
+     * 0041's coverage diagnostic is counted during preparation from [canPadDemTexture], and the
+     * padding itself happens at draw time; a frame that acquired every DEM, refused them all at draw
+     * time and reported nothing is exactly the defect Task 13's harness pass caught.
+     *
+     * **What this can and cannot fail on, stated rather than implied.** [padDemTexture] delegates its
+     * three refusals to [canPadDemTexture], so the equality below cannot fail by disagreement while
+     * that delegation stands -- and pinning the delegation is the point: re-inlining those guards, or
+     * adding a fourth refusal to [padDemTexture] alone, breaks this. What it does fail on today is a
+     * probe that admits something the padding cannot survive, since [padDemTexture] then indexes
+     * outside its own array rather than returning `null`. The trailing positive case is what stops a
+     * predicate that always answered `false` from satisfying the whole thing.
+     */
+    @Test
+    fun theCoverageProbeAgreesWithThePaddingItPredicts() {
+        val neighbourhood = neighbourhood()
+        val absurdZoom = DemTileCoordinate(z = 31, x = 0, y = 0)
+        val missing = DemTileCoordinate(z = 2, x = 3, y = 3)
+        val oblong = DemTileCoordinate(z = 2, x = 3, y = 0)
+        val degenerate = DemTileCoordinate(z = 2, x = 3, y = 1)
+        val tiles = neighbourhood + mapOf(
+            absurdZoom to syntheticTile(1),
+            oblong to DemTexels(DecodedImage(4, 2, ByteArray(4 * 2 * 4)), "oblong"),
+            degenerate to DemTexels(DecodedImage(0, 0, ByteArray(0)), "degenerate"),
+        )
+
+        listOf(centre, absurdZoom, missing, oblong, degenerate).forEach { tile ->
+            assertEquals(
+                padDemTexture(tile, tiles) != null,
+                canPadDemTexture(tile, tiles),
+                "the probe and the padding disagree about $tile",
+            )
+        }
+        assertTrue(canPadDemTexture(centre, tiles), "the ordinary centre pads, or every case above is vacuous")
+    }
 
     /** Every texel of tile [id] is `RGB(id, x, y)`, opaque -- see this class's KDoc. */
-    private fun syntheticTile(id: Int, digest: String = "digest-$id"): DemTexels {
+    private fun syntheticTile(id: Int, digest: String = "digest-$id"): DemTexels =
+        DemTexels(DecodedImage(FIXTURE_SIZE, FIXTURE_SIZE, mapboxTexelBytes(id)), digest)
+
+    /**
+     * The same texels [syntheticTile] carries, as the raw RGBA array an engine hands over: tightly
+     * packed, four bytes a texel in R, G, B, A order, rows top-down.
+     */
+    private fun mapboxTexelBytes(id: Int): ByteArray {
         val bytes = ByteArray(FIXTURE_SIZE * FIXTURE_SIZE * 4)
         for (y in 0 until FIXTURE_SIZE) {
             for (x in 0 until FIXTURE_SIZE) {
@@ -413,7 +522,7 @@ class PaddedDemTextureTest {
                 bytes[at + 3] = 255.toByte()
             }
         }
-        return DemTexels(DecodedImage(FIXTURE_SIZE, FIXTURE_SIZE, bytes), digest)
+        return bytes
     }
 
     private fun texelAt(image: DecodedImage, x: Int, y: Int): Triple<Int, Int, Int> {
@@ -453,40 +562,3 @@ private const val EAST_ID: Int = 6
 private const val SOUTH_WEST_ID: Int = 7
 private const val SOUTH_ID: Int = 8
 private const val SOUTH_EAST_ID: Int = 9
-
-// Real PNGs, generated once by CPython's zlib/struct modules and pasted as base64, following the
-// anti-circularity convention DemElevationTest.kt and PngDecoderTest.kt document: none of RenG's own
-// encoder-less pipeline produced these bytes, and every expected elevation was computed by hand from
-// the triples the generator was given. Regenerate with:
-//
-// python3 - <<'PY'
-// import zlib, struct, base64
-// SIG = b"\x89PNG\r\n\x1a\n"
-// def chunk(kind, payload):
-//     crc = struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff)
-//     return struct.pack(">I", len(payload)) + kind + payload + crc
-// def build(w, h, colour, rows):
-//     raw = b"".join(b"\x00" + bytes(row) for row in rows)
-//     return (SIG + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, colour, 0, 0, 0))
-//             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
-// def tile(tid, n=4): return [[c for x in range(n) for c in (tid, x, y)] for y in range(n)]
-// print(base64.b64encode(build(4, 4, 2, tile(1))).decode())
-// print(base64.b64encode(build(4, 4, 2, tile(2))).decode())
-// print(base64.b64encode(build(2, 2, 6, [[0,0,0,255, 1,2,3,128],[4,5,6,255, 7,8,9,255]])).decode())
-// PY
-
-// 4x4 truecolour, every texel RGB(1, x, y): Mapbox heights -3446.4 m at (0, 0) rising to -3369.3 m.
-private val westDemPng: ByteArray = Base64.decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAJklEQVR42hXJwREAAAyCMJH9d671lZOQQGhwmreCY/pscTX+WdEDBWwAQSrge5QAAAAASUVORK5CYII=",
-)
-
-// 4x4 truecolour, every texel RGB(2, x, y): Mapbox heights 3107.2 m at (0, 0) rising to 3184.3 m --
-// a little over 6.4 km above its western neighbour at every shared row.
-private val eastDemPng: ByteArray = Base64.decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAJUlEQVR42hXIwREAAAyCMMT9d67llQPBoNiJmGjsHo+vIzV9tgcHHABRfcQJqAAAAABJRU5ErkJggg==",
-)
-
-// 2x2 truecolour+alpha with texel (1, 0) at alpha 128 and the rest opaque.
-private val translucentDemPng: ByteArray = Base64.decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGklEQVR42mNgYGD4z8jE3MDAwsr2n52D8z8AGfEDq0ClLgIAAAAASUVORK5CYII=",
-)

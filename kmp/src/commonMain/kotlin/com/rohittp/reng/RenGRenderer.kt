@@ -139,11 +139,10 @@ import com.rohittp.reng.internal.renGFailure
 import com.rohittp.reng.internal.residentGpuTexturesOverBudgetDiagnostic
 import com.rohittp.reng.internal.resource.ResourceOperationOutcome
 import com.rohittp.reng.internal.terrain.DemEncoding
-import com.rohittp.reng.internal.terrain.DemTexelDecodeResult
 import com.rohittp.reng.internal.terrain.DemTexels
 import com.rohittp.reng.internal.terrain.DemTileCoordinate
 import com.rohittp.reng.internal.terrain.TerrainGranularityInputs
-import com.rohittp.reng.internal.terrain.decodeDemTexels
+import com.rohittp.reng.internal.terrain.canPadDemTexture
 import com.rohittp.reng.internal.terrain.demTileWindowFor
 import com.rohittp.reng.internal.terrain.padDemTexture
 import com.rohittp.reng.internal.terrain.terrainCellsPerTileSide
@@ -245,25 +244,26 @@ internal class PreparedGroundInstance(
 )
 
 /**
- * One frame's terrain, still encoded: everything the ground needs to displace itself, and nothing
- * decoded yet.
+ * One frame's terrain: everything the ground needs to displace itself, decoded but not yet padded and
+ * not yet on the GPU.
  *
- * **The DEM bytes are carried to the draw rather than decoded in `prepare()`, exactly as a rendered
- * basemap tile's PNG bytes are**, and for the same reason: a padded DEM texture already resident
- * from an earlier frame must cost neither a decode nor an upload, `prepare()` holds no render
- * context, and residency is a question only the draw's [GlObjectRegistry] can answer.
+ * **Nothing here decodes anything, and until Rentile `0.7.0` that sentence was the opposite.** The
+ * encoded bytes used to be carried to the draw and inflated there by RenG's own PNG decoder, which
+ * cost a decode of every DEM in every frame's request -- the visible set plus its perimeter ring --
+ * even when every padded texture was already resident, and which reached exactly **one** of the six
+ * corpus styles that ask for terrain, because the other five serve WebP. The engine now hands over
+ * the pixels it decoded to validate the tile, so that debt is not paid down but deleted: there is no
+ * decode left to skip.
  *
- * **What that leaves owed is a per-frame CPU decode, and it is F-2's debt in new material.** A frame
- * whose padded textures are all resident still inflates every DEM in its request -- the visible set
- * plus its perimeter ring -- to find out that it did not need to. Design section 6 already refused
- * the obvious repair: keeping a decoded DEM for every visible tile is about 224 MiB against a
- * `maximumDecodedImageBytes` of 256 MiB shared with every raster. The cheaper repair it did not
- * consider is to compose `PaddedDemTexture.contentKey` from the acquired digests *before* decoding
- * anything, since that key is a function of digests alone, and to decode only the misses.
+ * **What is still per-frame is the padding**, because `uploadDemTexture` consults residency only
+ * after it is handed an assembled `PaddedDemTexture`. The repair `PaddedDemTexture.contentKey`'s own
+ * KDoc names -- composing that key from the nine digests, which are known here, before assembling
+ * anything -- is now fully available and is not taken in this task.
  *
  * [demTiles] is keyed by **requested** canonical tile, which is how the acquisition matched it
  * (ADR 0041: never by list index). Its `sourceTile` may differ -- an overzoom or a world wrap -- and
- * resolving that difference is `demTileWindowFor`'s job at draw time.
+ * [texelsBySource] is therefore keyed by the source, since several requested tiles can share one DEM
+ * image and one padded texture.
  */
 internal class PreparedTerrain(
     internal val encoding: DemEncoding,
@@ -273,14 +273,53 @@ internal class PreparedTerrain(
 ) {
     private val demSnapshot: Map<CanonicalBasemapTile, AcquiredDemTile> = LinkedHashMap(demTiles)
 
+    /**
+     * One entry per distinct DEM image, which is what a padded texture is built around: several
+     * requested tiles overzooming into one ancestor arrive as several entries carrying the identical
+     * texels and the identical digest.
+     */
+    internal val texelsBySource: Map<DemTileCoordinate, DemTexels> =
+        LinkedHashMap<DemTileCoordinate, DemTexels>().apply {
+            demSnapshot.values.forEach { dem -> if (dem.sourceTile !in this) put(dem.sourceTile, dem.texels) }
+        }
+
+    /**
+     * Every ground tile this frame can actually displace, and the whole of what ADR 0041's coverage
+     * diagnostic counts against.
+     *
+     * **This is the answer the draw would otherwise have reached alone and silently.** A tile
+     * displaces only if it has a window onto its source ([demTileWindowFor]) and a source that can be
+     * padded ([canPadDemTexture]); both are pure functions of what this class already holds, so the
+     * frame can know its own coverage during `prepare()`, where the diagnostic fires, instead of
+     * discovering it at draw time where nothing was listening. Task 13's harness pass printed
+     * `diagnostics: none` for a frame that discarded every DEM it fetched, and this is why it could.
+     *
+     * **[canPadDemTexture] excludes nothing today, and is here on purpose.** Every tile that reached
+     * this class came through `TerrainAcquisition.matchDemTiles`, which admits only a positive square
+     * of exactly [tileSizePx]; a window then bounds the source's zoom below the padding's own bound
+     * and the texels are keyed by the very source tiles being asked about. So all three of
+     * [padDemTexture]'s refusals are already unreachable from here -- by construction, which is
+     * precisely the kind of agreement that stops holding without saying so. Naming the probe means a
+     * refusal added to [padDemTexture] later reaches the diagnostic instead of reaching the draw's
+     * silence, which is the defect this whole task exists to close.
+     *
+     * `resolveDemTextures` pads and uploads exactly these tiles, so the report and the picture cannot
+     * disagree.
+     */
+    internal val elevatedTiles: Set<CanonicalBasemapTile> =
+        demSnapshot.filterValues { dem ->
+            demTileWindowFor(dem.requestedTile, dem.sourceTile) != null &&
+                canPadDemTexture(dem.sourceTile, texelsBySource)
+        }.keys
+
     /** Every acquired DEM, visible tiles and ring alike, in request order. */
     internal val demTiles: Map<CanonicalBasemapTile, AcquiredDemTile> get() = LinkedHashMap(demSnapshot)
 
     internal fun demTileFor(tile: CanonicalBasemapTile): AcquiredDemTile? = demSnapshot[tile]
 
     override fun toString(): String =
-        "PreparedTerrain(encoding=$encoding, tileSizePx=$tileSizePx, " +
-            "exaggeration=$exaggeration, dem=${demSnapshot.size})"
+        "PreparedTerrain(encoding=$encoding, tileSizePx=$tileSizePx, exaggeration=$exaggeration, " +
+            "dem=${demSnapshot.size}, elevated=${elevatedTiles.size})"
 }
 
 /**
@@ -1100,8 +1139,20 @@ internal class RenGRenderer(
             // failure: the frame prepared and it will draw. Over the frame's own ground tiles rather
             // than over the request, so the perimeter ring -- which costs a replicated border texel
             // and not a flat tile -- does not inflate the count.
+            //
+            // The terrain is prepared *before* the report rather than inside the frame below, because
+            // the count is over the tiles that will actually displace and only the prepared terrain
+            // knows which those are. Handing this the acquisition outcome instead is the defect Task
+            // 13's harness pass caught: a frame that acquired every DEM and could use none of them
+            // reported nothing at all.
+            val terrain = preparedTerrain(acquired)
             acquired.terrain?.let { outcome ->
-                reportTerrainDegradation(outcome, groundCanonicalTiles, configuration.diagnosticSink)
+                reportTerrainDegradation(
+                    outcome = outcome,
+                    groundTiles = groundCanonicalTiles,
+                    elevatedTiles = terrain?.elevatedTiles.orEmpty(),
+                    sink = configuration.diagnosticSink,
+                )
             }
 
             previousEncodedPlan = planned.encodedPlan
@@ -1124,7 +1175,7 @@ internal class RenGRenderer(
                     renderedTiles = acquired.basemapTiles,
                     styleDigest = acquired.basemapStyleDigest,
                 ),
-                terrain = preparedTerrain(acquired),
+                terrain = terrain,
                 labels = labels,
                 mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
                 screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
@@ -2426,17 +2477,23 @@ internal class RenGRenderer(
      * Decodes, pads and uploads this frame's DEMs, and answers which padded texture and which window
      * each **canonical** ground tile samples.
      *
-     * **Four steps, and every one of them can decline without failing the frame** (ADR 0041). A tile
-     * whose bytes are not a PNG RenG can decode, whose image disagrees with the descriptor's
-     * `tileSizePx`, whose alpha is not opaque, whose source is not its request's ancestor, or whose
-     * source never arrived at all, simply gets no entry here — and a ground tile with no entry draws
-     * flat beside its displaced neighbours. Nothing here throws and nothing here retries.
+     * **It decides nothing about coverage.** Every tile it pads is one
+     * [PreparedTerrain.elevatedTiles] already named, which is what ADR 0041's diagnostic was counted
+     * over during `prepare()`; a tile whose texels disagreed with the descriptor's `tileSizePx`,
+     * whose source is not its request's ancestor, or whose source never arrived was excluded there
+     * and reported there. A ground tile with no entry here draws flat beside its displaced
+     * neighbours, and it has already been counted. Nothing here throws and nothing here retries
+     * (ADR 0041).
      *
      * **The texture is the *source* tile's, and the window is what makes several requests share it.**
      * Under overzoom `sampleFor` answers many requested tiles from one DEM image, so the padded
      * texture is assembled once per source tile, keyed by content, and `demTileWindowFor` gives each
      * requested tile its own sub-rectangle of it. The ring the acquisition paid for is what
      * guarantees the source tile's own eight neighbours are present to be padded with.
+     *
+     * **The texels arrive already decoded** (Rentile `0.7.0`), so this function's name is now half a
+     * lie kept for the two steps it still performs: RenG decodes no DEM anywhere, and the per-frame
+     * inflate of every tile in the request -- ring included, resident or not -- is gone with it.
      *
      * **The key is [PaddedDemTexture.contentKey], never the centre tile's digest**, which is the one
      * trap in this function and is invisible when got wrong: a centre-keyed texture hits residency in
@@ -2453,27 +2510,14 @@ internal class RenGRenderer(
         groundLeases: MutableList<TextureLease>,
     ): Map<CanonicalBasemapTile, SceneTileDem> {
         if (terrain == null) return emptyMap()
-        val acquired = terrain.demTiles
-        if (acquired.isEmpty()) return emptyMap()
+        val elevated = terrain.elevatedTiles
+        if (elevated.isEmpty()) return emptyMap()
 
-        // One decode per *source* tile, which is also one per distinct DEM image: several requested
-        // tiles overzooming into one ancestor arrive here as several entries carrying the identical
-        // bytes and the identical digest.
-        val texelsBySource = LinkedHashMap<DemTileCoordinate, DemTexels>()
-        acquired.values.forEach { dem ->
-            if (dem.sourceTile in texelsBySource) return@forEach
-            val decoded = decodeDemTexels(
-                bytes = dem.bytes,
-                tileSizePx = terrain.tileSizePx,
-                maximumDecodedBytes = configuration.resourceLimits.maximumDecodedImageBytes,
-                contentDigest = dem.contentDigest,
-            )
-            if (decoded is DemTexelDecodeResult.Success) texelsBySource[dem.sourceTile] = decoded.texels
-        }
-
+        val texelsBySource = terrain.texelsBySource
         val texturesBySource = HashMap<DemTileCoordinate, Int>(texelsBySource.size)
-        val resolved = LinkedHashMap<CanonicalBasemapTile, SceneTileDem>(acquired.size)
-        acquired.forEach { (tile, dem) ->
+        val resolved = LinkedHashMap<CanonicalBasemapTile, SceneTileDem>(elevated.size)
+        elevated.forEach { tile ->
+            val dem = terrain.demTileFor(tile) ?: return@forEach
             val window = demTileWindowFor(dem.requestedTile, dem.sourceTile) ?: return@forEach
             val texture = texturesBySource.getOrElse(dem.sourceTile) {
                 val padded = padDemTexture(dem.sourceTile, texelsBySource) ?: return@forEach

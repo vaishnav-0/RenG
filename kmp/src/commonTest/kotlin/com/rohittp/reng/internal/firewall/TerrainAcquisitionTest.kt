@@ -327,13 +327,13 @@ class TerrainAcquisitionTest {
                 demTile(requested[2], payload = 20),
             )
 
-            val matched = TerrainAcquisition(host).matchDemTiles(requested, results)
+            val matched = TerrainAcquisition(host).matchDemTiles(requested, results, tileSizePx = 1)
 
             assertEquals(3, matched.size)
-            assertContentEquals(byteArrayOf(10), matched[requested[0]]?.bytes)
+            assertEquals(10, payloadOf(matched[requested[0]]))
             assertNull(matched[requested[1]], "the tile the engine dropped stays dropped")
-            assertContentEquals(byteArrayOf(20), matched[requested[2]]?.bytes)
-            assertContentEquals(byteArrayOf(30), matched[requested[3]]?.bytes)
+            assertEquals(20, payloadOf(matched[requested[2]]))
+            assertEquals(30, payloadOf(matched[requested[3]]))
         } finally {
             host.close()
         }
@@ -356,7 +356,7 @@ class TerrainAcquisitionTest {
             val acquired = TerrainAcquisitionOutcome.Acquired(
                 source = TERRAIN_SOURCE,
                 requestedTiles = requested,
-                demTiles = TerrainAcquisition(host).matchDemTiles(requested, results),
+                demTiles = TerrainAcquisition(host).matchDemTiles(requested, results, tileSizePx = 1),
             )
 
             assertEquals(listOf(requested[1], requested[4]), acquired.absentTiles)
@@ -379,30 +379,37 @@ class TerrainAcquisitionTest {
      * would still produce a `DemTileCoordinate`, and only the window says whether it produced the right
      * one.
      *
-     * The bytes are asserted **identical rather than equal**: Task 5 uploads them as a texture, and a
-     * defensive copy here would be a megabyte per tile and a hundred tiles per frame.
+     * **The encoded bytes here are a JFIF header, and the tile is accepted anyway.** That is the whole
+     * of Task 13's finding: RenG used to re-decode `ValidatedDemTile.bytes` with its own PNG decoder,
+     * and five of the corpus's six terrain styles serve **WebP**, so every one of those tiles fetched
+     * 200, passed the engine's validation and was thrown away without a word. Rentile decodes the
+     * container now, so what crosses this seam is pixels; a fixture whose bytes are a PNG could not
+     * tell that repair from the old behaviour.
      */
     @Test
     fun translatesTheEnginesTileIdsAndEncodingIntoRenGsOwnVocabulary() {
         val host = basemapEngineHost()
         try {
             val requested = CanonicalBasemapTile(lod = 4, tileY = 10, canonicalX = 13)
-            val payload = byteArrayOf(7, 8, 9)
+            // A JFIF header -- a plausible thing for a tile server to answer with, and something RenG's
+            // own decoder refuses outright. Nothing downstream of here reads it.
+            val notAPng = byteArrayOf(
+                0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(),
+                0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+            )
             val result = ValidatedDemTile(
                 requestedTile = TileId(z = 4, x = 13, y = 10),
                 sourceTile = TileId(z = 2, x = 3, y = 2),
                 sourceId = TERRAIN_SOURCE_ID_DIGEST,
                 encoding = TerrainDemEncoding.MAPBOX,
-                bytes = payload,
+                bytes = notAPng,
                 contentDigest = TERRAIN_SOURCE_ID_DIGEST,
-                // Rentile 0.7.0 hands the decoded texels over with the encoded bytes. This case is
-                // about matching a result to the tile it was requested for, so the pixels are a
-                // one-texel placeholder rather than a fixture -- nothing here reads them.
-                texels = DemTexels(width = 1, height = 1, rgba = byteArrayOf(0, 0, 0, -1)),
+                texels = DemTexels(width = 1, height = 1, rgba = byteArrayOf(7, 8, 9, -1)),
             )
 
             val dem = assertNotNull(
-                TerrainAcquisition(host).matchDemTiles(listOf(requested), listOf(result))[requested],
+                TerrainAcquisition(host).matchDemTiles(listOf(requested), listOf(result), tileSizePx = 1)[requested],
+                "a DEM whose container RenG cannot decode is still a DEM Rentile decoded",
             )
 
             assertEquals(DemTileCoordinate(z = 4, x = 13, y = 10), dem.requestedTile)
@@ -413,7 +420,90 @@ class TerrainAcquisitionTest {
                 demTileWindowFor(dem.requestedTile, dem.sourceTile),
                 "the translated pair still resolves to Rentile's own published window",
             )
-            assertSame(payload, dem.bytes, "the encoded bytes cross the firewall untouched")
+            assertContentEquals(
+                byteArrayOf(7, 8, 9, -1),
+                dem.texels.image.rgbaSnapshot(),
+                "the engine's own decoded texels cross the firewall unaltered",
+            )
+            assertEquals(TERRAIN_SOURCE_ID_DIGEST, dem.texels.contentDigest)
+        } finally {
+            host.close()
+        }
+    }
+
+    /**
+     * **Rows cross top-down, and nothing further along can tell if they did not.**
+     *
+     * Rentile documents `DemTexels` as rows ordered top-down from the tile's top edge, which under XYZ
+     * is its **north** edge, and RenG's own canonical decoded form says the same -- so the adoption is a
+     * copy. A flip here mirrors every tile about its own centre line: it compiles, renders, and produces
+     * terrain, which is `GroundPipeline`'s own "invisible on a solid-coloured tile and catastrophic on a
+     * real map". The padded-texture and readback fixtures cannot catch it -- one builds its own texels
+     * and the others are uniform per tile -- so the assertion belongs here, where the engine's array
+     * becomes RenG's.
+     *
+     * The fixture's four texels differ in **red**, so a flip, a transpose and a column swap each move a
+     * different byte.
+     */
+    @Test
+    fun adoptsTheEnginesTexelsInTheirOwnRowOrder() {
+        val host = basemapEngineHost()
+        try {
+            val requested = CanonicalBasemapTile(lod = 3, tileY = 2, canonicalX = 4)
+            val id = TileId(z = 3, x = 4, y = 2)
+            // Row 0 (north): red 1 then 2. Row 1 (south): red 3 then 4.
+            val rgba = byteArrayOf(
+                1, 0, 0, -1, 2, 0, 0, -1,
+                3, 0, 0, -1, 4, 0, 0, -1,
+            )
+            val result = ValidatedDemTile(
+                requestedTile = id,
+                sourceTile = id,
+                sourceId = TERRAIN_SOURCE_ID_DIGEST,
+                encoding = TerrainDemEncoding.MAPBOX,
+                bytes = ByteArray(0),
+                contentDigest = TERRAIN_SOURCE_ID_DIGEST,
+                texels = DemTexels(width = 2, height = 2, rgba = rgba),
+            )
+
+            val dem = assertNotNull(
+                TerrainAcquisition(host).matchDemTiles(listOf(requested), listOf(result), tileSizePx = 2)[requested],
+            )
+
+            assertContentEquals(rgba, dem.texels.image.rgbaSnapshot(), "the engine's rows, in the engine's order")
+        } finally {
+            host.close()
+        }
+    }
+
+    /**
+     * **The one check RenG still owes on a DEM, at the seam where it is now made.**
+     *
+     * Rentile bounds a DEM's dimensions against its own policy ceiling and never against the
+     * `tileSizePx` its own `TerrainSourceDescriptor` declares, so a source can answer with an image
+     * the padding and window arithmetic were never built for. A result that disagrees is dropped, and
+     * dropping it here rather than later is the point: ADR 0041's coverage diagnostic already counts a
+     * requested tile with no entry in the match, so a DEM that arrives unusable is reported by the
+     * machinery that already existed, instead of vanishing at draw time with nothing listening.
+     *
+     * The second tile is the same fixture at the size the source declared, so the refusal cannot be
+     * mistaken for a match that never worked.
+     */
+    @Test
+    fun dropsAResultWhoseTexelsAreNotTheSizeTheSourceDeclared() {
+        val host = basemapEngineHost()
+        try {
+            val requested = listOf(
+                CanonicalBasemapTile(lod = 3, tileY = 2, canonicalX = 4),
+                CanonicalBasemapTile(lod = 3, tileY = 2, canonicalX = 5),
+            )
+            val results = listOf(demTile(requested[0], payload = 10), demTile(requested[1], payload = 20))
+
+            val atOne = TerrainAcquisition(host).matchDemTiles(requested, results, tileSizePx = 1)
+            val atTwo = TerrainAcquisition(host).matchDemTiles(requested, results, tileSizePx = 2)
+
+            assertEquals(2, atOne.size, "one-texel results agree with a source declaring one texel")
+            assertTrue(atTwo.isEmpty(), "and disagree with one declaring two, so neither is matched")
         } finally {
             host.close()
         }
@@ -610,6 +700,10 @@ private fun terrainStyleRecord(json: String): StoredRawResource {
         metadata = StoredRawResourceMetadata(storedAtEpochMillis = 0L),
     )
 }
+
+/** The one-texel payload [demTile] wrote, read back out of the texels the firewall adopted. */
+private fun payloadOf(dem: AcquiredDemTile?): Int? =
+    dem?.texels?.image?.rgbaSnapshot()?.get(0)?.toInt()?.and(0xFF)
 
 private fun terrainManifest(json: String): BasemapStyleManifest {
     val outcome = deriveBasemapStyleManifest(json.encodeToByteArray(), TERRAIN_STYLE_BASE_URI)

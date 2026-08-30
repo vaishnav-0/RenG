@@ -95,6 +95,41 @@ class RendererTerrainTest {
     }
 
     /**
+     * **The defect Task 13's harness pass caught, end to end and through a real `prepare()`.**
+     *
+     * Every DEM tile is fetched, decoded by the engine and matched to its request; the source
+     * declares 256 and the server answers 64, so not one of them is a DEM this frame's sampling
+     * arithmetic can use. That is exactly style 57's shape -- fetched 200, unusable, ground drawn
+     * flat -- and it printed `diagnostics: none`, because the report was handed the acquisition
+     * outcome, which had succeeded.
+     *
+     * A build that reports coverage from `demTileFor` passes every other case in this file and fails
+     * this one, which is the whole reason it is here. The count is the frame's four ground tiles, not
+     * its sixteen requests.
+     */
+    @Test fun aFrameWhoseDemTilesArriveUnusableReportsIncompleteCoverageRatherThanNothing() = runTest {
+        val sink = TerrainDiagnosticCollector()
+        val renderer = terrainRenderer(TerrainStyleTransport(declaredDemTileSizePx = 256), sink)
+        try {
+            renderer.prepare(basemapPlan(frameIndex = 1L)).close()
+        } finally {
+            renderer.close()
+        }
+
+        val coverage = sink.diagnostics().filter { it.code == DiagnosticCode.TERRAIN_COVERAGE_INCOMPLETE }
+        assertEquals(
+            1,
+            coverage.size,
+            "a DEM that arrives and cannot be used is reported, once: ${sink.codes()}",
+        )
+        assertEquals(4L, coverage.single().actual, "the frame's four ground tiles all drew flat")
+        assertTrue(
+            DiagnosticCode.TERRAIN_UNAVAILABLE !in sink.codes(),
+            "the acquisition succeeded; only the coverage is incomplete: ${sink.codes()}",
+        )
+    }
+
+    /**
      * **Error.** One failing DEM tile fails the whole `acquireTerrainTiles` call — Rentile's
      * `throwAcquisitionFailures` offers no per-tile degradation and RenG's contract forbids a retry —
      * and the frame must still prepare. That is the whole of ADR 0041: terrain is the one basemap
@@ -171,6 +206,7 @@ private class TerrainStyleTransport(
     private val minimumDemZoom: Int = 0,
     private val failDemTiles: Boolean = false,
     private val declareTerrain: Boolean = true,
+    private val declaredDemTileSizePx: Int = 64,
 ) : Transport {
     override suspend fun execute(request: TransportRequest): TransportResponse {
         val url = request.locator.value
@@ -185,6 +221,13 @@ private class TerrainStyleTransport(
                 body = ByteArray(0),
                 metadata = TransportResponseMetadata(contentType = "text/plain"),
             )
+            // A real 64 x 64 Mapbox DEM. The basemap tiles keep the 2 x 2 fixture: only the DEM's
+            // size has to agree with what the source declares.
+            url.startsWith(TERRAIN_DEM_PREFIX) -> TransportResponse(
+                statusCode = 200,
+                body = DEM_SEA_LEVEL_PNG,
+                metadata = TransportResponseMetadata(contentType = "image/png"),
+            )
             else -> TransportResponse(
                 statusCode = 200,
                 body = STYLE_TEST_PNG,
@@ -197,7 +240,8 @@ private class TerrainStyleTransport(
         val terrain = if (declareTerrain) ""","terrain":{"source":"dem","exaggeration":3}""" else ""
         return """{"version":8,"name":"reng-terrain-test",""" +
             """"sources":{"s":{"type":"raster","tiles":["$STYLE_TILE_TEMPLATE"],"tileSize":256},""" +
-            """"dem":{"type":"raster-dem","tiles":["$TERRAIN_DEM_TEMPLATE"],"tileSize":256,""" +
+            """"dem":{"type":"raster-dem","tiles":["$TERRAIN_DEM_TEMPLATE"],""" +
+            """"tileSize":$declaredDemTileSizePx,""" +
             """"minzoom":$minimumDemZoom,"maxzoom":22}},""" +
             """"layers":[{"id":"r","type":"raster","source":"s"}]$terrain}"""
     }
