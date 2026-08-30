@@ -61,7 +61,7 @@ work in parallel. Everything from F-1 onward is a chain; the MVP release sits be
 | E-basemap | Basemap drawn from Rentile tiles, plus deferred Cycle C tasks 14/16/17/18/19 | First frame with pixels; analytical readback over a real GL context |
 | F-2 | Models with textures and animation | Analytical readback over a real GL context |
 | E-labels | Map text drawn as screen-space primitives from Rentile label candidates | Analytical readback over a real GL context, plus a recorded harness pass. **Not legibility** — see below |
-| E-terrain | Terrain displacing the ground in **both** projections, plus deferred Cycle C task 20 | Golden baselines with terrain |
+| E-terrain | Terrain displacing the ground in **both** projections, plus deferred Cycle C task 20 — **complete, unreleased** | Golden baselines with terrain |
 | H | Android and iOS bring-up | `iosSimulatorArm64Test` in CI; two one-command device runs, neither automated |
 | G | Globe projection | Analytical readback at both projection modes, plus a recorded harness pass. **Not curvature fidelity** |
 | J | Golden-image corpus gate | Corpus job wired into `ci.yml` and `publish.yml` |
@@ -288,7 +288,7 @@ defect the visual harness has caught that a passing suite did not.
 **E-terrain and G inherit the same problem and it is not yet solved for them.** Both rows below still say
 "golden baselines", and Cycle J still runs after both.
 
-**E-terrain.** Draws the terrain Cycle C acquires, plus Cycle C's deferred
+**E-terrain — complete and unreleased.** Draws the terrain Cycle C acquires, plus Cycle C's deferred
 terrain-acquisition task. Cycle
 C takes Rentile's terrain descriptor and DEM tiles, decodes them, and validates their declared encoding,
 but nothing consumes elevation until here: this half displaces the mercator ground with it. That keeps the

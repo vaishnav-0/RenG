@@ -174,11 +174,11 @@ All six targets still publish at every release; which of them anyone has actuall
 release notes rather than being discovered by an Android consumer, and **ADR 0033 is where that promise now
 lives**.
 
-**Measured on this checkout:** `testAndroidHostTest` **1,457**, `macosArm64Test` **1,516**,
-`iosSimulatorArm64Test` **1,500** — 0 failures, 0 errors and 0 skips on each, summed from Gradle's own
+**Measured on this checkout:** `testAndroidHostTest` **1,617**, `macosArm64Test` **1,690**,
+`iosSimulatorArm64Test` **1,674** — 0 failures, 0 errors and 0 skips on each, summed from Gradle's own
 JUnit XML rather than from scrollback. 138 Python tests pass, and `check_repository_policy.py` passes.
 (Cycle H closed at 1,123 / 1,159 / 1,145; X2 took it to 1,134 / 1,174 / 1,160; E-labels took it to
-1,298 / 1,351 / 1,335; Cycle G added the rest, of which its readback gate is 1 and the polar cap 4.)
+1,298 / 1,351 / 1,335; Cycle G took it to 1,457 / 1,516 / 1,500; E-terrain added the rest.)
 
 **Read a gate's verdict from `BUILD SUCCESSFUL` or an unpiped `$?`, never from an exit code through a
 pipe.** `./gradlew … | tail` reports *tail's* status, so a failing build looks green. That cost this cycle
@@ -365,6 +365,93 @@ production default and nothing goes red.
 
 So before trusting a green fixture, ask what it is *not* varying — and move it off the symmetry point
 rather than adding another assertion beside it.
+
+**Cycle E-terrain is complete and unreleased. The ground is no longer flat.** Its authority is
+`docs/superpowers/specs/2026-08-29-cycle-e-terrain-design.md`, its plan is
+`docs/superpowers/plans/2026-08-29-cycle-e-terrain.md`, and three research documents carry what it
+measured: the preflight (`2026-08-29-e-terrain-preflight.md`), the coplanar depth spike
+(`2026-08-30-e-terrain-coplanar-depth-spike.md`) and the harness pass
+(`2026-08-30-e-terrain-harness-pass.md`). **ADRs 0039, 0040 and 0041** govern the ground's conditional
+depth write, the altitude mode, and terrain being the one basemap resource that degrades rather than
+failing a frame. **ADR 0016 gained an erratum retiring its DEM write obligation**, and **ADR 0039 gained
+one refuting its own coplanar mitigation**.
+
+**It forced a Rentile release, and that is the first thing to know.** Five of the six corpus styles
+declaring `terrain` serve **WebP** DEM tiles; RenG owns a PNG decoder and nothing else, so terrain reached
+**one style in six** — every tile fetched HTTP 200, passed Rentile's Skia-based validation, and was thrown
+away. Rentile **`0.7.0`** now exposes `ValidatedDemTile.texels`, the pixels it already decoded for
+validation and used to discard, so **RenG decodes no DEM at all**. The harness re-run renders **six of
+six**. Adding a WebP decoder to RenG was rejected: VP8L and VP8 on an untrusted-bytes boundary, where the
+PNG decoder alone took five adversarial passes and a 300,000-input fuzz test.
+
+**Two things that release taught, both worth carrying.** Rentile's version rule is the **inverse** of
+RenG's — a stale `VERSION_NAME` there silently ships a patch instead of failing closed, and would have
+shipped a binary-breaking ABI change as `0.6.1`. And `Image.makeFromEncoded` reports **PREMUL**: red 200
+behind alpha 128 stores as 100 and recovers as 199, which is invisible in a photograph and is a wrong
+elevation in a DEM. Rentile's retaining path uses `Codec` for exactly that reason.
+
+**How elevation reaches a vertex.** The DEM is uploaded as a texture and sampled with `textureLod` in the
+vertex shader — a vertex stage has no implicit derivatives, so the plain form is undefined there, and the
+sampler is declared `highp` because GLSL ES 3.00 gives the vertex language `precision lowp sampler2D`,
+whose ~8 bits is exactly what an 8-bit channel needs and no more. **Filtering is `GL_NEAREST`, always**:
+Mapbox packs 24 bits across R/G/B and a bilinear blend across a channel carry decodes hundreds of metres
+wrong. Smoothness comes from mesh interpolation between vertices, never from the sampler.
+
+**Seams are closed rather than hidden.** The DEM grid is **edge-exclusive** — texel `i` is centred at
+`(i + 0.5)/N`, so a tile boundary is represented by no texel in either tile — and each DEM is therefore
+uploaded as `(N+2)²` with a one-texel ring from its neighbours, so both sides of an edge read identical
+source values. The ring costs a perimeter, `4√T + 4`, **not** ninefold: +33% at 167 tiles. Measured at
+**0 cracked pixels of 589,824** in both projections, and the gate's "ring dropped" mutation is caught by
+that case **alone**, at 61,063 cleared pixels.
+
+**The two projections needed opposite work.** Mercator's ground was a four-vertex quad with no subdivision
+anywhere; the globe's was already subdivided but baked altitude zero into one per-frame radial scale. Both
+now share one lattice, and the elevation formula exists once as a GLSL fragment composed into both vertex
+stages — pinned to `demElevationMetres` by *evaluating* it at basis points rather than transcribing it
+twice.
+
+**Granularity is a budget, not an error bound, and that is a real difference.** Curvature's rule can
+promise half a pixel from radius and span alone; terrain's deviation is a property of the DEM's contents,
+and measuring it would mean decoding every visible tile on the CPU. So it bounds *work* from two ceilings —
+the DEM's own texel count and the tile's screen size — rounds **down**, and caps at **64**, derived from
+X2's measured 167 tiles: 64 cells is 705,575 vertices where 128 would be 2,779,047. The globe's cap of 128
+is not reused, because curvature peaks at zoom 0 and terrain at city zooms.
+
+**The ground writes depth only where it is displaced**, which ADR 0039 narrowed from this cycle's own
+design. An unconditional write revives ADR 0027's coplanar-`Geometry` defect in the **28 of 34** corpus
+styles with no terrain — and the mutation proving it reproduces ADR 0027's shipped numbers exactly:
+1,459 of 1,894 pixels deleted at pitch 30.
+
+**`AltitudeMode` is `ABSOLUTE` by default because the glossary already said so** — `CONTEXT.md` defines
+altitude as ellipsoidal metres — and the two modes are identical wherever the ground is flat, so nothing
+shipped changes. An `elevationAt(lat, lon)` query was rejected as **circular**: elevation depends on
+resident tiles, residency on the camera, the camera on the plan being built.
+
+**What the cycle leaves owed, measured rather than suspected.** The `(N+2)²` padded assembly still happens
+per frame per source tile, and the repair its own KDoc names — composing the content key from the nine
+digests before assembling anything — is available and untaken. `GROUND_DRAPE_LIFT_METRES` is under-sized
+for a ridge steeper than its fixture, ~10,000 pixels of speckle along fold lines, recorded rather than
+widened, because widening a constant to fit a fixture is how it stops being a measurement. **A coplanar
+globe drape is owed**: at zoom 2 a four-metre lift is 0.0002 of a logical pixel, so the fight is
+unmitigated there. And **the coplanar residual's mechanism is not understood** — the spike narrowed it to
+the ground's program, lattice and shader-computed height without splitting that bundle, and the relief-free
+residual is about ten times larger than the decode arithmetic accounts for.
+
+**Measured on this checkout at the cycle's close:** `testAndroidHostTest` **1,617**, `macosArm64Test`
+**1,690**, `iosSimulatorArm64Test` **1,674** — 0 failures, 0 errors, 0 skips on each, summed from Gradle's
+own JUnit XML. Four `SKIPPED [...]` lines are printed and all four are pre-existing: `runBasemapReadbackSuite`'s
+ground-coverage case and `runGlobeFrameReadbackSuite`'s Mercator-coverage case, on `Apple Software Renderer`
+and the iOS simulator. **The public ABI moved by +24/−4**: `AltitudeMode`, two `DiagnosticCode` constants,
+`altitudeMode` on `Placement` and `Geometry` (with `Geometry.component6`), and
+`RendererConfiguration.terrainShading`. Every removal is a constructor or `copy` signature replaced by a
+wider one with a default.
+
+**One duplication is known and owed.** Tasks 16 and 17 added five anchor cases to `TerrainFrameReadbackSuite`
+and Task 19 then built `GroundAnchorReadbackSuite` beside it, because the brief for 19 wrongly said no gate
+covered anchors. Cases 2, 3 and 5 of the new suite overlap the older one substantially; what is genuinely
+new is the label case, the ridge fixture in place of a plateau, and the two modes contrasted inside one
+frame. Carrying both is deliberate for now — the new suite is what the conformance classes register — but
+the honest consolidation is one suite, and it is not done.
 
 **Cycle G is complete and unreleased. RenG draws a globe.** Its authority is
 `docs/superpowers/specs/2026-08-28-cycle-g-globe-design.md`, its plan is

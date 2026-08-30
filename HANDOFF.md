@@ -560,10 +560,10 @@ something cites it.
   with a clamped delay, and it rethrows cancellation unchanged. And `RawResourceKey.toString()` prints its
   identifier in the clear, so a Rentile key must never reach a RenG diagnostic.
 
-## What remains: F-2, E-labels, E-terrain, H, G, I, J — **superseded: E-terrain is in flight, then only J**
+## What remains: F-2, E-labels, E-terrain, H, G, I, J — **superseded: only J remains**
 
-F-2, H, E-labels and G are complete; **E-terrain is in its closing tasks** as of 2026-08-30; I was
-withdrawn on 2026-08-28. The ordering reasoning
+F-2, H, E-labels, G and E-terrain are all complete, all nineteen of E-terrain's tasks landed and gated;
+I was withdrawn on 2026-08-28. The ordering reasoning
 below is kept because it explains how the letters came to mean what they mean.
 
 **E-terrain forced a Rentile release, which is the thing to know before planning J.** Five of the six
