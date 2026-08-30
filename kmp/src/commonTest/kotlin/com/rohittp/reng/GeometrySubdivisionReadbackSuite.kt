@@ -84,6 +84,7 @@ internal fun runGeometrySubdivisionReadbackSuite(binding: GlBinding, dialect: Sh
     try {
         val fixture = GeometrySubdivisionFixture(binding, pipeline, target)
         assertSubdividingAMercatorGeometryMovesNoPixel(fixture)
+        assertAnAltitudeModeMovesNoPixelOverFlatGround(fixture)
         assertAGlobeGeometryBendsWithItsGranularityAndThenConverges(fixture)
         assertAGeometryBehindTheLimbPaintsNothing(fixture)
     } finally {
@@ -148,6 +149,51 @@ private fun assertSubdividingAMercatorGeometryMovesNoPixel(fixture: GeometrySubd
                 "an interior edge leaking background would be counted in the hundreds",
         )
     }
+}
+
+/**
+ * ADR 0040's promise that nothing already shipped changes: **the two altitude modes are identical
+ * wherever the ground is flat**, measured in pixels rather than argued from a diff that looks
+ * additive.
+ *
+ * Flat is what this fixture is — the terrainless path every published release draws, and 28 of the
+ * 34 corpus styles — so a `GROUND_RELATIVE` quad and an `ABSOLUTE` one must read back byte for byte.
+ * ADR 0040 keeps that true past the cycle that resolves the mode: where terrain is absent or
+ * degraded, `GROUND_RELATIVE` resolves against the flat ground and *means* `ABSOLUTE`.
+ *
+ * **The third frame is why the first two agreeing means anything.** Two frames are byte-identical
+ * whenever the instrument cannot see the thing being changed, so this raises both corners by 400
+ * metres and requires that to move a substantial part of the quad — under a camera pitched 45
+ * degrees it does. Without it, a probe blind to altitude entirely would report the same zero and
+ * look like proof.
+ */
+private fun assertAnAltitudeModeMovesNoPixelOverFlatGround(fixture: GeometrySubdivisionFixture) {
+    val absolute = fixture.renderMercatorGrid(1)
+    val groundRelative = fixture.renderMercatorGrid(1, fixture.groundRelativeMercatorGeometry)
+    val raised = fixture.renderMercatorGrid(1, fixture.raisedMercatorGeometry)
+    val total = GEOMETRY_SUBDIVISION_READBACK_PIXELS * GEOMETRY_SUBDIVISION_READBACK_PIXELS
+    val sensitivity = absolute.differingPixels(raised)
+    println(
+        "RenG geometry subdivision readback: over flat ground the two altitude modes differ over " +
+            "${absolute.differingBytes(groundRelative)} bytes, while 400 metres of altitude moves " +
+            "$sensitivity of $total pixels",
+    )
+
+    assertTrue(
+        absolute.paintedPixels() > total / 20,
+        "the altitude-mode comparison must be made on a frame that paints a real quad",
+    )
+    assertTrue(
+        sensitivity > total / 20,
+        "this readback must be able to see an altitude change at all, or agreeing about one proves " +
+            "nothing; 400 metres moved $sensitivity pixels of $total",
+    )
+    assertEquals(
+        0,
+        absolute.differingBytes(groundRelative),
+        "over flat ground a GROUND_RELATIVE Geometry must read back byte for byte identically to an " +
+            "ABSOLUTE one",
+    )
 }
 
 /**
@@ -299,9 +345,22 @@ private class GeometrySubdivisionFixture(
         }
     }
 
-    fun renderMercatorGrid(cellsPerSide: Int): GeometryFrame {
+    /** The same quad, asked for as an offset above the ground instead of above the ellipsoid. */
+    val groundRelativeMercatorGeometry: Geometry =
+        mercatorGeometry.copy(altitudeMode = AltitudeMode.GROUND_RELATIVE)
+
+    /** The same quad 400 metres higher, which exists only to prove the readback can see altitude. */
+    val raisedMercatorGeometry: Geometry = mercatorGeometry.copy(
+        topLeft = Vector3(55.0060, 11.9900, 640.0),
+        bottomRight = Vector3(54.9940, 12.0100, 460.0),
+    )
+
+    fun renderMercatorGrid(
+        cellsPerSide: Int,
+        geometry: Geometry = mercatorGeometry,
+    ): GeometryFrame {
         val grid = (
-            geometryGrid(mercatorGeometry, mercatorCamera, cellsPerSide) as SpatialOutcome.Success
+            geometryGrid(geometry, mercatorCamera, cellsPerSide) as SpatialOutcome.Success
             ).value
         assertEquals(
             (cellsPerSide + 1) * (cellsPerSide + 1),

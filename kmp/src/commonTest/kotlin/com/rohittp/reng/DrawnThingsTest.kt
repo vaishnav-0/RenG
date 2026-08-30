@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
 
 class DrawnThingsTest {
@@ -116,6 +117,39 @@ class DrawnThingsTest {
         assertFailsWith<IllegalArgumentException> {
             Geometry(Vector3(0.0, 0.0, 0.0), Vector3(-90.0001, 1.0, 0.0), shaderPair)
         }
+    }
+
+    /**
+     * A `Geometry` carries no `Placement` — `CONTEXT.md` says so — so the mode has to reach it on a
+     * field of its own, and one mode governs both corners.
+     *
+     * **The destructuring line is the source-compatibility gate**, not a style choice. [Geometry] is
+     * a `data class`, so declaring the new field anywhere but last would renumber `component3`
+     * through `component5` and silently re-bind every consumer that destructures one; this
+     * statement stops compiling if that ever happens.
+     *
+     * **Nothing constrains the value.** `Placement` rejects a ground-relative altitude on a
+     * screen-anchored position because a screen `z` is a compositing index; a `Geometry` is a
+     * geographic rectangle and has no such alternative, so both modes construct on every geometry.
+     */
+    @Test
+    fun aGeometryCarriesItsOwnAltitudeModeDefaultedToAbsolute() {
+        val shaderPair = ShaderPair("vertex", "fragment")
+        val absolute = Geometry(Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), shaderPair)
+        val groundRelative = absolute.copy(altitudeMode = AltitudeMode.GROUND_RELATIVE)
+
+        assertEquals(AltitudeMode.ABSOLUTE, absolute.altitudeMode)
+        assertEquals(AltitudeMode.GROUND_RELATIVE, groundRelative.altitudeMode)
+        assertNotEquals(absolute, groundRelative)
+        assertEquals(absolute, absolute.copy(altitudeMode = AltitudeMode.ABSOLUTE))
+
+        val (topLeft, bottomRight, pair, uniforms, textures, altitudeMode) = groundRelative
+        assertEquals(Vector3(1.0, 0.0, 0.0), topLeft)
+        assertEquals(Vector3(0.0, 1.0, 0.0), bottomRight)
+        assertEquals(shaderPair, pair)
+        assertEquals(emptyMap(), uniforms)
+        assertEquals(emptyMap(), textures)
+        assertEquals(AltitudeMode.GROUND_RELATIVE, altitudeMode)
     }
 
     @Test

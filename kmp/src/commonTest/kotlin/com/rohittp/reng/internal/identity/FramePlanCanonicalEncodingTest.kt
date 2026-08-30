@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.identity
 
+import com.rohittp.reng.AltitudeMode
 import com.rohittp.reng.AnchoringMode
 import com.rohittp.reng.AnimationSelector
 import com.rohittp.reng.AnimationTrack
@@ -28,6 +29,9 @@ class FramePlanCanonicalEncodingTest {
     fun minimalFrameHasExactCanonicalLengthAndIdentity() {
         val encoded = encoder.encode(canonicalV1MinimalFramePlan())
 
+        // Unchanged by Cycle E-terrain, and that is the assertion rather than an accident: the
+        // altitude mode lives inside a Placement and a Geometry, so a plan whose three drawn-thing
+        // lists are all empty carries none of it and keeps the identity `0.3.0` published.
         assertEquals(148, encoded.identity.canonicalBytes.size)
         assertEquals(
             "524e474301010001000000080000000000000000000200000046" +
@@ -51,11 +55,13 @@ class FramePlanCanonicalEncodingTest {
         val encoded = encoder.encode(canonicalV1RepresentativeFramePlan())
         val expectedBytes = CANONICAL_V1_REPRESENTATIVE_HEX.canonicalFixtureHexToByteArray()
 
-        assertEquals(1_478, expectedBytes.size)
-        assertEquals(1_478, encoded.identity.canonicalBytes.size)
+        // 1,478 before Cycle E-terrain, plus 48: six objects carrying an altitude mode -- four
+        // Placements (two stickers, two models) and two Geometries -- each paying one 8-byte field.
+        assertEquals(1_526, expectedBytes.size)
+        assertEquals(1_526, encoded.identity.canonicalBytes.size)
         assertContentEquals(expectedBytes, encoded.identity.canonicalBytes.bytes)
         assertEquals(
-            "reng-frame-v1:3bda735baccbc58063f88eb1853f14ea565d7b480d308910896b6610f0979ee5",
+            "reng-frame-v1:ffb35d5bc4624e326c76688babd77f12359bf7d0ec54aa08b50d81bc10250261",
             encoded.frameIdentityText(),
         )
     }
@@ -107,6 +113,95 @@ class FramePlanCanonicalEncodingTest {
             ).digest
         }
 
+        assertEquals(4, digests.distinct().size)
+    }
+
+    /**
+     * Two plans differing only in an altitude mode must be two different frames, or a
+     * `GROUND_RELATIVE` frame is served the cached `ABSOLUTE` one.
+     *
+     * **Both directions, deliberately.** Asserting only the inequality would pass against an encoder
+     * that hashed something incidental; asserting only the equality would pass against an encoder
+     * that ignored the field entirely.
+     *
+     * **And the last line's plan omits both arguments outright**, which is the only way it says
+     * anything about ADR 0040's default. A helper that passes `ABSOLUTE` explicitly exercises the
+     * *helper's* default; [defaultedAltitudeModePlan] writes neither argument, so flipping either
+     * public default moves this identity.
+     */
+    @Test
+    fun anAltitudeModeOnEitherTypeChangesTheFrameIdentityAndTheDefaultIsAbsolute() {
+        val stickerAbsolute = altitudeModePlan(AltitudeMode.ABSOLUTE, AltitudeMode.ABSOLUTE)
+        val stickerGround = altitudeModePlan(AltitudeMode.GROUND_RELATIVE, AltitudeMode.ABSOLUTE)
+        val geometryGround = altitudeModePlan(AltitudeMode.ABSOLUTE, AltitudeMode.GROUND_RELATIVE)
+
+        assertNotEquals(frameIdentityOf(stickerAbsolute), frameIdentityOf(stickerGround))
+        assertNotEquals(frameIdentityOf(stickerAbsolute), frameIdentityOf(geometryGround))
+        assertNotEquals(frameIdentityOf(stickerGround), frameIdentityOf(geometryGround))
+
+        assertEquals(
+            frameIdentityOf(stickerAbsolute),
+            frameIdentityOf(altitudeModePlan(AltitudeMode.ABSOLUTE, AltitudeMode.ABSOLUTE)),
+        )
+        assertEquals(frameIdentityOf(stickerAbsolute), frameIdentityOf(defaultedAltitudeModePlan()))
+        assertEquals(
+            frameIdentityOf(stickerGround),
+            frameIdentityOf(altitudeModePlan(AltitudeMode.GROUND_RELATIVE, AltitudeMode.ABSOLUTE)),
+        )
+    }
+
+    /**
+     * The case that separates the two fields, which "four distinct identities" cannot.
+     *
+     * An encoder that had swapped the two — writing the geometry's mode into the placement's field
+     * and the placement's into the geometry's — still produces four distinct digests for the four
+     * pairings, because a permutation of four values is still four values. What it *cannot* do is
+     * keep the change inside the right segment: a sticker whose placement changed would move the
+     * `GEOMETRIES` payload instead of the `STICKERS` one. So this asserts the segment, and then the
+     * exact tag and wire value in bytes — tag 7 for a `Placement`, tag 6 for a `Geometry`, which are
+     * the next free tags in two tables ADR 0018 calls permanent.
+     */
+    @Test
+    fun eachTypesAltitudeModeMovesOnlyItsOwnSegmentAtItsOwnTag() {
+        val base = encoder.encode(altitudeModePlan())
+        val stickerGround = encoder.encode(
+            altitudeModePlan(placementMode = AltitudeMode.GROUND_RELATIVE),
+        )
+        val geometryGround = encoder.encode(
+            altitudeModePlan(geometryMode = AltitudeMode.GROUND_RELATIVE),
+        )
+
+        assertEquals(listOf(FramePlanSegment.STICKERS), changedSegments(base, stickerGround))
+        assertEquals(listOf(FramePlanSegment.GEOMETRIES), changedSegments(base, geometryGround))
+
+        val stickerHex = { plan: EncodedFramePlan ->
+            plan.segmentPayloads[FramePlanSegment.STICKERS.index].fixtureLowercaseHex()
+        }
+        val geometryHex = { plan: EncodedFramePlan ->
+            plan.segmentPayloads[FramePlanSegment.GEOMETRIES.index].fixtureLowercaseHex()
+        }
+        assertTrue(stickerHex(base).contains("0007000000020001"))
+        assertFalse(stickerHex(base).contains("0007000000020002"))
+        assertTrue(stickerHex(stickerGround).contains("0007000000020002"))
+        assertTrue(geometryHex(base).contains("0006000000020001"))
+        assertFalse(geometryHex(base).contains("0006000000020002"))
+        assertTrue(geometryHex(geometryGround).contains("0006000000020002"))
+    }
+
+    /**
+     * And all four pairings of the two modes are four distinct frames, the same shape the
+     * `drawBasemap`/`drawLabels` case takes — an encoder that folded the two fields into one, or
+     * dropped either, would collapse them to two.
+     */
+    @Test
+    fun allFourAltitudeModePairingsGetDistinctFrameIdentities() {
+        val digests = AltitudeMode.entries.flatMap { placementMode ->
+            AltitudeMode.entries.map { geometryMode ->
+                frameIdentityOf(altitudeModePlan(placementMode, geometryMode)).digest
+            }
+        }
+
+        assertEquals(4, digests.size)
         assertEquals(4, digests.distinct().size)
     }
 
@@ -331,6 +426,78 @@ class FramePlanCanonicalEncodingTest {
     )
 
     private fun frameIdentityOf(plan: FramePlan): HashedCanonicalBytes = encoder.encode(plan).identity
+
+    private fun changedSegments(
+        base: EncodedFramePlan,
+        other: EncodedFramePlan,
+    ): List<FramePlanSegment> = allSegments.filterIndexed { index, _ ->
+        base.segmentPayloads[index] != other.segmentPayloads[index]
+    }
+
+    /**
+     * The same plan as [altitudeModePlan]'s default, with the two altitude-mode arguments **not
+     * written at all** — so it is RenG's defaults that decide its bytes, not this file's.
+     */
+    private fun defaultedAltitudeModePlan(): FramePlan = FramePlan(
+        frameIndex = 0,
+        camera = Camera(0.0, 0.0, 0.0, 0.0, 0.0),
+        stickers = listOf(
+            Sticker(
+                placement = Placement(
+                    AnchoringMode.MAP,
+                    Vector3(0.0, 0.0, 0.0),
+                    AnchoringMode.MAP,
+                    Vector3(0.0, 0.0, 0.0),
+                    AnchoringMode.MAP,
+                    1.0,
+                ),
+                image = ResourceLocator("sticker"),
+            ),
+        ),
+        geometries = listOf(
+            Geometry(
+                topLeft = Vector3(1.0, 0.0, 0.0),
+                bottomRight = Vector3(0.0, 1.0, 0.0),
+                shaderPair = ShaderPair("vertex", "fragment"),
+            ),
+        ),
+    )
+
+    /**
+     * One sticker and one geometry, each carrying a mode chosen by the caller — and the sticker
+     * rather than a model only because a `Placement` encodes identically wherever it sits. That the
+     * models' placements carry the field too is what the representative fixture's 1,526 bytes says:
+     * four placements and two geometries at eight bytes each, not two and two.
+     */
+    private fun altitudeModePlan(
+        placementMode: AltitudeMode = AltitudeMode.ABSOLUTE,
+        geometryMode: AltitudeMode = AltitudeMode.ABSOLUTE,
+    ): FramePlan = FramePlan(
+        frameIndex = 0,
+        camera = Camera(0.0, 0.0, 0.0, 0.0, 0.0),
+        stickers = listOf(
+            Sticker(
+                placement = Placement(
+                    AnchoringMode.MAP,
+                    Vector3(0.0, 0.0, 0.0),
+                    AnchoringMode.MAP,
+                    Vector3(0.0, 0.0, 0.0),
+                    AnchoringMode.MAP,
+                    1.0,
+                    placementMode,
+                ),
+                image = ResourceLocator("sticker"),
+            ),
+        ),
+        geometries = listOf(
+            Geometry(
+                topLeft = Vector3(1.0, 0.0, 0.0),
+                bottomRight = Vector3(0.0, 1.0, 0.0),
+                shaderPair = ShaderPair("vertex", "fragment"),
+                altitudeMode = geometryMode,
+            ),
+        ),
+    )
 
     private fun placement(): Placement = Placement(
         positionMode = AnchoringMode.MAP,

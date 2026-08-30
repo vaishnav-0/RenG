@@ -2,6 +2,32 @@ package com.rohittp.reng
 
 import com.rohittp.reng.internal.canonicalDouble
 
+/**
+ * Whether a map position's altitude is measured from the ellipsoid or from the terrain beneath it.
+ *
+ * **[ABSOLUTE] is the default, and the glossary decided that rather than caution.** `CONTEXT.md`
+ * already defines a map position's components as `(latitude degrees, unwrapped longitude degrees,
+ * WGS84 ellipsoidal altitude metres)`, so a caller who writes zero over a plateau means sea level
+ * and gets sea level. Defaulting the other way would have made that sentence false for every
+ * consumer who had not opted out. [GROUND_RELATIVE] is the opt-in that means the other thing.
+ *
+ * **The two are identical wherever the ground is flat** — every published release, and 28 of the 34
+ * styles RenG is verified against, which declare no terrain at all. Where terrain is absent or
+ * degraded [GROUND_RELATIVE] therefore resolves against the flat ground and *means* [ABSOLUTE]; the
+ * frame's coverage diagnostic is the only thing that says so, which ADR 0041 accepts deliberately
+ * rather than failing a frame over a coverage gap.
+ *
+ * **Not a third [AnchoringMode].** Anchoring chooses the space a property resolves in and is legal
+ * on all three of position, rotation and scale, so a `GROUND` constant there would be writable as
+ * `rotationMode` and `scaleMode`, where it means nothing. Altitude mode modifies one component of a
+ * map position and only that. ADR 0040 has the whole argument, including why an
+ * `elevationAt(latitude, longitude)` query was rejected as circular.
+ */
+public enum class AltitudeMode {
+    ABSOLUTE,
+    GROUND_RELATIVE,
+}
+
 public class Vector3(x: Double, y: Double, z: Double) {
     public val x: Double
     public val y: Double
@@ -94,6 +120,7 @@ public class Placement(
     rotation: Vector3,
     scaleMode: AnchoringMode,
     scale: Double,
+    altitudeMode: AltitudeMode = AltitudeMode.ABSOLUTE,
 ) {
     public val positionMode: AnchoringMode
     public val position: Vector3
@@ -101,6 +128,25 @@ public class Placement(
     public val rotation: Vector3
     public val scaleMode: AnchoringMode
     public val scale: Double
+
+    /**
+     * How this placement's `position.z` is measured, when `position` resolves in map space.
+     *
+     * **Declared last rather than beside [position], and that is an ABI decision.** Every argument
+     * before it is positional in three shipped releases' worth of consumer code; a seventh parameter
+     * with a default leaves all of them compiling, where inserting one in the middle would silently
+     * re-bind every positional call. The canonical encoder makes the same choice for the same reason
+     * (ADR 0018: tags are permanent, declaration order is not part of the contract).
+     *
+     * **[AltitudeMode.GROUND_RELATIVE] requires [positionMode] to be [AnchoringMode.MAP], and that is
+     * rejected at construction rather than at planning.** A screen-anchored `position.z` is a
+     * compositing z-index rather than an altitude — there is no ground under it to be relative to —
+     * so the pair is not a frame RenG can draw badly, it is a sentence with no meaning. ADR 0040
+     * rejects a fourth `AnchoringMode` precisely because that type "would accept nonsense that RenG
+     * would then have to reject at planning"; a separate field that accepted the same nonsense would
+     * have bought nothing.
+     */
+    public val altitudeMode: AltitudeMode
 
     init {
         val canonicalScale = canonicalDouble(scale, "scale")
@@ -114,6 +160,9 @@ public class Placement(
             "rotation.z must be within the supported range"
         }
         require(canonicalScale >= 0.0) { "scale must be non-negative" }
+        require(altitudeMode == AltitudeMode.ABSOLUTE || positionMode == AnchoringMode.MAP) {
+            "a ground-relative altitude requires a map-anchored position"
+        }
 
         this.positionMode = positionMode
         this.position = position
@@ -121,6 +170,7 @@ public class Placement(
         this.rotation = rotation
         this.scaleMode = scaleMode
         this.scale = canonicalScale
+        this.altitudeMode = altitudeMode
     }
 
     override fun equals(other: Any?): Boolean =
@@ -130,7 +180,8 @@ public class Placement(
             rotationMode == other.rotationMode &&
             rotation == other.rotation &&
             scaleMode == other.scaleMode &&
-            scale == other.scale
+            scale == other.scale &&
+            altitudeMode == other.altitudeMode
 
     override fun hashCode(): Int {
         var result = positionMode.hashCode()
@@ -139,10 +190,11 @@ public class Placement(
         result = 31 * result + rotation.hashCode()
         result = 31 * result + scaleMode.hashCode()
         result = 31 * result + scale.hashCode()
+        result = 31 * result + altitudeMode.hashCode()
         return result
     }
 
     override fun toString(): String =
         "Placement(positionMode=$positionMode, position=$position, rotationMode=$rotationMode, " +
-            "rotation=$rotation, scaleMode=$scaleMode, scale=$scale)"
+            "rotation=$rotation, scaleMode=$scaleMode, scale=$scale, altitudeMode=$altitudeMode)"
 }

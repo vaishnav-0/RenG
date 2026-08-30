@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.identity
 
+import com.rohittp.reng.AltitudeMode
 import com.rohittp.reng.AnchoringMode
 import com.rohittp.reng.AnimationSelector
 import com.rohittp.reng.AnimationTrack
@@ -108,6 +109,11 @@ internal class FramePlanCanonicalEncoder(
         field(4, encodeVector(placement.rotation))
         field(5, CanonicalBinary.u16(placement.scaleMode.wireValue))
         field(6, CanonicalBinary.binary64(placement.scale))
+        // Tag 7 because 1 through 6 are pinned by the Cycle B specification and ADR 0018 calls the
+        // table permanent. A ground-relative altitude and an absolute one are different frames, so
+        // they must reach different Frame Identities or a GROUND_RELATIVE plan is served the cached
+        // ABSOLUTE one.
+        field(7, CanonicalBinary.u16(placement.altitudeMode.wireValue))
     }
 
     private fun encodeSticker(sticker: Sticker): CanonicalBytes = CanonicalBinary.fields {
@@ -152,6 +158,9 @@ internal class FramePlanCanonicalEncoder(
         field(3, encodeShaderPair(geometry.shaderPair))
         field(4, encodeUniforms(geometry.uniforms))
         field(5, encodeTextures(geometry.textures))
+        // Tag 6, the next free one: a Geometry carries no Placement, so its altitude mode is its own
+        // field here exactly as it is on the public type.
+        field(6, CanonicalBinary.u16(geometry.altitudeMode.wireValue))
     }
 
     private fun encodeShaderPair(shaderPair: ShaderPair): CanonicalBytes = CanonicalBinary.fields {
@@ -252,6 +261,12 @@ private val ProjectionMode.wireValue: Int
     get() = when (this) {
         ProjectionMode.MERCATOR -> 1
         ProjectionMode.GLOBE -> 2
+    }
+
+private val AltitudeMode.wireValue: Int
+    get() = when (this) {
+        AltitudeMode.ABSOLUTE -> 1
+        AltitudeMode.GROUND_RELATIVE -> 2
     }
 
 private val AnchoringMode.wireValue: Int

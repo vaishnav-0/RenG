@@ -63,3 +63,35 @@ plan from 141 to 148, the representative one from 1,471 to 1,478. Their digests 
 RenG with an independent SHA-256 implementation, validated by first reproducing the two existing digests
 byte-exactly, rather than copied from what the changed code emitted. A digest taken from the code under
 test proves only that the code agrees with itself.
+
+## Erratum, 2026-08-30 (Cycle E-terrain): two nested tag tables grow, and one had already drifted
+
+ADR 0040 gives `Placement` and `Geometry` an `AltitudeMode` each, and a Frame Identity that ignored it
+would serve a `GROUND_RELATIVE` frame the cached `ABSOLUTE` one. So both nested objects gain a field, and
+both take **the next free tag and encode last**, for the reason the 2026-08-28 erratum gives at the root:
+tags are permanent, a root's fields must appear in strictly increasing tag order, and renumbering is
+therefore a change to every previously computed identity. **`Placement` gains tag 7**, after `scale(6)`.
+**`Geometry` gains tag 6.**
+
+**On `Geometry` the declaration order and the tag order happen to agree, and that is luck rather than
+policy.** The field is declared last on the public type too — but for an unrelated reason. `Geometry` is a
+`data class`, so a field declared between `bottomRight` and `shaderPair`, where it reads best, would
+renumber `component3` through `component5` and silently re-bind every consumer that destructures one. Two
+different constraints, both satisfied by "last". `Placement` is not a data class and has no `componentN`,
+but its six-argument constructor is positional in three shipped releases' worth of code, so the seventh
+parameter is appended for the same practical reason.
+
+**Cycle F-1 had already taken `Geometry` tags 4 and 5 without recording them anywhere.** The Cycle B
+specification pins `Geometry` as `topLeft=1/bottomRight=2/shaderPair=3`; `uniforms(4)` and `textures(5)`
+arrived with consumer uniforms and textures and appear only in the encoder's own source. The current table
+is therefore `topLeft=1, bottomRight=2, shaderPair=3, uniforms=4, textures=5, altitudeMode=6` — read the
+Cycle B specification's three rows together with this paragraph, not on their own. Nothing is wrong with
+the bytes; the *record* was incomplete, which is exactly the failure mode an append-only table exists to
+prevent.
+
+The minimal checked-in fixture does not move at all — 148 bytes, digest unchanged — because its sticker,
+model and geometry lists are empty and the new fields live inside those. The representative one grows by
+**48 bytes, 1,478 to 1,526**: four `Placement`s (two stickers and two models) and two `Geometry`s, each
+paying one 8-byte field. Its digest was re-derived outside RenG with Python's `hashlib`, by a script that
+first reproduced both tracked digests byte-exactly and round-tripped both fixtures through its own
+parser — so the expectation is not a transcription of what the changed code emitted.

@@ -265,6 +265,25 @@ public data class Geometry(
      * which applies here too.
      */
     public val textures: Map<String, ResourceLocator> = emptyMap(),
+    /**
+     * How this geometry's corner altitudes are measured.
+     *
+     * **A [Geometry] carries no [Placement]** — `CONTEXT.md` says so, and it is why the mode has to
+     * reach it on a field of its own rather than through one. **One mode governs both corners**: the
+     * glossary already makes the northern edge [topLeft]'s `z`, the southern edge [bottomRight]'s,
+     * and altitude interpolate north-to-south between them, so a rectangle with one corner pinned to
+     * the ellipsoid and the other riding a ridge is a shape nobody asked for. Under
+     * [AltitudeMode.GROUND_RELATIVE] that interpolated altitude becomes an offset above a surface
+     * sampled at every subdivided vertex rather than only at the two corners — the difference
+     * between a quad draped over a ridge and one cutting through it.
+     *
+     * **Declared last, after [textures], so no existing `componentN` moves.** [Geometry] is a
+     * `data class`, so a field inserted between [bottomRight] and [shaderPair] — where it would read
+     * best — would renumber `component3` through `component5` and break every consumer that
+     * destructures one. It takes `component6` instead, and the canonical encoder takes the next free
+     * tag for the same reason (ADR 0018).
+     */
+    public val altitudeMode: AltitudeMode = AltitudeMode.ABSOLUTE,
 ) {
     init {
         require(topLeft.x in -90.0..90.0) { "topLeft latitude must be within the supported range" }
@@ -285,5 +304,5 @@ public data class Geometry(
 
     override fun toString(): String =
         "Geometry(topLeft=$topLeft, bottomRight=$bottomRight, shaderPair=<redacted>, " +
-            "uniforms=<redacted>, textures=<redacted>)"
+            "uniforms=<redacted>, textures=<redacted>, altitudeMode=$altitudeMode)"
 }

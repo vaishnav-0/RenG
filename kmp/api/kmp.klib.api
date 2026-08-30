@@ -6,6 +6,17 @@
 // - Show declarations: true
 
 // Library unique name: <com.rohittp.reng:kmp>
+final enum class com.rohittp.reng/AltitudeMode : kotlin/Enum<com.rohittp.reng/AltitudeMode> { // com.rohittp.reng/AltitudeMode|null[0]
+    enum entry ABSOLUTE // com.rohittp.reng/AltitudeMode.ABSOLUTE|null[0]
+    enum entry GROUND_RELATIVE // com.rohittp.reng/AltitudeMode.GROUND_RELATIVE|null[0]
+
+    final val entries // com.rohittp.reng/AltitudeMode.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<com.rohittp.reng/AltitudeMode> // com.rohittp.reng/AltitudeMode.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): com.rohittp.reng/AltitudeMode // com.rohittp.reng/AltitudeMode.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<com.rohittp.reng/AltitudeMode> // com.rohittp.reng/AltitudeMode.values|values#static(){}[0]
+}
+
 final enum class com.rohittp.reng/AnchoringMode : kotlin/Enum<com.rohittp.reng/AnchoringMode> { // com.rohittp.reng/AnchoringMode|null[0]
     enum entry MAP // com.rohittp.reng/AnchoringMode.MAP|null[0]
     enum entry SCREEN // com.rohittp.reng/AnchoringMode.SCREEN|null[0]
@@ -477,8 +488,10 @@ final class com.rohittp.reng/FramePlan { // com.rohittp.reng/FramePlan|null[0]
 }
 
 final class com.rohittp.reng/Geometry { // com.rohittp.reng/Geometry|null[0]
-    constructor <init>(com.rohittp.reng/Vector3, com.rohittp.reng/Vector3, com.rohittp.reng/ShaderPair, kotlin.collections/Map<kotlin/String, com.rohittp.reng/ShaderValue> = ..., kotlin.collections/Map<kotlin/String, com.rohittp.reng/ResourceLocator> = ...) // com.rohittp.reng/Geometry.<init>|<init>(com.rohittp.reng.Vector3;com.rohittp.reng.Vector3;com.rohittp.reng.ShaderPair;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ShaderValue>;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ResourceLocator>){}[0]
+    constructor <init>(com.rohittp.reng/Vector3, com.rohittp.reng/Vector3, com.rohittp.reng/ShaderPair, kotlin.collections/Map<kotlin/String, com.rohittp.reng/ShaderValue> = ..., kotlin.collections/Map<kotlin/String, com.rohittp.reng/ResourceLocator> = ..., com.rohittp.reng/AltitudeMode = ...) // com.rohittp.reng/Geometry.<init>|<init>(com.rohittp.reng.Vector3;com.rohittp.reng.Vector3;com.rohittp.reng.ShaderPair;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ShaderValue>;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ResourceLocator>;com.rohittp.reng.AltitudeMode){}[0]
 
+    final val altitudeMode // com.rohittp.reng/Geometry.altitudeMode|{}altitudeMode[0]
+        final fun <get-altitudeMode>(): com.rohittp.reng/AltitudeMode // com.rohittp.reng/Geometry.altitudeMode.<get-altitudeMode>|<get-altitudeMode>(){}[0]
     final val bottomRight // com.rohittp.reng/Geometry.bottomRight|{}bottomRight[0]
         final fun <get-bottomRight>(): com.rohittp.reng/Vector3 // com.rohittp.reng/Geometry.bottomRight.<get-bottomRight>|<get-bottomRight>(){}[0]
     final val shaderPair // com.rohittp.reng/Geometry.shaderPair|{}shaderPair[0]
@@ -495,7 +508,8 @@ final class com.rohittp.reng/Geometry { // com.rohittp.reng/Geometry|null[0]
     final fun component3(): com.rohittp.reng/ShaderPair // com.rohittp.reng/Geometry.component3|component3(){}[0]
     final fun component4(): kotlin.collections/Map<kotlin/String, com.rohittp.reng/ShaderValue> // com.rohittp.reng/Geometry.component4|component4(){}[0]
     final fun component5(): kotlin.collections/Map<kotlin/String, com.rohittp.reng/ResourceLocator> // com.rohittp.reng/Geometry.component5|component5(){}[0]
-    final fun copy(com.rohittp.reng/Vector3 = ..., com.rohittp.reng/Vector3 = ..., com.rohittp.reng/ShaderPair = ..., kotlin.collections/Map<kotlin/String, com.rohittp.reng/ShaderValue> = ..., kotlin.collections/Map<kotlin/String, com.rohittp.reng/ResourceLocator> = ...): com.rohittp.reng/Geometry // com.rohittp.reng/Geometry.copy|copy(com.rohittp.reng.Vector3;com.rohittp.reng.Vector3;com.rohittp.reng.ShaderPair;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ShaderValue>;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ResourceLocator>){}[0]
+    final fun component6(): com.rohittp.reng/AltitudeMode // com.rohittp.reng/Geometry.component6|component6(){}[0]
+    final fun copy(com.rohittp.reng/Vector3 = ..., com.rohittp.reng/Vector3 = ..., com.rohittp.reng/ShaderPair = ..., kotlin.collections/Map<kotlin/String, com.rohittp.reng/ShaderValue> = ..., kotlin.collections/Map<kotlin/String, com.rohittp.reng/ResourceLocator> = ..., com.rohittp.reng/AltitudeMode = ...): com.rohittp.reng/Geometry // com.rohittp.reng/Geometry.copy|copy(com.rohittp.reng.Vector3;com.rohittp.reng.Vector3;com.rohittp.reng.ShaderPair;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ShaderValue>;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ResourceLocator>;com.rohittp.reng.AltitudeMode){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Geometry.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/Geometry.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/Geometry.toString|toString(){}[0]
@@ -534,8 +548,10 @@ final class com.rohittp.reng/OutputPixelSize { // com.rohittp.reng/OutputPixelSi
 }
 
 final class com.rohittp.reng/Placement { // com.rohittp.reng/Placement|null[0]
-    constructor <init>(com.rohittp.reng/AnchoringMode, com.rohittp.reng/Vector3, com.rohittp.reng/AnchoringMode, com.rohittp.reng/Vector3, com.rohittp.reng/AnchoringMode, kotlin/Double) // com.rohittp.reng/Placement.<init>|<init>(com.rohittp.reng.AnchoringMode;com.rohittp.reng.Vector3;com.rohittp.reng.AnchoringMode;com.rohittp.reng.Vector3;com.rohittp.reng.AnchoringMode;kotlin.Double){}[0]
+    constructor <init>(com.rohittp.reng/AnchoringMode, com.rohittp.reng/Vector3, com.rohittp.reng/AnchoringMode, com.rohittp.reng/Vector3, com.rohittp.reng/AnchoringMode, kotlin/Double, com.rohittp.reng/AltitudeMode = ...) // com.rohittp.reng/Placement.<init>|<init>(com.rohittp.reng.AnchoringMode;com.rohittp.reng.Vector3;com.rohittp.reng.AnchoringMode;com.rohittp.reng.Vector3;com.rohittp.reng.AnchoringMode;kotlin.Double;com.rohittp.reng.AltitudeMode){}[0]
 
+    final val altitudeMode // com.rohittp.reng/Placement.altitudeMode|{}altitudeMode[0]
+        final fun <get-altitudeMode>(): com.rohittp.reng/AltitudeMode // com.rohittp.reng/Placement.altitudeMode.<get-altitudeMode>|<get-altitudeMode>(){}[0]
     final val position // com.rohittp.reng/Placement.position|{}position[0]
         final fun <get-position>(): com.rohittp.reng/Vector3 // com.rohittp.reng/Placement.position.<get-position>|<get-position>(){}[0]
     final val positionMode // com.rohittp.reng/Placement.positionMode|{}positionMode[0]

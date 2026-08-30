@@ -320,7 +320,8 @@ _Avoid_: Clip, timeline, animation state, keyframe, frame index, frames per seco
 A shader-painted geographic rectangle defined by opposite `topLeft` and `bottomRight` `Vector3` corners.
 Top-left latitude is strictly north of bottom-right latitude; its unwrapped longitude is strictly west,
 with a span no greater than `360` degrees. The northern edge uses `topLeft.z` altitude, the southern edge
-uses `bottomRight.z`, and altitude interpolates north-to-south. A **Geometry** carries no **Placement**.
+uses `bottomRight.z`, and altitude interpolates north-to-south. A **Geometry** carries no **Placement**,
+so it carries an **Altitude Mode** of its own.
 _Avoid_: Layer, overlay, custom layer, primitive
 
 **Shader Pair**:
@@ -364,7 +365,11 @@ Whether a **Placement**'s `position.z` is measured from the ellipsoid or from th
 it — `ABSOLUTE` or `GROUND_RELATIVE`. **`ABSOLUTE` is the default and the meaning the glossary already
 carried**: altitude is ellipsoidal metres, so a caller who says zero over a plateau means sea level and
 gets it. `GROUND_RELATIVE` is the opt-in that means the other thing. The two are identical wherever the
-ground is flat, which is every style that declares no terrain.
+ground is flat, which is every style that declares no terrain. A **Geometry** carries one of its own,
+because it carries no **Placement**; one mode governs both of its corners, since a rectangle with one
+corner on the ellipsoid and the other riding a ridge is a shape nobody asked for. `GROUND_RELATIVE`
+requires a **Map Anchoring** position and is rejected at construction otherwise: a **Screen Anchoring**
+`position.z` is a compositing z-index rather than an altitude, so there is no ground beneath it.
 _Avoid_: Clamp to ground, sea level (as a mode name), height mode, elevation offset.
 
 **Terrain Shading**:
