@@ -4,7 +4,7 @@ androidxTestRunner = "1.7.0"
 kotlin = "2.3.21"
 kotlinxCoroutines = "1.11.0"
 mavenPublish = "0.36.0"
-rentile = "0.6.0"
+rentile = "0.7.0"
 
 [libraries]
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }

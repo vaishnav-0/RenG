@@ -25,6 +25,7 @@ import com.rohittp.reng.internal.terrain.DemTileCoordinate
 import com.rohittp.reng.internal.terrain.DemTileWindow
 import com.rohittp.reng.internal.terrain.demTileWindowFor
 import com.rohittp.rentile.PreparedStyle
+import com.rohittp.rentile.DemTexels
 import com.rohittp.rentile.TerrainDemEncoding
 import com.rohittp.rentile.TerrainSourceDescriptor
 import com.rohittp.rentile.TileId
@@ -394,6 +395,10 @@ class TerrainAcquisitionTest {
                 encoding = TerrainDemEncoding.MAPBOX,
                 bytes = payload,
                 contentDigest = TERRAIN_SOURCE_ID_DIGEST,
+                // Rentile 0.7.0 hands the decoded texels over with the encoded bytes. This case is
+                // about matching a result to the tile it was requested for, so the pixels are a
+                // one-texel placeholder rather than a fixture -- nothing here reads them.
+                texels = DemTexels(width = 1, height = 1, rgba = byteArrayOf(0, 0, 0, -1)),
             )
 
             val dem = assertNotNull(
@@ -625,6 +630,7 @@ private fun demTile(tile: CanonicalBasemapTile, payload: Int): ValidatedDemTile 
         encoding = TerrainDemEncoding.TERRARIUM,
         bytes = byteArrayOf(payload.toByte()),
         contentDigest = TERRAIN_SOURCE_ID_DIGEST,
+        texels = DemTexels(width = 1, height = 1, rgba = byteArrayOf(payload.toByte(), 0, 0, -1)),
     )
 }
 

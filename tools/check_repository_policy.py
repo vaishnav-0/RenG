@@ -261,13 +261,13 @@ _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS = {
     # whole-file digests: comments and whitespace are free, and any token is not. Each of these
     # two files pins three equally-exact accepted forms -- the pre-Cycle-C original, ADR 0019's
     # coroutines form, and ADR 0032's device-test form, which is the one currently on disk.
-    # Every form carries the rentile 0.6.0 bump (see base_versions below, which must move in
+    # Every form carries the rentile 0.7.0 bump (see base_versions below, which must move in
     # lockstep with these fingerprints), and the two older forms cannot be recomputed from disk;
     # they are the fixtures in tools/tests/test_check_repository_policy.py.
     "gradle/libs.versions.toml": frozenset({
-        "d6bc6efd37d55b0b9c46c9b72fa19f28350a102c80996dc26c4b89f794a8d795",
-        "174937a0a8c0da9da51654064fb15b4d491cfd3f38349424f4b39d2f6e91ad92",
-        "b9756bb7805cbdcd9c173835c961a50a6aa47ef0cd717137083c1c323d6c9e87",
+        "0f665393f96f3c78621ac757322a742f7737187e81410330434f901e003ea1e6",
+        "cdfb80be9c5b2ea5c98ecbe8537a15ec4a0d7fe17a9c3291173fce0c66d20132",
+        "14c2e746e14aeccda729881a3005f8708d5c56ade5741081ccca622081b69f57",
     }),
     "kmp/build.gradle.kts": frozenset({
         "cb2e7408aea431f014fbb1235b0a1793a39289a4dbf52c331e2f2fda23f236df",
@@ -1897,7 +1897,7 @@ def check_dependencies(root: Path) -> list[Violation]:
             "agp": "9.3.1",
             "kotlin": "2.3.21",
             "mavenPublish": "0.36.0",
-            "rentile": "0.6.0",
+            "rentile": "0.7.0",
         }
         base_libraries = {
             "rentile-kmp": {
