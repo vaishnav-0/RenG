@@ -118,3 +118,82 @@ jobs:
             kmp/build/test-results/**
           if-no-files-found: ignore
           retention-days: 14
+
+  frame-comparison:
+    name: Frame comparison against main
+    # Pull requests only. On push-to-main the comparison is degenerate -- main against itself -- and
+    # `publish.yml` deliberately never runs it, because render time is the exact cost this gating
+    # exists to avoid on a release path that already takes minutes.
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Both sides are needed: the comparison renders this branch and `main`, and the version
+          # gate below reads `gradle.properties` from each.
+          fetch-depth: 0
+      - name: Decide whether this pull request earns a corpus render
+        id: gate
+        shell: bash
+        run: |
+          git show "origin/${GITHUB_BASE_REF}:gradle.properties" > "$RUNNER_TEMP/base.properties" \
+            || : > "$RUNNER_TEMP/base.properties"
+          kind="$(python3 tools/version_bump_kind.py \
+            --base "$RUNNER_TEMP/base.properties" --head gradle.properties)"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          case "$kind" in
+            major|minor) echo "run=true"  >> "$GITHUB_OUTPUT" ;;
+            *)           echo "run=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "VERSION_NAME moved by: $kind"
+      - name: Explain a skipped comparison
+        if: steps.gate.outputs.run != 'true'
+        run: |
+          echo "VERSION_NAME moved by '${{ steps.gate.outputs.kind }}', so the corpus is not"
+          echo "rendered. A patch is a fix that should not move a pixel it did not mean to, and"
+          echo "proving that costs two full corpus renders on a macOS runner. Run it locally:"
+          echo "  python3 tools/compare_rendered_frames.py"
+      - uses: actions/setup-java@v5
+        if: steps.gate.outputs.run == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v6
+        if: steps.gate.outputs.run == 'true'
+      - name: Configure the style base
+        if: steps.gate.outputs.run == 'true'
+        env:
+          # The base carries the owner's api key. It is written straight into the untracked
+          # `local.properties` and never echoed, never interpolated into a command line, and never
+          # placed anywhere `set -x` or a failing step would print it -- the same rule the firewall
+          # lives by for signed urls.
+          STYLE_BASE: ${{ secrets.RENG_HARNESS_STYLE_BASE_URL }}
+        shell: bash
+        run: |
+          if [ -z "$STYLE_BASE" ]; then
+            echo "RENG_HARNESS_STYLE_BASE_URL is not set for this repository." >&2
+            exit 1
+          fi
+          printf 'reng.harness.styleBaseUrl=%s\n' "$STYLE_BASE" >> local.properties
+      - name: Compare rendered frames against main
+        if: steps.gate.outputs.run == 'true'
+        run: python3 tools/compare_rendered_frames.py --root .
+      - name: What this job does and does not claim
+        if: always() && steps.gate.outputs.run == 'true'
+        run: |
+          echo "This job is a statement about CHANGE, never about correctness."
+          echo "A hosted macOS runner has no GPU: it runs Apple Software Renderer, whose"
+          echo "rasterisation this project's own probe measures as wrong by 2,112 pixels on a"
+          echo "large quad against a 512-pixel budget. Frames rendered here are compared only"
+          echo "against frames rendered here, on the same driver, so a difference means RenG's"
+          echo "source changed. An identical frame does NOT mean the frame is right, and the"
+          echo "baseline review in Cycle K task 7 is what establishes that."
+      - name: Upload difference images
+        if: failure() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frame-differences
+          path: build/harness-renders/difference/**
+          if-no-files-found: ignore
+          retention-days: 14
