@@ -2,11 +2,15 @@ package com.rohittp.reng
 
 import com.rohittp.reng.internal.freshListCopy
 
+@kotlinx.serialization.Serializable
 public enum class ProjectionMode {
+    @kotlinx.serialization.SerialName("MERCATOR")
     MERCATOR,
+    @kotlinx.serialization.SerialName("GLOBE")
     GLOBE,
 }
 
+@kotlinx.serialization.Serializable(with = FramePlanSerializer::class)
 public class FramePlan(
     frameIndex: Long,
     camera: Camera,

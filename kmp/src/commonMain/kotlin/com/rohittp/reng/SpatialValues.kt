@@ -23,11 +23,15 @@ import com.rohittp.reng.internal.canonicalDouble
  * map position and only that. ADR 0040 has the whole argument, including why an
  * `elevationAt(latitude, longitude)` query was rejected as circular.
  */
+@kotlinx.serialization.Serializable
 public enum class AltitudeMode {
+    @kotlinx.serialization.SerialName("ABSOLUTE")
     ABSOLUTE,
+    @kotlinx.serialization.SerialName("GROUND_RELATIVE")
     GROUND_RELATIVE,
 }
 
+@kotlinx.serialization.Serializable(with = Vector3Serializer::class)
 public class Vector3(x: Double, y: Double, z: Double) {
     public val x: Double
     public val y: Double
@@ -55,6 +59,7 @@ public class Vector3(x: Double, y: Double, z: Double) {
     override fun toString(): String = "Vector3(x=$x, y=$y, z=$z)"
 }
 
+@kotlinx.serialization.Serializable(with = CameraSerializer::class)
 public class Camera(
     latitude: Double,
     unwrappedLongitude: Double,
@@ -113,6 +118,7 @@ public class Camera(
             "bearing=$bearing, pitch=$pitch)"
 }
 
+@kotlinx.serialization.Serializable(with = PlacementSerializer::class)
 public class Placement(
     positionMode: AnchoringMode,
     position: Vector3,

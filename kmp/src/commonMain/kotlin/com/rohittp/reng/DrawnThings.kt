@@ -8,18 +8,22 @@ import com.rohittp.reng.internal.gl.RESERVED_SHADER_NAMES
 import com.rohittp.reng.internal.requireFiniteFloat
 import com.rohittp.reng.internal.requireUnicodeScalars
 
+@kotlinx.serialization.Serializable(with = StickerSerializer::class)
 public data class Sticker(
     public val placement: Placement,
     public val image: ResourceLocator,
 )
 
+@kotlinx.serialization.Serializable
 public sealed interface AnimationSelector {
+    @kotlinx.serialization.Serializable(with = AnimationSelectorNameSerializer::class)
     public data class Name(public val value: String) : AnimationSelector {
         init {
             requireUnicodeScalars(value, "animationName", nonBlank = true)
         }
     }
 
+    @kotlinx.serialization.Serializable(with = AnimationSelectorIndexSerializer::class)
     public data class Index(public val value: Long) : AnimationSelector {
         init {
             require(value >= 0L) { "animation index must be non-negative" }
@@ -27,6 +31,7 @@ public sealed interface AnimationSelector {
     }
 }
 
+@kotlinx.serialization.Serializable(with = AnimationTrackSerializer::class)
 public class AnimationTrack(animation: AnimationSelector, timeSeconds: Double) {
     public val animation: AnimationSelector
     public val timeSeconds: Double
@@ -46,6 +51,7 @@ public class AnimationTrack(animation: AnimationSelector, timeSeconds: Double) {
     override fun hashCode(): Int = 31 * animation.hashCode() + timeSeconds.hashCode()
 }
 
+@kotlinx.serialization.Serializable(with = ModelSerializer::class)
 public class Model(
     placement: Placement,
     glb: ResourceLocator,
@@ -89,6 +95,7 @@ public class Model(
 
 internal fun Model.animationTracksForCore(): List<AnimationTrack> = animationTracks
 
+@kotlinx.serialization.Serializable(with = ShaderPairSerializer::class)
 public data class ShaderPair(
     public val vertexSource: String,
     public val fragmentSource: String,
@@ -120,7 +127,9 @@ public data class ShaderPair(
  * specifically so its backing array can be copied defensively and its elements canonicalized at
  * construction; a `data class` over a `FloatArray` would compare by reference.
  */
+@kotlinx.serialization.Serializable
 public sealed interface ShaderValue {
+    @kotlinx.serialization.Serializable(with = ShaderValueScalarSerializer::class)
     public data class Scalar(public val value: Float) : ShaderValue {
         init {
             requireFiniteFloat(value, "value")
@@ -131,6 +140,7 @@ public sealed interface ShaderValue {
         override fun hashCode(): Int = zeroCanonicalizedHash(value)
     }
 
+    @kotlinx.serialization.Serializable(with = ShaderValueVec2Serializer::class)
     public data class Vec2(public val x: Float, public val y: Float) : ShaderValue {
         init {
             requireFiniteFloat(x, "x")
@@ -142,6 +152,7 @@ public sealed interface ShaderValue {
         override fun hashCode(): Int = 31 * zeroCanonicalizedHash(x) + zeroCanonicalizedHash(y)
     }
 
+    @kotlinx.serialization.Serializable(with = ShaderValueVec3Serializer::class)
     public data class Vec3(public val x: Float, public val y: Float, public val z: Float) : ShaderValue {
         init {
             requireFiniteFloat(x, "x")
@@ -160,6 +171,7 @@ public sealed interface ShaderValue {
         }
     }
 
+    @kotlinx.serialization.Serializable(with = ShaderValueVec4Serializer::class)
     public data class Vec4(
         public val x: Float,
         public val y: Float,
@@ -185,8 +197,10 @@ public sealed interface ShaderValue {
         }
     }
 
+    @kotlinx.serialization.Serializable(with = ShaderValueIntegerSerializer::class)
     public data class Integer(public val value: Int) : ShaderValue
 
+    @kotlinx.serialization.Serializable(with = ShaderValueMat4Serializer::class)
     public class Mat4(elements: FloatArray) : ShaderValue {
         private val elementSnapshot: FloatArray
 
@@ -223,6 +237,7 @@ private fun zeroCanonicalizedHash(value: Float): Int = (if (value == 0.0f) 0.0f 
 
 private const val MAT4_ELEMENT_COUNT = 16
 
+@kotlinx.serialization.Serializable(with = GeometrySerializer::class)
 public data class Geometry(
     public val topLeft: Vector3,
     public val bottomRight: Vector3,

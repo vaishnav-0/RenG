@@ -15,6 +15,11 @@ final enum class com.rohittp.reng/AltitudeMode : kotlin/Enum<com.rohittp.reng/Al
 
     final fun valueOf(kotlin/String): com.rohittp.reng/AltitudeMode // com.rohittp.reng/AltitudeMode.valueOf|valueOf#static(kotlin.String){}[0]
     final fun values(): kotlin/Array<com.rohittp.reng/AltitudeMode> // com.rohittp.reng/AltitudeMode.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // com.rohittp.reng/AltitudeMode.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/AltitudeMode> // com.rohittp.reng/AltitudeMode.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // com.rohittp.reng/AltitudeMode.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
 }
 
 final enum class com.rohittp.reng/AnchoringMode : kotlin/Enum<com.rohittp.reng/AnchoringMode> { // com.rohittp.reng/AnchoringMode|null[0]
@@ -26,6 +31,11 @@ final enum class com.rohittp.reng/AnchoringMode : kotlin/Enum<com.rohittp.reng/A
 
     final fun valueOf(kotlin/String): com.rohittp.reng/AnchoringMode // com.rohittp.reng/AnchoringMode.valueOf|valueOf#static(kotlin.String){}[0]
     final fun values(): kotlin/Array<com.rohittp.reng/AnchoringMode> // com.rohittp.reng/AnchoringMode.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // com.rohittp.reng/AnchoringMode.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/AnchoringMode> // com.rohittp.reng/AnchoringMode.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // com.rohittp.reng/AnchoringMode.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
 }
 
 final enum class com.rohittp.reng/DiagnosticCode : kotlin/Enum<com.rohittp.reng/DiagnosticCode> { // com.rohittp.reng/DiagnosticCode|null[0]
@@ -94,6 +104,11 @@ final enum class com.rohittp.reng/ProjectionMode : kotlin/Enum<com.rohittp.reng/
 
     final fun valueOf(kotlin/String): com.rohittp.reng/ProjectionMode // com.rohittp.reng/ProjectionMode.valueOf|valueOf#static(kotlin.String){}[0]
     final fun values(): kotlin/Array<com.rohittp.reng/ProjectionMode> // com.rohittp.reng/ProjectionMode.values|values#static(){}[0]
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // com.rohittp.reng/ProjectionMode.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ProjectionMode> // com.rohittp.reng/ProjectionMode.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // com.rohittp.reng/ProjectionMode.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
 }
 
 final enum class com.rohittp.reng/RenGErrorCode : kotlin/Enum<com.rohittp.reng/RenGErrorCode> { // com.rohittp.reng/RenGErrorCode|null[0]
@@ -216,6 +231,10 @@ sealed interface com.rohittp.reng/AnimationSelector { // com.rohittp.reng/Animat
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/AnimationSelector.Index.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/AnimationSelector.Index.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/AnimationSelector.Index.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/AnimationSelector.Index.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/AnimationSelector.Index> // com.rohittp.reng/AnimationSelector.Index.Companion.serializer|serializer(){}[0]
+        }
     }
 
     final class Name : com.rohittp.reng/AnimationSelector { // com.rohittp.reng/AnimationSelector.Name|null[0]
@@ -229,6 +248,15 @@ sealed interface com.rohittp.reng/AnimationSelector { // com.rohittp.reng/Animat
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/AnimationSelector.Name.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/AnimationSelector.Name.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/AnimationSelector.Name.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/AnimationSelector.Name.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/AnimationSelector.Name> // com.rohittp.reng/AnimationSelector.Name.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // com.rohittp.reng/AnimationSelector.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/AnimationSelector> // com.rohittp.reng/AnimationSelector.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // com.rohittp.reng/AnimationSelector.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
     }
 }
 
@@ -317,6 +345,10 @@ sealed interface com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue|
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ShaderValue.Integer.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/ShaderValue.Integer.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/ShaderValue.Integer.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/ShaderValue.Integer.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderValue.Integer> // com.rohittp.reng/ShaderValue.Integer.Companion.serializer|serializer(){}[0]
+        }
     }
 
     final class Mat4 : com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue.Mat4|null[0]
@@ -325,6 +357,10 @@ sealed interface com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue|
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ShaderValue.Mat4.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/ShaderValue.Mat4.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/ShaderValue.Mat4.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/ShaderValue.Mat4.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderValue.Mat4> // com.rohittp.reng/ShaderValue.Mat4.Companion.serializer|serializer(){}[0]
+        }
     }
 
     final class Scalar : com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue.Scalar|null[0]
@@ -338,6 +374,10 @@ sealed interface com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue|
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ShaderValue.Scalar.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/ShaderValue.Scalar.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/ShaderValue.Scalar.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/ShaderValue.Scalar.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderValue.Scalar> // com.rohittp.reng/ShaderValue.Scalar.Companion.serializer|serializer(){}[0]
+        }
     }
 
     final class Vec2 : com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue.Vec2|null[0]
@@ -354,6 +394,10 @@ sealed interface com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue|
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ShaderValue.Vec2.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/ShaderValue.Vec2.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/ShaderValue.Vec2.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/ShaderValue.Vec2.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderValue.Vec2> // com.rohittp.reng/ShaderValue.Vec2.Companion.serializer|serializer(){}[0]
+        }
     }
 
     final class Vec3 : com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue.Vec3|null[0]
@@ -373,6 +417,10 @@ sealed interface com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue|
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ShaderValue.Vec3.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/ShaderValue.Vec3.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/ShaderValue.Vec3.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/ShaderValue.Vec3.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderValue.Vec3> // com.rohittp.reng/ShaderValue.Vec3.Companion.serializer|serializer(){}[0]
+        }
     }
 
     final class Vec4 : com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue.Vec4|null[0]
@@ -395,6 +443,15 @@ sealed interface com.rohittp.reng/ShaderValue { // com.rohittp.reng/ShaderValue|
         final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ShaderValue.Vec4.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // com.rohittp.reng/ShaderValue.Vec4.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // com.rohittp.reng/ShaderValue.Vec4.toString|toString(){}[0]
+
+        final object Companion { // com.rohittp.reng/ShaderValue.Vec4.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderValue.Vec4> // com.rohittp.reng/ShaderValue.Vec4.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // com.rohittp.reng/ShaderValue.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderValue> // com.rohittp.reng/ShaderValue.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // com.rohittp.reng/ShaderValue.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
     }
 }
 
@@ -408,6 +465,10 @@ final class com.rohittp.reng/AnimationTrack { // com.rohittp.reng/AnimationTrack
 
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/AnimationTrack.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/AnimationTrack.hashCode|hashCode(){}[0]
+
+    final object Companion { // com.rohittp.reng/AnimationTrack.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/AnimationTrack> // com.rohittp.reng/AnimationTrack.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/Camera { // com.rohittp.reng/Camera|null[0]
@@ -427,6 +488,10 @@ final class com.rohittp.reng/Camera { // com.rohittp.reng/Camera|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Camera.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/Camera.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/Camera.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/Camera.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Camera> // com.rohittp.reng/Camera.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/Diagnostic { // com.rohittp.reng/Diagnostic|null[0]
@@ -485,6 +550,10 @@ final class com.rohittp.reng/FramePlan { // com.rohittp.reng/FramePlan|null[0]
 
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/FramePlan.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/FramePlan.hashCode|hashCode(){}[0]
+
+    final object Companion { // com.rohittp.reng/FramePlan.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/FramePlan> // com.rohittp.reng/FramePlan.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/Geometry { // com.rohittp.reng/Geometry|null[0]
@@ -513,6 +582,10 @@ final class com.rohittp.reng/Geometry { // com.rohittp.reng/Geometry|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Geometry.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/Geometry.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/Geometry.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/Geometry.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Geometry> // com.rohittp.reng/Geometry.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/Model { // com.rohittp.reng/Model|null[0]
@@ -529,6 +602,10 @@ final class com.rohittp.reng/Model { // com.rohittp.reng/Model|null[0]
 
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Model.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/Model.hashCode|hashCode(){}[0]
+
+    final object Companion { // com.rohittp.reng/Model.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Model> // com.rohittp.reng/Model.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/OutputPixelSize { // com.rohittp.reng/OutputPixelSize|null[0]
@@ -568,6 +645,10 @@ final class com.rohittp.reng/Placement { // com.rohittp.reng/Placement|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Placement.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/Placement.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/Placement.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/Placement.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Placement> // com.rohittp.reng/Placement.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/RawResourceKey { // com.rohittp.reng/RawResourceKey|null[0]
@@ -704,6 +785,10 @@ final class com.rohittp.reng/ResourceLocator { // com.rohittp.reng/ResourceLocat
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ResourceLocator.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/ResourceLocator.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/ResourceLocator.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/ResourceLocator.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ResourceLocator> // com.rohittp.reng/ResourceLocator.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/ResourceReport { // com.rohittp.reng/ResourceReport|null[0]
@@ -775,6 +860,10 @@ final class com.rohittp.reng/ShaderPair { // com.rohittp.reng/ShaderPair|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ShaderPair.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/ShaderPair.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/ShaderPair.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/ShaderPair.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/ShaderPair> // com.rohittp.reng/ShaderPair.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/Sticker { // com.rohittp.reng/Sticker|null[0]
@@ -791,6 +880,10 @@ final class com.rohittp.reng/Sticker { // com.rohittp.reng/Sticker|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Sticker.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/Sticker.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/Sticker.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/Sticker.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Sticker> // com.rohittp.reng/Sticker.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final class com.rohittp.reng/StoredRawResource { // com.rohittp.reng/StoredRawResource|null[0]
@@ -900,6 +993,10 @@ final class com.rohittp.reng/Vector3 { // com.rohittp.reng/Vector3|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Vector3.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/Vector3.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/Vector3.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/Vector3.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Vector3> // com.rohittp.reng/Vector3.Companion.serializer|serializer(){}[0]
+    }
 }
 
 final value class com.rohittp.reng/FramebufferName { // com.rohittp.reng/FramebufferName|null[0]
