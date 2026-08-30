@@ -351,6 +351,21 @@ at unequal z, which passes under either authority; a premultiplication check on 
 premultiplying is the identity; and an animation check at `t = 1.0`, which `timeSeconds % duration` maps
 back onto `t = 0`. **Assume the next one exists.**
 
+**E-terrain sharpened that rule into something you can act on: look for the symmetry point first.** The
+cycle found more than fifteen vacuous checks, every one by deliberately breaking working code rather than
+by review — and **three were the same shape, a fixture sitting where the thing under test is the
+identity**. A *uniform* DEM makes a ground cell's four corners and the texel beneath a point the same
+number, so a granularity bug survived a whole mutation sweep. A drape quad laid *on* a cell boundary makes
+the interpolation vanish, and read 589,761 of 589,761 against a build 47 metres wrong. A metre-scale of
+exactly *1.0* makes a missing multiply invisible, and made two different mutations report the same catching
+test. The others rhyme: a globe probe **saturated** in a frame smaller than the sphere reported 0 differing
+pixels against a *correct* build; an assertion satisfiable by **two frames of background**; and a test
+asserting **its own helper's default** rather than production's, which is only visible when you flip the
+production default and nothing goes red.
+
+So before trusting a green fixture, ask what it is *not* varying — and move it off the symmetry point
+rather than adding another assertion beside it.
+
 **Cycle G is complete and unreleased. RenG draws a globe.** Its authority is
 `docs/superpowers/specs/2026-08-28-cycle-g-globe-design.md`, its plan is
 `docs/superpowers/plans/2026-08-29-cycle-g-globe.md`, and the harness pass is
