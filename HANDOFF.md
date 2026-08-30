@@ -200,7 +200,7 @@ consumer can find out.** Surfacing it is a design decision — forwarding `code`
 > above it as history. Note also that there is **no symbol-layer style fixture anywhere under `kmp/src/`**,
 > so RenG's own suite detects neither the old behaviour nor the new one.
 
-## The Rentile pin is `0.5.0` — **superseded: it is `0.6.0` since the E-labels preflight**
+## The Rentile pin is `0.5.0` — **superseded twice: it is `0.7.0` since Cycle E-terrain**
 
 Bumped in `0f385c7` from `0.2.0`. RenG adopts the pin and **none** of the feature: it still never calls
 `acquireLabelCandidates`, never enumerates `GLYPH_RANGE`, and still passes `TileSubstitutionPolicy.Disabled`
@@ -560,10 +560,19 @@ something cites it.
   with a clamped delay, and it rethrows cancellation unchanged. And `RawResourceKey.toString()` prints its
   identifier in the clear, so a Rentile key must never reach a RenG diagnostic.
 
-## What remains: F-2, E-labels, E-terrain, H, G, I, J — **superseded: only E-terrain and J remain**
+## What remains: F-2, E-labels, E-terrain, H, G, I, J — **superseded: only J remains**
 
-F-2, H, E-labels and G are all complete and unreleased; I was withdrawn on 2026-08-28. The
-ordering reasoning below is kept because it explains how the letters came to mean what they mean.
+F-2, H, E-labels, G and E-terrain are all complete; I was withdrawn on 2026-08-28. The ordering reasoning
+below is kept because it explains how the letters came to mean what they mean.
+
+**E-terrain forced a Rentile release, which is the thing to know before planning J.** Five of the six
+corpus styles declaring `terrain` serve **WebP** DEM tiles, and RenG owns a PNG decoder only, so terrain
+reached one style in six. Rentile `0.7.0` now exposes `ValidatedDemTile.texels` — the pixels it already
+decoded for validation and used to discard — and RenG decodes no DEM at all. Two consequences outlive the
+cycle: the version rule in Rentile is the **inverse** of RenG's, so a stale `VERSION_NAME` there silently
+ships a patch rather than failing closed (it would have shipped this breaking ABI change as `0.6.1`); and
+ADR 0016's DEM write obligation was retired, because its premise was that RenG would decode those bytes
+itself.
 
 **Order, as it stands after two reorders.** The 2026-08-19 reorder split Cycle F into **F-1** (stickers,
 geometries, the renderer factory — the MVP, released in `0.2.0`) and **F-2** (models), and split Cycle E so
