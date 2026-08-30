@@ -25,3 +25,8 @@ __pycache__/
 
 # Agent scaffolding, including the git worktrees created for parallel subagents.
 .claude/
+
+# Rendered harness frames. Not committed: a corpus run writes hundreds of 960x540 PPMs, and the
+# comparison script regenerates any it needs from the branch that produced them.
+consumer-smoke/build/harness-frames/
+build/harness-renders/

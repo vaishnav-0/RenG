@@ -3,6 +3,9 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     id("org.jetbrains.kotlin.multiplatform") version "2.3.21"
     id("com.android.kotlin.multiplatform.library") version "9.3.1"
+    // ADR 0042. The harness reads a JSON corpus into RenG's own public types; `-core` arrives
+    // transitively from RenG's `api` dependency, and only the format is added here.
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.3.21"
 }
 
 val declaredLibraryVersion = providers
@@ -53,69 +56,65 @@ kotlin {
         commonMain.dependencies {
             implementation("com.rohittp.reng:kmp:$rengVersion")
         }
+        macosArm64Main.dependencies {
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+        }
     }
 }
 
 /**
- * Runs the visual harness against a real map style.
+ * Runs the visual harness over one config and one plan file.
  *
- * The style url carries the owner's api key, so it is never checked in: pass it as
- * `-PstyleUrl=<url>` or in the `RENG_HARNESS_STYLE_URL` environment variable. A model is optional and
- * equally uncheckable — `-PmodelUrl=<url>` or `RENG_HARNESS_MODEL_URL`; without one the storyboard
- * renders the basemap, stickers and geometry it always did, and no model.
+ * **No style url is passed and none is checked in.** A config names a style by *id*; the base url
+ * lives in the untracked `local.properties` as `reng.harness.styleBaseUrl` (or in the
+ * `RENG_HARNESS_STYLE_BASE_URL` environment variable), and a run composes `<base>/<id>`. The api key
+ * therefore never appears in a corpus file, a command line, or a commit.
+ *
+ *   ./gradlew -p consumer-smoke runHarness -Pconfig=corpus/configs/mercator.json \
+ *                                          -Pplans=corpus/plans/storyboard.json
+ *
+ * `-Pemit=<path>` writes the built-in storyboard out as a plan file instead of rendering, which is
+ * how `corpus/plans/storyboard.json` was authored.
  */
 val runHarness by tasks.registering(Exec::class) {
     group = "verification"
-    description = "Renders a frame sequence with RenG and writes PPM files for ffmpeg."
+    description = "Renders a plan file with RenG and writes PPM files for ffmpeg."
     val link = tasks.named("linkHarnessDebugExecutableMacosArm64")
     dependsOn(link)
     val binary = layout.buildDirectory.file("bin/macosArm64/harnessDebugExecutable/harness.kexe")
     val frames = layout.buildDirectory.dir("harness-frames")
-    val styleUrl = providers.gradleProperty("styleUrl")
-        .orElse(providers.environmentVariable("RENG_HARNESS_STYLE_URL"))
-    // The Cycle F-2 model, optional and never checked in for the same reason the style is not: a GLB
-    // url points at somebody's server. Absent, the storyboard simply carries no model.
-    val modelUrl = providers.gradleProperty("modelUrl")
-        .orElse(providers.environmentVariable("RENG_HARNESS_MODEL_URL"))
-    val frameCount = providers.gradleProperty("frameCount")
-    // `-PnoBasemap` renders the same camera path with `drawBasemap = false` on every frame, so the
-    // stickers and the geometry can be watched even when the ground itself will not draw.
-    val groundless = providers.gradleProperty("noBasemap").isPresent
-    // `-PnoLabels` renders the same camera path with `drawLabels = false` on every frame. Subtracting
-    // that run from an ordinary one is how a frame's label ink gets counted instead of eyeballed.
-    val labelless = providers.gradleProperty("noLabels").isPresent
+    val configPath = providers.gradleProperty("config")
+        .orElse("corpus/configs/style-59.json")
+    val plansPath = providers.gradleProperty("plans")
+        .orElse("corpus/plans/storyboard.json")
+    val outputPath = providers.gradleProperty("out")
+    val emitPath = providers.gradleProperty("emit")
     val verbose = providers.gradleProperty("verbose").isPresent
-    // `-Pglobe` renders the same camera path with `projectionMode = GLOBE`. Cycle G.
-    val globe = providers.gradleProperty("globe").isPresent
-    // `-Pzoom` overrides the storyboard's base zoom. A globe needs it: the sweep starts at 11.5, where
-    // the sphere is far larger than the viewport and its curvature is entirely off-screen, so a correct
-    // globe is indistinguishable from a flat map. The measured sagitta says the same thing -- 0.44
-    // logical pixels of bow at zoom 10 -- so a globe run wants a zoom where the planet is visible.
-    val baseZoom = providers.gradleProperty("zoom")
-    // `-PzoomSpan` widens the sweep past the storyboard's 2.5 levels. Cycle G's Float precision
-    // error only arrives above zoom 17, which a 2.5-level sweep from a legible base can never reach.
-    val zoomSpan = providers.gradleProperty("zoomSpan")
-    // `-PstaticCamera` holds latitude, longitude, bearing and pitch so only zoom moves.
-    val staticCamera = providers.gradleProperty("staticCamera").isPresent
+    // The repository root's `local.properties`, not the consumer project's: an `Exec` task runs in
+    // its own project directory, and the settings file every other tool here reads is one level up.
+    val localProperties = layout.projectDirectory.file("../local.properties").asFile.absolutePath
     doFirst {
         frames.get().asFile.mkdirs()
+        outputPath.orNull?.let { File(it).mkdirs() }
     }
     commandLine(
         buildList {
             add(binary.get().asFile.absolutePath)
-            add("--style")
-            add(styleUrl.getOrElse(""))
-            add("--out")
-            add(frames.get().asFile.absolutePath)
-            modelUrl.orNull?.takeIf(String::isNotBlank)?.let { add("--model"); add(it) }
-            frameCount.orNull?.let { add("--frames"); add(it) }
-            if (groundless) add("--no-basemap")
-            if (labelless) add("--no-labels")
+            val emit = emitPath.orNull
+            if (emit != null) {
+                add("--emit-plans")
+                add(emit)
+            } else {
+                add("--config")
+                add(configPath.get())
+                add("--plans")
+                add(plansPath.get())
+                add("--out")
+                add(outputPath.getOrElse(frames.get().asFile.absolutePath))
+                add("--local-properties")
+                add(localProperties)
+            }
             if (verbose) add("--verbose")
-            if (globe) add("--globe")
-            baseZoom.orNull?.let { add("--zoom"); add(it) }
-            zoomSpan.orNull?.let { add("--zoom-span"); add(it) }
-            if (staticCamera) add("--static-camera")
         },
     )
 }
