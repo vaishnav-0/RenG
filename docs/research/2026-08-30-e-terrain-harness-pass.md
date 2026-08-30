@@ -93,3 +93,32 @@ debt.
   displacement no-op and 1-of-4 against a dropped ring, the seam at **0 cracked pixels of 589,824**.
 - **Not verified**: terrain against five of the six corpus styles, because their DEMs cannot be decoded.
   No claim is made about how they look, and none should be until Rentile's change lands.
+
+---
+
+## Re-run, 2026-08-30 — all six styles now render
+
+After Rentile `0.7.0`, the texel integration, and the retirement of the DEM write check, every one of the
+six corpus terrain styles was run through the harness again, one frame each, static camera at zoom 11:
+
+| style | DEM format | frames failed | terrain diagnostics | store writes |
+|---|---|---|---|---|
+| 56 | webp | 0 | none | 57 |
+| 57 | webp | 0 | none | 53 |
+| 65 | webp | 0 | none | 46 |
+| 76 | webp | 0 | none | 57 |
+| 80 | png (terrarium) | 0 | none | 42 |
+| 84 | webp | 0 | none | 54 |
+
+**Six of six, from one of six.** The two `LABEL_CONTENT_EXCLUDED` warnings on styles 80 and 84 are
+E-labels' existing aggregate diagnostic for complex scripts and have nothing to do with terrain.
+
+`diagnostics: none` is meaningful here in a way it was not before: the same line was printed when the
+frame had silently thrown away every DEM it fetched. It is trustworthy now because two separate defects
+behind it were closed — the decode that could not read WebP, and the missing `else` that dropped a failed
+decode without reporting it. **A frame that loses its elevation now says so**, which
+`RendererTerrainTest`'s coverage cases assert directly.
+
+The store column is the second finding closed. Before the write check was retired, no DEM reached the
+consumer's Store at all; every one of these runs now caches its DEMs, so a cold start no longer refetches
+the whole set.
