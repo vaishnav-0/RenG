@@ -554,13 +554,35 @@ the three the plan budgeted: `_FORBIDDEN_DEPENDENCY` rejects the word `serializa
 **Three separate places pin a dependency's call kind**, so a test for that rule only flips when all three
 are broken at once — which is how it was verified rather than assumed.
 
-**What K owes.** The baseline review — rendering the whole corpus and looking at every frame — **has not
-happened**, and it is the only step that establishes the current renderer is right; every comparison
-inherits its authority, so until it runs, K proves change and not correctness. Nothing in the cycle has
-rendered a pixel: this machine has no `reng.harness.styleBaseUrl`, so the harness has been exercised only
-through its decode, failure and round-trip paths. The corpus carries no model, because a GLB url points at
-somebody's server and none is checked in. And a plan file repeats a geometry's shader source once per
-frame, which is why the 48-frame storyboard is 124 KB.
+**The baseline review happened on 2026-08-31 and found three defects, all in terrain.** Its record is
+`docs/research/2026-08-31-k-baseline-review.md`: 77 runs, 124 frames, 0 failed, every frame looked at. What
+is right is listed there; what is not is all one shape, and **the trigger is a style that actually serves a
+DEM** rather than the `terrainShading` flag — of the four configs only style 57 fetches DEM tiles, and only
+style 57 shows any of it.
+
+1. **Above a zoom/pitch threshold the whole basemap silently disappears.** At zoom 14 style 57 draws at
+   pitch 10 and renders a **100% empty frame** at pitch 15; at pitch 55 it draws at zoom 13.2 and is 94.5%
+   empty by 13.3. Nothing fails — `prepare` and `draw` both succeed and no warning is emitted — and the
+   failing frame fetches *more* tiles than the working one (89 against 54, all HTTP 200). **ADR 0041 makes
+   terrain the one basemap resource that degrades rather than failing a frame, and this is neither**: it
+   does not degrade to flat ground, it takes the basemap with it. Fix this one first.
+2. **A map-anchored sticker draws nothing at all** on such a style — frames byte-identical with and without
+   it, against 1,464 changed pixels on the styles without a DEM. Not occlusion: it is invisible at 0, 5, 50,
+   500 and 2,000 metres, in both altitude modes.
+3. **A geometry very nearly so** — 8 changed pixels against 5,844. Eight rather than zero reads like a depth
+   interaction, and ADR 0039 narrowed the ground's depth write precisely to keep ADR 0027's coplanar defect
+   out of the 28 styles with no terrain. In the six that have it, something adjacent is unresolved.
+
+**Two corpus authoring errors were caught the same way.** Pitch 70 and 75 were simply unrenderable —
+`RESOURCE_LIMIT_EXCEEDED at FRAME_PLANNING`, which is RenG failing closed correctly on a camera that pulls
+the horizon in — so every corpus camera now sits at or below **pitch 55**, the storyboard's own maximum.
+The envelope `Camera` permits is anything under 90; the envelope known to work is narrower, and a corpus
+belongs inside the second.
+
+**What K still owes.** The corpus carries no model, because a GLB url points at somebody's server and none
+is checked in, so the model pipeline is unreviewed. A plan file repeats a geometry's shader source once per
+frame, which is why the 48-frame storyboard is 124 KB. And `terrainShading = false` still fetches every DEM
+tile, so that flag governs shading rather than acquisition — recorded, not yet judged.
 
 Design decisions live in `CONTEXT.md` (vocabulary) and `docs/adr/` (ADRs 0001–0012 establish the
 original graphics contract, ADR 0013 governs fail-closed publication, ADRs 0014–0015 supersede

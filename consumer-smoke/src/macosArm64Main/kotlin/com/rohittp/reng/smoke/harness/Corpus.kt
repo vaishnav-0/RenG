@@ -31,6 +31,20 @@ import com.rohittp.reng.Vector3
  * because animation is the one thing a single frame cannot show.
  */
 
+/**
+ * **Why no camera here is pitched past 55 degrees.**
+ *
+ * The first corpus render failed three terrain plans outright with
+ * `RESOURCE_LIMIT_EXCEEDED at FRAME_PLANNING` and a 100% undrawn frame, at pitch 70 and 75. That is
+ * RenG working: an oblique camera at city zoom pulls the horizon into view, the visible ground runs
+ * away to it, and the tile count passes `maximumBasemapTileInstances`, so the frame fails closed
+ * with a typed error instead of drawing something partial. 55 is the storyboard's own maximum and
+ * has rendered in every cycle since the basemap, so the corpus stays inside the envelope that is
+ * known to work rather than inside the one `Camera` merely permits, which is anything under 90.
+ *
+ * A frame that cannot render is worthless as a baseline -- it compares equal to any other failure.
+ */
+
 /** Yosemite Valley: real relief, and the terrain corpus's anchor. */
 private const val VALLEY_LATITUDE: Double = 37.7275
 private const val VALLEY_LONGITUDE: Double = -119.5750
@@ -56,7 +70,7 @@ internal fun corpusPlans(): Map<String, List<FramePlan>> = mapOf(
     ),
 
     "a-pitched-camera-shows-tile-seams-in-depth" to one(
-        Camera(CITY_LATITUDE, CITY_LONGITUDE, 14.5, 0.0, 60.0),
+        Camera(CITY_LATITUDE, CITY_LONGITUDE, 14.5, 0.0, 55.0),
     ),
 
     "a-rotated-camera-holds-label-orientation" to one(
@@ -84,7 +98,7 @@ internal fun corpusPlans(): Map<String, List<FramePlan>> = mapOf(
     ),
 
     "terrain-relief-is-visible-from-the-valley-floor" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 75.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
     ),
 
     "terrain-flattens-when-the-camera-looks-straight-down" to one(
@@ -92,17 +106,17 @@ internal fun corpusPlans(): Map<String, List<FramePlan>> = mapOf(
     ),
 
     "a-ground-relative-sticker-rides-the-terrain" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.5, 45.0, 70.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
         stickers = listOf(pin(VALLEY_LATITUDE, VALLEY_LONGITUDE, 0.0, AltitudeMode.GROUND_RELATIVE)),
     ),
 
     "an-absolute-sticker-ignores-the-terrain-under-it" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.5, 45.0, 70.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
         stickers = listOf(pin(VALLEY_LATITUDE, VALLEY_LONGITUDE, 0.0, AltitudeMode.ABSOLUTE)),
     ),
 
     "ground-relative-and-absolute-stickers-separate-in-one-frame" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.5, 45.0, 70.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
         stickers = listOf(
             pin(VALLEY_LATITUDE, VALLEY_LONGITUDE, 0.0, AltitudeMode.GROUND_RELATIVE),
             pin(VALLEY_LATITUDE, VALLEY_LONGITUDE + 0.01, 0.0, AltitudeMode.ABSOLUTE),
@@ -127,12 +141,12 @@ internal fun corpusPlans(): Map<String, List<FramePlan>> = mapOf(
     ),
 
     "a-draped-geometry-follows-the-relief-under-it" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 70.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
         geometries = listOf(tintedQuad(VALLEY_LATITUDE, VALLEY_LONGITUDE, AltitudeMode.GROUND_RELATIVE)),
     ),
 
     "a-flat-geometry-cuts-through-the-relief-under-it" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 70.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
         geometries = listOf(tintedQuad(VALLEY_LATITUDE, VALLEY_LONGITUDE, AltitudeMode.ABSOLUTE)),
     ),
 
