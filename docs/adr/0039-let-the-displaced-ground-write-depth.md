@@ -121,9 +121,17 @@ of a 102,400-pixel probe on Apple M3 Max at zoom 13, pitch 0:
 | drawn **before** the ground | 0.000 m | **0 / 102,400** |
 
 Two of those rows overturn expectations this ADR encoded. **Reconstructing the ground's surface exactly is
-not sufficient** — zero vertical error still loses half the probe, because the disagreement is in the
-rasterised depth rather than in the height. And **drawing ground-relative content before the ground is
-refuted outright**, at zero survivors under every camera, which was the obvious fallback and is not one.
+not sufficient** — zero vertical error still loses half the probe, so whatever remains is not a height
+error. And **drawing ground-relative content before the ground is refuted outright**, at zero survivors
+under every camera, which was the obvious fallback and is not one.
+
+**What the residual actually is remains unknown, and the spike says so rather than guessing.** It
+established that the *matrix* is not the culprit — an arm swapping it is figure-for-figure identical at all
+five cameras — which narrows the cause to the bundle of the ground's program, its lattice and its
+shader-computed height, without splitting that bundle further. The relief-free residual is about **ten
+times larger than the decode arithmetic accounts for**. Anyone acting on this erratum should read the
+spike's own section on that before treating the mechanism as settled; the mitigation below is chosen
+because it was *measured* to work, not because the cause is understood.
 
 What works is a **lift**: one metre with the lattice and triangulation matched, four without. `Apple
 Software Renderer` through CGL and through EAGL agree with the GPU to within one per cent.
