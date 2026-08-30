@@ -9,6 +9,7 @@ import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.DEPTH_READBACK_PIXELS
 import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
 import com.rohittp.reng.SHADING_READBACK_PIXELS
+import com.rohittp.reng.runGroundAnchorReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runGroundDepthReadback
 import com.rohittp.reng.runGroundDisplacementReadback
@@ -17,6 +18,7 @@ import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
+import com.rohittp.reng.GROUND_ANCHOR_READBACK_PIXELS
 import com.rohittp.reng.TERRAIN_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runTerrainFrameReadbackSuite
@@ -275,6 +277,33 @@ class LinuxGlConformanceTest {
             binding.viewport(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
             binding.scissor(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
             runTerrainFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * **Cycle E-terrain task 19's gate on llvmpipe: everything a frame anchors to the ground.**
+     *
+     * A sticker, a draped `Geometry` and a label all riding one drawn surface, beside the negative
+     * that makes them mean anything. See `runGroundAnchorReadbackSuite` for what each of its five
+     * cases discriminates and what it does not claim.
+     *
+     * llvmpipe matters here for the reason it matters to every readback in this file: it is the only
+     * driver in CI that is neither Apple's nor a simulator's, and it rasterises large quads
+     * correctly, so the coplanar survivor count it reports is RenG's rather than a fill rule's.
+     */
+    @Test fun theGroundAnchorReadbackSuitePassesOnARealEsContext() {
+        val fixture = SurfacelessEglContext.create(ShaderDialect.GLES)
+        try {
+            val binding = when (val result = openPlatformGlBinding()) {
+                is GlBindingResult.Bound -> result.binding
+                is GlBindingResult.Unsupported ->
+                    throw AssertionError("every roster entry point must resolve on this driver")
+            }
+            binding.viewport(0, 0, GROUND_ANCHOR_READBACK_PIXELS, GROUND_ANCHOR_READBACK_PIXELS)
+            binding.scissor(0, 0, GROUND_ANCHOR_READBACK_PIXELS, GROUND_ANCHOR_READBACK_PIXELS)
+            runGroundAnchorReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

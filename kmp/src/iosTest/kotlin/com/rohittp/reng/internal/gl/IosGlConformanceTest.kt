@@ -9,6 +9,7 @@ import com.rohittp.reng.runBasemapReadbackSuite
 import com.rohittp.reng.DEPTH_READBACK_PIXELS
 import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
 import com.rohittp.reng.SHADING_READBACK_PIXELS
+import com.rohittp.reng.runGroundAnchorReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runGroundDepthReadback
 import com.rohittp.reng.runGroundDisplacementReadback
@@ -17,6 +18,7 @@ import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
+import com.rohittp.reng.GROUND_ANCHOR_READBACK_PIXELS
 import com.rohittp.reng.TERRAIN_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runTerrainFrameReadbackSuite
@@ -343,6 +345,30 @@ class IosGlConformanceTest {
             binding.viewport(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
             binding.scissor(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
             runTerrainFrameReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
+        } finally {
+            fixture.destroy()
+        }
+    }
+
+    /**
+     * **Cycle E-terrain task 19's gate on EAGL: everything a frame anchors to the ground.**
+     *
+     * A sticker, a draped `Geometry` and a label all riding one drawn surface, beside the negative
+     * that makes them mean anything. See `runGroundAnchorReadbackSuite` for what each of its five
+     * cases discriminates and what it does not claim.
+     *
+     * The simulator runs `Apple Software Renderer`, which is a second *context API* over a rasteriser
+     * macOS also reaches -- so what this adds is EAGL rather than a fourth driver. The label case
+     * gates itself on `measureGlyphQuadRasterisation` and stands down out loud where the driver will
+     * not place a ten-pixel quad; the other four count areas of hundreds of thousands of pixels.
+     */
+    @Test fun theGroundAnchorReadbackSuitePassesOnARealEaglContext() {
+        val fixture = EaglOffscreenContext.create()
+        try {
+            val binding = bindOrFail()
+            binding.viewport(0, 0, GROUND_ANCHOR_READBACK_PIXELS, GROUND_ANCHOR_READBACK_PIXELS)
+            binding.scissor(0, 0, GROUND_ANCHOR_READBACK_PIXELS, GROUND_ANCHOR_READBACK_PIXELS)
+            runGroundAnchorReadbackSuite(binding, fixture.probe, ShaderDialect.GLES)
         } finally {
             fixture.destroy()
         }

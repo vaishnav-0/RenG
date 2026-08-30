@@ -11,12 +11,14 @@ import com.rohittp.reng.GEOMETRY_SUBDIVISION_READBACK_PIXELS
 import com.rohittp.reng.runGeometrySubdivisionReadbackSuite
 import com.rohittp.reng.GLOBE_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeFrameReadbackSuite
+import com.rohittp.reng.GROUND_ANCHOR_READBACK_PIXELS
 import com.rohittp.reng.TERRAIN_FRAME_READBACK_PIXELS
 import com.rohittp.reng.runGlobeGroundReadbackSuite
 import com.rohittp.reng.runTerrainFrameReadbackSuite
 import com.rohittp.reng.DEPTH_READBACK_PIXELS
 import com.rohittp.reng.DISPLACEMENT_READBACK_PIXELS
 import com.rohittp.reng.SHADING_READBACK_PIXELS
+import com.rohittp.reng.runGroundAnchorReadbackSuite
 import com.rohittp.reng.runGroundCullReadbackSuite
 import com.rohittp.reng.runGroundDepthReadback
 import com.rohittp.reng.runGroundDisplacementReadback
@@ -495,6 +497,41 @@ class MacosGlConformanceTest {
                 binding.viewport(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
                 binding.scissor(0, 0, TERRAIN_FRAME_READBACK_PIXELS, TERRAIN_FRAME_READBACK_PIXELS)
                 runTerrainFrameReadbackSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
+            } finally {
+                fixture.destroy()
+            }
+        }
+    }
+
+    /**
+     * **Cycle E-terrain task 19's gate, on both Apple rasterisers: everything a frame anchors to the
+     * ground, over real relief, through the public API.**
+     *
+     * Wave 2 gave a placement, a `Geometry` and a label a height off the terrain in three separate
+     * tasks; this is the only place the three are drawn against one fixture, beside the negative that
+     * makes them mean anything -- a style declaring no terrain, where a `GROUND_RELATIVE` altitude must
+     * read back byte for byte as an `ABSOLUTE` one. See `runGroundAnchorReadbackSuite` for what each of
+     * its five cases discriminates, what it adds over `runTerrainFrameReadbackSuite`'s own anchor
+     * cases, and what it does not claim.
+     *
+     * Both rasterisers, on the terrain frame suite's own terms: the fixture's claims are counts of a
+     * content colour over a ground colour, not the far-off-screen quad shape `measureLargeQuadRasterisation`
+     * records `Apple Software Renderer` dropping. The one case whose evidence is a ten-pixel glyph cell
+     * gates itself on `measureGlyphQuadRasterisation` and stands down out loud where the driver will
+     * not place one.
+     */
+    @Test fun theGroundAnchorReadbackSuitePassesOnBothAppleRasterisers() {
+        listOf(MacosGlRenderer.DEFAULT, MacosGlRenderer.SOFTWARE).forEach { renderer ->
+            val fixture = CglCoreProfileContext.createOrNull(renderer)
+            if (fixture == null) {
+                println("RenG ground anchor readback: skipped, $renderer is unavailable on this machine")
+                return@forEach
+            }
+            try {
+                val binding = bindOrFail()
+                binding.viewport(0, 0, GROUND_ANCHOR_READBACK_PIXELS, GROUND_ANCHOR_READBACK_PIXELS)
+                binding.scissor(0, 0, GROUND_ANCHOR_READBACK_PIXELS, GROUND_ANCHOR_READBACK_PIXELS)
+                runGroundAnchorReadbackSuite(binding, fixture.probe, ShaderDialect.DESKTOP)
             } finally {
                 fixture.destroy()
             }
