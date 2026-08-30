@@ -50,14 +50,18 @@ same-version-different-bytes hazard ADR 0013 exists to prevent, one layer down.
 a `0.4.0` release.** That is the intended number when the time comes; it is not intended yet. Cycle H adds
 nothing to the public ABI, so it does not move that number.
 
-**`VERSION_NAME` is frozen at `0.4.0` until E-labels, E-terrain, G and J are all complete** — one release
-at the end, not one per cycle. Every remaining cycle's ABI growth accumulates under that single number,
-which is safe precisely because `0.4.0` has never been published. The hazard this creates is worth stating
-plainly: a frozen version and an auto-publishing trigger point in opposite directions, and `publish.yml`
-cuts a release on any non-documentation push to `main`, so an accidental push would publish a mid-cycle
-state as `0.4.0` **permanently** — ADR 0013 makes a coordinate immutable, and recovery is only ever an
-explicit upward version change, never an overwrite. Nothing reaches `origin/main` without the owner saying
-so. The local loop is unaffected: `consumer-smoke` resolves `../build/local-maven`, and republishing
+**`VERSION_NAME` is `0.4.0`, and the freeze ends when E-terrain does — by owner decision on 2026-08-30.**
+This paragraph previously said the freeze held until **J** was complete too. It does not: the owner
+instructed that E-terrain's completion is the release, and J follows in its own time. E-labels, G and
+E-terrain therefore all ship under one number, which is what the freeze was for — one release at the end,
+not one per cycle — and their ABI growth accumulates under a coordinate that has never been published.
+
+Until that push happens the hazard is unchanged and worth stating plainly: a frozen version and an
+auto-publishing trigger point in opposite directions, and `publish.yml` cuts a release on any
+non-documentation push to `main`, so an accidental push would publish a mid-cycle state as `0.4.0`
+**permanently** — ADR 0013 makes a coordinate immutable, and recovery is only ever an explicit upward
+version change, never an overwrite. Nothing reaches `origin/main` without the owner saying so; for the
+`0.4.0` release they have said so. The local loop is unaffected: `consumer-smoke` resolves `../build/local-maven`, and republishing
 `0.4.0` there as cycles land is fine because nothing is published publicly at that coordinate yet — the
 same-version-different-bytes hazard ADR 0013 exists to prevent has no public record to contradict.
 
