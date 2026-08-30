@@ -16,7 +16,12 @@ true, may suppress **Map Label**s. The two are fully orthogonal: all four pairin
 frame that draws labels over no ground at all. Plan list inputs are snapshotted, and
 every public list read returns a defensive copy whose platform mutation cannot change the plan, its equality,
 or its canonical identity.
-_Avoid_: Scene graph, render command, frame delta, mutation batch
+It is also a **document**: it and every type it reaches carry a serializer (ADR 0042), so a plan can be
+written to a file, sent over a network, or stored by a consumer and read back. Decoding runs the ordinary
+public constructor, so a decoded plan is exactly as validated as a constructed one and a document holding a
+value the constructor refuses fails at decoding rather than becoming an illegal plan. A serialized plan
+carries its **Resource Locator**s in full, so it carries whatever those urls carry.
+_Avoid_: Scene graph, render command, frame delta, mutation batch, plan DTO, plan schema
 
 **Camera**:
 The view of a **Frame Plan**, with geographic latitude, unwrapped longitude, zoom, bearing, and pitch.
