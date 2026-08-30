@@ -24,9 +24,16 @@ tolerance both admits that and catches a real defect.
 
 **Comparing two commits on one machine dissolves the whole problem.** Same driver, same libm, same
 rasteriser: the only variable left is RenG's own source. Exactness stops being unattainable and becomes
-the natural setting — and exactness is what catches the defects this project actually finds, which have
-been **1 pixel of 16,384** (a depth inversion) and **14 pixels of 589,824** (a seam). Any tolerance wide
-enough to survive `Apple Software Renderer` swallows both.
+the natural setting.
+
+**A correction to this document's first draft.** It justified exactness with "defects found at 1 pixel of
+16,384 and 14 of 589,824". **Those two figures trace to no record in this repository** — the frame sizes
+are real (`BASEMAP_READBACK_PIXELS` squared, and the terrain suites' 768²) but the counts were not measured
+and should not have been written as though they were. The argument stands on a number that *is* recorded:
+the same software rasteriser drops **3,005 of 15,876 interior pixels** on a large quad
+(`CLAUDE.md`, the `0.3.0` failure), so the noise a cross-machine tolerance must admit is roughly **3,000×**
+the signal a real regression produces in the same units and the same frame. Exactness is not a preference;
+it is the only setting in which that ratio does not swallow the signal.
 
 J's preflight (`docs/research/2026-08-30-j-corpus-preflight.md`) also recorded that J's central premise had
 inverted: it argued for stored baselines partly because nothing else asserted pixels, and **thirteen
@@ -44,12 +51,25 @@ the harness reads JSON because a developer must be able to read and hand-edit a 
 server can put ProtoBuf on the network, and an Android client can write CBOR to a data store — all from
 one set of annotations, with the format dependency chosen by whoever needs it.
 
-**This is a public commitment and is priced as one.** It is RenG's **third** first-party production
-dependency after ADR 0019's coroutines, so `_PERMITTED_NEW_DEPENDENCIES` widens, `kmp/build.gradle.kts`
-and the catalog both move, and all three accepted fingerprints of each move with them. It also needs the
-**serialization compiler plugin**, which is a plugin rather than a coordinate. And because RenG is
-deliberately **one published coordinate** (rentile ADR 0002: KMP publication does not fold unpublished
-project dependencies into the aggregate), every consumer on all six targets carries it with no opt-out.
+**This is a public commitment and is priced as one — and the first draft under-priced it.** The policy
+checker's `_FORBIDDEN_DEPENDENCY` rejects the word **`serialization`** by name, case-insensitively: the rule
+was written to keep exactly this out, and only an explicit allowlist entry admits it, which is the same
+mechanism ADR 0019 used for coroutines. Beyond `_PERMITTED_NEW_DEPENDENCIES` and the three accepted
+fingerprints each on the catalog and `kmp/build.gradle.kts`, there are **two further refusal points**:
+`_EXPECTED_PLUGIN_BLOCKS` pins the exact token sequence of every `plugins { }` block, and `_PLUGIN_ACCESSORS`
+lists the permitted `libs.plugins.*` accessors. A sixth is conditional — `build.gradle.kts` holds exactly
+**one** accepted fingerprint form. **Budget five or six edits, not three.**
+
+What is new is not "a plugin rather than a coordinate" — three Gradle plugins already apply here. It is a
+**compiler** plugin that generates public members (`serializer()`, a `Companion`) into the published
+artifact and therefore into the ABI dump. It is versioned in lockstep with Kotlin, so the catalog's
+`[plugins]` entry reuses the existing `kotlin` version row.
+
+**And the consumer cost is smaller than first written.** Rentile `0.7.0` — which RenG already pins —
+declares `kotlinx-serialization-json 1.11.0` at `runtime` scope in its aggregate POM, so **no consumer's
+resolution graph gains an artifact**. What changes is RenG owning a version it previously inherited. RenG
+remains one published coordinate (rentile ADR 0002), so there is still no opt-out; there is simply nothing
+new to opt out of.
 
 **Why JSON was compared and not simply assumed.** Measured on a realistic 600-frame plan array — ten
 seconds at 60 fps, two stickers, a model and a geometry per frame:
