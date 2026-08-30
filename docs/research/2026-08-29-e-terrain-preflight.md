@@ -114,7 +114,7 @@ does not.
   Results must be matched by `requestedTile`, never by index or count.
 - **One failing DEM tile fails the whole call** (`throwAcquisitionFailures`, `:1370-1384`). There is no
   per-tile degradation, and RenG's own contract forbids retries.
-- **`ValidatedDemTile` is a `data class` whose `equals` compares `bytes` by reference** (`Api.kt:583-590`),
+- **`ValidatedDemTile` is a `data class` whose `equals` compares `bytes` by reference** — **fixed in Rentile `0.7.0`; see the correction at the end of this document**  (`Api.kt:583-590`),
   unlike `LabelGlyphAtlas`, which overrides for exactly this reason. `distinct()`, a `Set` or a `Map` key
   will not behave as content equality.
 
@@ -244,3 +244,28 @@ Stated plainly, because the next step is grilling and these are what it has to r
   is undecided. Note that it says nothing about terrain, so it does not answer this by itself.
 - **What terrain does to labels and placements.** E-labels places on a flat ground; a displaced ground
   moves every anchor. Not investigated.
+
+---
+
+## Correction, 2026-08-30 — two of this document's findings were acted on and no longer describe the pin
+
+This is a dated snapshot taken against Rentile **`0.6.0`**, and RenG now pins **`0.7.0`** (`ca192ab`). Two of
+its findings drove that bump and are therefore no longer true of the dependency. They are left in place
+above because the reasoning that produced them is the record of why `0.7.0` exists, but a reader taking
+them as current would be wrong about both.
+
+**"Not 'a PNG'."** This document filed it as a hazard, with RenG's `Accept: image/png` as a mitigation. The
+harness pass measured it as the ordinary case — **five of the six corpus terrain styles serve WebP** — and
+the header mitigates nothing, because the format sits in the tile template rather than being negotiated.
+`0.7.0` answers it at the source: `ValidatedDemTile.texels` carries the decoded pixels Rentile already
+produced for validation, so no caller needs an image decoder.
+
+**The reference-equality trap.** This document warned that `ValidatedDemTile.equals` compared `bytes` by
+reference, so `distinct()`, a `Set` or a `Map` key would not behave as content equality. **`0.7.0` fixed
+that** — it now compares by content, matching `RenderedTile` and `LabelGlyphAtlas`, which already did. The
+warning above is a live trap for anyone reading it as current, which is why this correction exists rather
+than a silent edit.
+
+One thing the bump did **not** settle, and which this document's §2 still states correctly: RenG's own
+terrain decode must validate what it is given. `0.7.0` moves *which* checks are needed rather than removing
+the obligation.
