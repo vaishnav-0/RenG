@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.maven.publish)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 kotlin {
@@ -54,10 +55,16 @@ kotlin {
         commonMain.dependencies {
             implementation(libs.rentile.kmp)
             implementation(libs.kotlinx.coroutines.core)
+            // ADR 0042. `api` rather than `implementation` because the compiler plugin writes
+            // `serializer(): KSerializer<T>` into the published ABI: a consumer that cannot see
+            // `KSerializer` cannot call the function the annotation exists to provide.
+            api(libs.kotlinx.serialization.core)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
+            // A concrete format for the round-trip gate; `-core` defines no encoding.
+            implementation(libs.kotlinx.serialization.json)
         }
         // `androidDeviceTest` is not reached by the default hierarchy template, so without this
         // edge it sees neither `commonTest`'s suites nor `commonMain`'s internals. See the comment
