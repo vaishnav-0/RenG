@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**RenG draws a basemap, and four releases are public.** The newest *published* version is **`0.4.0`**,
-released on 2026-08-30 from `070a85d` — aggregate POM, all seven target publications and the completion
-record all verify anonymously, and `maven-metadata.xml` lists `0.4.0` as both `<latest>` and `<release>`.
-**`VERSION_NAME` in `gradle.properties` still reads `0.4.0`, which is now a released coordinate**, so it
-must move up before anything is pushed to `main` — see the freeze section below, which this release ended.
+**RenG draws a basemap, and five releases are public.** The newest *published* version is **`0.5.0`**,
+released on 2026-08-31 from `22a1004` (CI run `33345500132`, publication run `33345500127`) — all seven
+target publications resolve anonymously over public HTTP, `maven-metadata.xml` lists `0.5.0` as both
+`<latest>` and `<release>`, and the completion record verifies with no credentials, naming that commit and
+manifest digest `bf9586f53ec0fc3b5ff22bc965695a86a92134d5a2477402092cd06c747e56c5`. It carries Cycle K:
+serialization, the plan corpus and the comparison tooling. **`VERSION_NAME` reads `0.5.0`, which is now a
+released coordinate**, so it must move up before the next non-documentation push to `main`.
 Anything in this file
 or in an older document that says RenG "renders nothing", "exposes no public runtime API", that the KLIB
 ABI dump "contains no renderer factory", or that the basemap is an unmerged branch is obsolete.
@@ -55,17 +57,20 @@ a `0.4.0` release.** That is the intended number when the time comes; it is not 
 nothing to the public ABI, so it does not move that number.
 
 **The freeze is over: E-labels, G and E-terrain shipped together as `0.4.0` on 2026-08-30**, which is
-exactly what the freeze was for — one release at the end, not one per cycle.
+exactly what the freeze was for — one release at the end, not one per cycle. **Cycle K followed as `0.5.0`
+on 2026-08-31**, a minor bump because its ABI grew by 97 lines and lost none.
 
 **And that inverts the paragraph this one replaces, which is the thing to read carefully.** While `0.4.0`
 was unpublished, republishing it into `build/local-maven` as cycles landed was harmless, because the
 same-version-different-bytes hazard ADR 0013 exists to prevent had no public record to contradict. **There
-is a public record now.** `VERSION_NAME` still reads `0.4.0`, so every
-`publishAllPublicationsToLocalTestRepository` puts *post-release* bytes behind the *released* `0.4.0`
+is a public record now**, and the same is true of `0.5.0` the moment it published. `VERSION_NAME`
+reads the newest released coordinate, so every
+`publishAllPublicationsToLocalTestRepository` puts *post-release* bytes behind a *released*
 coordinate on this machine, and `consumer-smoke` — which defaults to `../build/local-maven` — resolves
-them. Cycle K did exactly this for a whole session, with 97 lines of new ABI. Nothing public was harmed and
-nothing can be; the local repository is a scratch directory and deleting it is always safe. But the
-number must move up before the next push, and until it does, a local `0.4.0` is not the published `0.4.0`.
+them. Cycle K did exactly this for a whole session under `0.4.0`, with 97 lines of new ABI. Nothing public
+was harmed and nothing can be; the local repository is a scratch directory and deleting it is always safe.
+But the number must move up before the next push, and until it does, a local build is not the published
+release of that name.
 
 The push hazard is unchanged and still worth stating plainly: `publish.yml` cuts a release on any
 non-documentation push to `main`, so an accidental push publishes whatever `VERSION_NAME` says,
