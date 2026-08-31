@@ -35,59 +35,61 @@ Checked by eye on contact sheets and, where the eye is a bad instrument, by coun
 - **Terrain relief is visible** on style 57 from the valley floor, with hillshading, ridges and drainages
   where Yosemite has them.
 
-## Three defects, all in the same place
+## One defect, and two findings that were my own test error
 
-Every one is specific to a style that **actually serves a DEM**. The correlation is exact: of the four
-configs, only style 57 fetches DEM tiles (41 on the failing frame), and only style 57 shows any of this.
-`style-86-terrain` sets `terrainShading = true` on a style with no terrain source, fetches 0 DEM tiles, and
-behaves identically to plain style 86 — so the trigger is the DEM, not the flag.
+**Corrected on the same day, after deeper investigation.** The first pass of this review reported three
+defects. Two of them were not defects at all, and the correction matters more than the original report
+did: I had placed corpus content at **`ABSOLUTE` altitude 0 in a valley whose floor is about 1,200 m**,
+found it invisible, and called that a renderer bug. It was underground. `CONTEXT.md` defines altitude as
+ellipsoidal metres and ADR 0040 keeps `ABSOLUTE` meaning exactly that, so a pin at 0 m in Yosemite has
+1,200 m of rock above it and RenG was right to hide it.
 
-### 1. Above a zoom/pitch threshold the entire basemap disappears, silently
+Measured after the correction, on the same style and camera:
 
-At zoom 14 over Yosemite, style 57 draws normally at pitch 10 and renders a **100% empty frame** at pitch
-15. Holding pitch at 55 instead, it draws at zoom 13.2 and is 94.5% empty by zoom 13.3.
+| content | ABSOLUTE at 0 m | GROUND_RELATIVE at 0 m |
+|---|---|---|
+| geometry, pitch 0 | invisible | **22,231 px** |
+| geometry, pitch 30 | invisible | **10,641 px** |
+| sticker over the city, pitch 0 | invisible | **896 px**, rising with altitude |
 
-| | pitch 0 | pitch 10 | pitch 15 | pitch 55 |
-|---|---|---|---|---|
-| zoom 13 | draws | draws | draws | draws |
-| zoom 14 | draws | draws | **100% undrawn** | **100% undrawn** |
+**`GROUND_RELATIVE` works exactly as designed**, and the "8 pixels against 5,844" figure in the first
+pass was an absolute quad buried in a mountain, seen edge-on. The lesson is the one this project keeps
+relearning in its own tests: *a fixture at a degenerate point proves nothing about the code under it.*
+Sea level is a degenerate altitude in mountainous terrain, and I picked it without thinking.
 
-The frame does not fail. `prepare` and `draw` both succeed, the harness reports `0 of them failed`, and the
-only diagnostic emitted is an unrelated `INFO LABEL_CONTENT_EXCLUDED`. More tiles are fetched at the
-failing pitch than at the working one — 89 requests against 54, including 41 DEM tiles, all HTTP 200 — so
-this is not an acquisition failure. Everything arrives and nothing is drawn.
+### The one that is real: the ground vanishes at high zoom over high terrain
 
-**This is the one to fix first**, and not only because a blank map is severe: ADR 0041 makes terrain the
-one basemap resource that *degrades* rather than failing a frame, and what happens here is neither. It does
-not degrade to flat ground and it does not fail; it silently takes the whole basemap with it.
+Only styles that actually serve a DEM are affected — the correlation is exact, and `terrainShading` is
+not the trigger (a style with the flag on and no terrain source behaves identically to the flag off).
 
-Turning `terrainShading` off does not help — and notably does not stop the DEM being fetched either
-(42 tiles with shading off), so that flag governs shading rather than acquisition.
+| | zoom 13 | zoom 14 | zoom 15 |
+|---|---|---|---|
+| city, terrain ~100 m | draws | draws | draws |
+| ocean, terrain ~0 m | draws | draws | draws |
+| **valley, terrain 1,200–2,700 m** | draws | **blank at pitch 55** | **blank at every pitch** |
 
-### 2. A map-anchored sticker draws nothing at all
+The frame does not fail. `prepare` and `draw` both succeed, the harness reports `0 of them failed`, and
+no warning is emitted; the blank frame fetches *more* tiles than the working one (89 requests against
+54, including 41 DEM tiles, all HTTP 200). Everything arrives and nothing is drawn.
 
-On style 57 the frame is **byte-identical with and without the sticker**. The same sticker in the same plan
-changes 1,464 pixels on styles 59 and 86.
+**The threshold tracks terrain height against camera height, which points at the camera being inside the
+terrain.** RenG derives camera altitude from zoom alone: the world is `512 * 2^zoom` logical pixels for
+40,075,017 m, so at zoom 15 the eye sits on the order of 1,500 m above the *ellipsoid* — beneath
+Yosemite's walls, and not far above its floor. The city at ~100 m and the ocean at ~0 m never approach
+that, and neither ever fails.
 
-It is not occlusion by the terrain. The sticker was raised through 0, 5, 50, 500 and 2,000 metres, in both
-`GROUND_RELATIVE` and `ABSOLUTE`, and drew zero pixels at every one — 2,000 m ABSOLUTE is roughly 800 m
-clear of the valley floor and well above anything that could be in front of it.
+**That is a consequence of a recorded design decision rather than an oversight**, which is why this
+document stops at describing it. E-terrain rejected an `elevationAt(lat, lon)` query as circular —
+elevation depends on resident tiles, residency on the camera, the camera on the plan being built — so
+RenG has no terrain-aware camera by choice. What is *not* covered by that decision is the silence: ADR
+0041 makes terrain the one basemap resource that degrades rather than failing a frame, and a blank frame
+with no diagnostic is neither degrading nor failing. **Whether to raise the camera, clamp the
+displacement, or announce the condition is an owner decision and an ADR, not a fix to slip into a
+release.**
 
-The `GROUND_RELATIVE` case is the one the corpus was built to look at, and it is the more serious half: a
-pin at altitude 0 in ground-relative mode is exactly the "sticker sitting on the terrain" a caller would
-write, and it is invisible.
-
-### 3. Geometries very nearly so
-
-The same comparison on the draped geometry: **8 pixels** changed on style 57 against **5,844** on styles 59
-and 86. Over the city camera the translucent grid contributes **2** orange pixels where the other styles
-show thousands.
-
-Eight and two rather than zero is itself a clue — a few pixels survive, which reads like a depth
-interaction rather than a draw that never happens. ADR 0039 narrowed the ground's depth write specifically
-to avoid reviving ADR 0027's coplanar-`Geometry` defect in the 28 corpus styles with no terrain. In the six
-that do have terrain, something in that neighbourhood is unresolved and considerably worse than coplanar
-fighting.
+**It is not a regression, and this release does not introduce it.** Terrain shipped in `0.4.0`, which is
+public; the behaviour above reproduces against that released coordinate. Cycle K adds serialization and
+the corpus tooling and touches none of it.
 
 ## What this changed in the corpus
 

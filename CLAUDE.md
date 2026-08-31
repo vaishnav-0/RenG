@@ -554,30 +554,37 @@ the three the plan budgeted: `_FORBIDDEN_DEPENDENCY` rejects the word `serializa
 **Three separate places pin a dependency's call kind**, so a test for that rule only flips when all three
 are broken at once — which is how it was verified rather than assumed.
 
-**The baseline review happened on 2026-08-31 and found three defects, all in terrain.** Its record is
-`docs/research/2026-08-31-k-baseline-review.md`: 77 runs, 124 frames, 0 failed, every frame looked at. What
-is right is listed there; what is not is all one shape, and **the trigger is a style that actually serves a
-DEM** rather than the `terrainShading` flag — of the four configs only style 57 fetches DEM tiles, and only
-style 57 shows any of it.
+**The baseline review happened on 2026-08-31.** Its record is
+`docs/research/2026-08-31-k-baseline-review.md`: 77 runs, 124 frames, 0 failed, every frame looked at on
+an M3 Max. What is right is listed there, including one thing worth having seen — on satellite imagery
+the polar cap's closure is plainly a fan of radial streaks above the top tile row, which is what
+"stretching the edge texel row" looks like when the texels are photographs.
 
-1. **Above a zoom/pitch threshold the whole basemap silently disappears.** At zoom 14 style 57 draws at
-   pitch 10 and renders a **100% empty frame** at pitch 15; at pitch 55 it draws at zoom 13.2 and is 94.5%
-   empty by 13.3. Nothing fails — `prepare` and `draw` both succeed and no warning is emitted — and the
-   failing frame fetches *more* tiles than the working one (89 against 54, all HTTP 200). **ADR 0041 makes
-   terrain the one basemap resource that degrades rather than failing a frame, and this is neither**: it
-   does not degrade to flat ground, it takes the basemap with it. Fix this one first.
-2. **A map-anchored sticker draws nothing at all** on such a style — frames byte-identical with and without
-   it, against 1,464 changed pixels on the styles without a DEM. Not occlusion: it is invisible at 0, 5, 50,
-   500 and 2,000 metres, in both altitude modes.
-3. **A geometry very nearly so** — 8 changed pixels against 5,844. Eight rather than zero reads like a depth
-   interaction, and ADR 0039 narrowed the ground's depth write precisely to keep ADR 0027's coplanar defect
-   out of the 28 styles with no terrain. In the six that have it, something adjacent is unresolved.
+**It first reported three defects; two of them were my own test error, and that correction is the more
+useful half.** The corpus placed a pin and a quad at **`ABSOLUTE` altitude 0 in a valley whose floor is
+about 1,200 m**, found them invisible, and called it a renderer bug. They were underground, and RenG was
+right to hide them: `CONTEXT.md` makes altitude ellipsoidal metres and ADR 0040 keeps `ABSOLUTE` meaning
+that. Measured after the correction, the same quad in `GROUND_RELATIVE` draws **22,231 pixels at pitch 0
+and 10,641 at pitch 30**, and a ground-relative sticker over the city draws at altitude 0 and grows with
+height. **`GROUND_RELATIVE` works as designed.** Sea level is a degenerate altitude in mountainous
+terrain, and a fixture at a degenerate point proves nothing — the same lesson this project keeps
+relearning inside its own suites, met here in a corpus instead.
 
-**Two corpus authoring errors were caught the same way.** Pitch 70 and 75 were simply unrenderable —
-`RESOURCE_LIMIT_EXCEEDED at FRAME_PLANNING`, which is RenG failing closed correctly on a camera that pulls
-the horizon in — so every corpus camera now sits at or below **pitch 55**, the storyboard's own maximum.
-The envelope `Camera` permits is anything under 90; the envelope known to work is narrower, and a corpus
-belongs inside the second.
+**One defect is real: the ground vanishes at high zoom over high terrain.** Only styles that actually
+serve a DEM are affected, and `terrainShading` is not the trigger. The city (~100 m) and the ocean (~0 m)
+draw at every zoom and pitch tested; Yosemite (1,200–2,700 m) is blank at zoom 14 pitch 55 and blank at
+**every** pitch by zoom 15. Nothing fails, nothing warns, and the blank frame fetches *more* tiles than
+the working one (89 against 54, all HTTP 200).
+
+**The threshold tracks terrain height against camera height.** RenG derives camera altitude from zoom
+alone — `512 * 2^zoom` logical pixels for 40,075,017 m — so at zoom 15 the eye is on the order of 1,500 m
+above the *ellipsoid*, beneath Yosemite's walls. **That is a recorded design decision rather than an
+oversight**: E-terrain rejected an `elevationAt(lat, lon)` query as circular, so there is no terrain-aware
+camera by choice. What that decision does not cover is the *silence* — ADR 0041 makes terrain the one
+resource that degrades rather than failing a frame, and a blank frame with no diagnostic is neither.
+**Raising the camera, clamping the displacement, or announcing the condition is an owner decision and an
+ADR, not a fix to slip into a release.** It is also **not a regression**: terrain shipped in the public
+`0.4.0` and the behaviour reproduces against that coordinate; Cycle K touches none of it.
 
 **What K still owes.** The corpus carries no model, because a GLB url points at somebody's server and none
 is checked in, so the model pipeline is unreviewed. A plan file repeats a geometry's shader source once per

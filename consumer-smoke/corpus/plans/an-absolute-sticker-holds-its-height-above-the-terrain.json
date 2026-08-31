@@ -6,7 +6,7 @@
       "unwrappedLongitude": -119.575,
       "zoom": 13.0,
       "bearing": 45.0,
-      "pitch": 55.0
+      "pitch": 30.0
     },
     "stickers": [
       {
@@ -15,7 +15,7 @@
           "position": {
             "x": 37.7275,
             "y": -119.575,
-            "z": 0.0
+            "z": 2000.0
           },
           "rotationMode": "SCREEN",
           "rotation": {

@@ -43,6 +43,15 @@ import com.rohittp.reng.Vector3
  * known to work rather than inside the one `Camera` merely permits, which is anything under 90.
  *
  * A frame that cannot render is worthless as a baseline -- it compares equal to any other failure.
+     *
+     * **And no valley content sits at ABSOLUTE altitude 0, which is a corrected authoring error
+     * rather than a style choice.** The first version of this corpus put a pin and a quad at 0 m in a
+     * valley whose floor is about 1,200 m, then reported their absence as a renderer defect. They
+     * were underground, and RenG was right to hide them: `ABSOLUTE` is ellipsoidal metres by
+     * `CONTEXT.md`, so 0 m in Yosemite is roughly 1,200 m of rock overhead. Measured afterwards, the
+     * same quad in `GROUND_RELATIVE` draws 22,231 pixels at pitch 0 and 10,641 at pitch 30. Valley
+     * content is therefore either ground-relative, or absolute at an altitude that clears the floor
+     * -- and the contrast between the two is what the pair of plans exists to show.
  */
 
 /** Yosemite Valley: real relief, and the terrain corpus's anchor. */
@@ -106,20 +115,20 @@ internal fun corpusPlans(): Map<String, List<FramePlan>> = mapOf(
     ),
 
     "a-ground-relative-sticker-rides-the-terrain" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 30.0),
         stickers = listOf(pin(VALLEY_LATITUDE, VALLEY_LONGITUDE, 0.0, AltitudeMode.GROUND_RELATIVE)),
     ),
 
-    "an-absolute-sticker-ignores-the-terrain-under-it" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
-        stickers = listOf(pin(VALLEY_LATITUDE, VALLEY_LONGITUDE, 0.0, AltitudeMode.ABSOLUTE)),
+    "an-absolute-sticker-holds-its-height-above-the-terrain" to one(
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 30.0),
+        stickers = listOf(pin(VALLEY_LATITUDE, VALLEY_LONGITUDE, 2_000.0, AltitudeMode.ABSOLUTE)),
     ),
 
     "ground-relative-and-absolute-stickers-separate-in-one-frame" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 30.0),
         stickers = listOf(
             pin(VALLEY_LATITUDE, VALLEY_LONGITUDE, 0.0, AltitudeMode.GROUND_RELATIVE),
-            pin(VALLEY_LATITUDE, VALLEY_LONGITUDE + 0.01, 0.0, AltitudeMode.ABSOLUTE),
+            pin(VALLEY_LATITUDE, VALLEY_LONGITUDE + 0.01, 2_000.0, AltitudeMode.ABSOLUTE),
         ),
     ),
 
@@ -141,13 +150,18 @@ internal fun corpusPlans(): Map<String, List<FramePlan>> = mapOf(
     ),
 
     "a-draped-geometry-follows-the-relief-under-it" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 30.0),
         geometries = listOf(tintedQuad(VALLEY_LATITUDE, VALLEY_LONGITUDE, AltitudeMode.GROUND_RELATIVE)),
     ),
 
-    "a-flat-geometry-cuts-through-the-relief-under-it" to one(
-        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 55.0),
-        geometries = listOf(tintedQuad(VALLEY_LATITUDE, VALLEY_LONGITUDE, AltitudeMode.ABSOLUTE)),
+    // The contrast plan, and the altitude is the point rather than an oversight: 2,000 m is above
+    // the valley floor and below the walls, so an absolute quad hangs in the air where the draped
+    // one lies on the ground. At 0 m it would simply be buried, which is correct and shows nothing.
+    "a-flat-geometry-hangs-above-the-relief-under-it" to one(
+        Camera(VALLEY_LATITUDE, VALLEY_LONGITUDE, 13.0, 45.0, 30.0),
+        geometries = listOf(
+            tintedQuad(VALLEY_LATITUDE, VALLEY_LONGITUDE, AltitudeMode.ABSOLUTE, altitude = 2_000.0),
+        ),
     ),
 
     "a-translucent-geometry-leaves-the-basemap-readable" to one(
@@ -210,9 +224,10 @@ private fun tintedQuad(
     latitude: Double,
     longitude: Double,
     altitudeMode: AltitudeMode,
+    altitude: Double = 0.0,
 ): Geometry = Geometry(
-    topLeft = Vector3(latitude + 0.008, longitude - 0.015, 0.0),
-    bottomRight = Vector3(latitude - 0.008, longitude + 0.015, 0.0),
+    topLeft = Vector3(latitude + 0.008, longitude - 0.015, altitude),
+    bottomRight = Vector3(latitude - 0.008, longitude + 0.015, altitude),
     shaderPair = ShaderPair(CORPUS_VERTEX_SOURCE, CORPUS_FRAGMENT_SOURCE),
     uniforms = mapOf("uTint" to ShaderValue.Vec3(1.0f, 0.35f, 0.0f)),
     altitudeMode = altitudeMode,
