@@ -4,8 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-**RenG draws a basemap, and three releases are public.** The newest *published* version is `0.3.0`;
-`VERSION_NAME` is `0.4.0` and unreleased — see the freeze below. Anything in this file
+**RenG draws a basemap, and four releases are public.** The newest *published* version is **`0.4.0`**,
+released on 2026-08-30 from `070a85d` — aggregate POM, all seven target publications and the completion
+record all verify anonymously, and `maven-metadata.xml` lists `0.4.0` as both `<latest>` and `<release>`.
+**`VERSION_NAME` in `gradle.properties` still reads `0.4.0`, which is now a released coordinate**, so it
+must move up before anything is pushed to `main` — see the freeze section below, which this release ended.
+Anything in this file
 or in an older document that says RenG "renders nothing", "exposes no public runtime API", that the KLIB
 ABI dump "contains no renderer factory", or that the basemap is an unmerged branch is obsolete.
 
@@ -50,20 +54,25 @@ same-version-different-bytes hazard ADR 0013 exists to prevent, one layer down.
 a `0.4.0` release.** That is the intended number when the time comes; it is not intended yet. Cycle H adds
 nothing to the public ABI, so it does not move that number.
 
-**`VERSION_NAME` is `0.4.0`, and the freeze ends when E-terrain does — by owner decision on 2026-08-30.**
-This paragraph previously said the freeze held until **J** was complete too. It does not: the owner
-instructed that E-terrain's completion is the release, and J follows in its own time. E-labels, G and
-E-terrain therefore all ship under one number, which is what the freeze was for — one release at the end,
-not one per cycle — and their ABI growth accumulates under a coordinate that has never been published.
+**The freeze is over: E-labels, G and E-terrain shipped together as `0.4.0` on 2026-08-30**, which is
+exactly what the freeze was for — one release at the end, not one per cycle.
 
-Until that push happens the hazard is unchanged and worth stating plainly: a frozen version and an
-auto-publishing trigger point in opposite directions, and `publish.yml` cuts a release on any
-non-documentation push to `main`, so an accidental push would publish a mid-cycle state as `0.4.0`
+**And that inverts the paragraph this one replaces, which is the thing to read carefully.** While `0.4.0`
+was unpublished, republishing it into `build/local-maven` as cycles landed was harmless, because the
+same-version-different-bytes hazard ADR 0013 exists to prevent had no public record to contradict. **There
+is a public record now.** `VERSION_NAME` still reads `0.4.0`, so every
+`publishAllPublicationsToLocalTestRepository` puts *post-release* bytes behind the *released* `0.4.0`
+coordinate on this machine, and `consumer-smoke` — which defaults to `../build/local-maven` — resolves
+them. Cycle K did exactly this for a whole session, with 97 lines of new ABI. Nothing public was harmed and
+nothing can be; the local repository is a scratch directory and deleting it is always safe. But the
+number must move up before the next push, and until it does, a local `0.4.0` is not the published `0.4.0`.
+
+The push hazard is unchanged and still worth stating plainly: `publish.yml` cuts a release on any
+non-documentation push to `main`, so an accidental push publishes whatever `VERSION_NAME` says,
 **permanently** — ADR 0013 makes a coordinate immutable, and recovery is only ever an explicit upward
-version change, never an overwrite. Nothing reaches `origin/main` without the owner saying so; for the
-`0.4.0` release they have said so. The local loop is unaffected: `consumer-smoke` resolves `../build/local-maven`, and republishing
-`0.4.0` there as cycles land is fine because nothing is published publicly at that coordinate yet — the
-same-version-different-bytes hazard ADR 0013 exists to prevent has no public record to contradict.
+version change, never an overwrite. A push carrying a `VERSION_NAME` that is already published fails
+closed instead, which is the resolver working, not a bug to route around. Nothing reaches `origin/main`
+without the owner saying so.
 
 **The visual harness runs against a local publish, with no repository edit and nothing to revert.**
 `consumer-smoke/settings.gradle.kts` already defaults `rengRepositoryUrl` to `../build/local-maven` under an
@@ -71,13 +80,20 @@ same-version-different-bytes hazard ADR 0013 exists to prevent has no public rec
 
 ```bash
 ./gradlew --no-configuration-cache :kmp:publishAllPublicationsToLocalTestRepository
-./gradlew -p consumer-smoke runHarness -PstyleUrl=<style url> -PmodelUrl=<glb url>
+./gradlew -p consumer-smoke runHarness -Pconfig=corpus/configs/style-59.json \
+                                       -Pplans=corpus/plans/storyboard.json
 ```
 
 is the whole loop — verified end to end here, including a fresh Gradle home with `--refresh-dependencies`.
-Both urls stay uncheckable: the style carries an api key and the model points at somebody's server. Add
-`-PrengRepositoryUrl=https://maven.rohittp.com` to run the same harness against the *published* coordinate
-instead.
+Add `-PrengRepositoryUrl=https://maven.rohittp.com` to run the same harness against the *published*
+coordinate instead.
+
+**Cycle K replaced `-PstyleUrl` with a style *id*.** A config names a style by id; the base url lives in
+the untracked `local.properties` as `reng.harness.styleBaseUrl`, and a run composes `<base>/<id>`. So the
+api key is set once per machine instead of being pasted into every command, and a corpus file can be
+checked in naming "style 59" without carrying a key. **A missing base fails before anything renders and
+names the property**, because composing against an empty base produces a transport error that reads as a
+network problem. `-PmodelUrl` is gone with the rest of the flag pile: a model is a field in a plan file.
 
 **`0.3.0` failed closed once before it published, and the cause was the runner's driver rather than
 RenG.** The first attempt failed on the hosted macOS runner with `kotlin.AssertionError at null:-1` as its
@@ -505,6 +521,76 @@ real context; the sagitta of a frame-sized quad is 0.44 logical pixels at zoom 1
 comparison taken above about zoom 12 cannot tell a globe from a tangent plane and this cycle's is bounded
 in both directions at zoom ≤ 8.
 
+**Cycle K is in progress on `feat/k-frame-plan-corpus`, and it replaced Cycle J rather than implementing
+it.** Its authority is `docs/superpowers/specs/2026-08-31-cycle-k-frame-plan-corpus-design.md` and its plan
+is `docs/superpowers/plans/2026-08-31-cycle-k-frame-plan-corpus.md`; `docs/decomposition.md` carries J's
+withdrawal with the reasoning. J was to compare renders against **stored baselines with a tolerance**, and
+both halves were wrong for this repository: a stored baseline is a claim about a driver, and the tolerance
+that makes one survivable across machines is ~3,000x wider than the signal a real regression emits — the
+`0.3.0` failure measured that exact number, 3,005 wrong pixels of 15,876 on `Apple Software Renderer`.
+K compares **two commits on one machine**, where driver, libm and rasteriser are all constant and RenG's
+source is the only variable, so the comparison is exact (**ADR 0043**).
+
+**A `FramePlan` is now a document (ADR 0042).** Twenty-three public types gained `serializer()`;
+`kmp/api/kmp.klib.api` grew by **97 lines and lost none**, every added line a `Companion` or a `serializer()`
+overload. **Not one is a bare `@Serializable`**, for two independent reasons: six of these classes take
+constructor parameters that are not properties, which the plugin refuses outright, and *every* one of them
+validates in `init`. A plugin-generated deserializer assigning fields directly would mint a `Vector3`
+holding NaN or a `Camera` at zoom 99 from a well-formed document. So each type carries
+`@Serializable(with = …)` over a private surrogate whose `deserialize` calls the real public constructor —
+**a decoded plan is exactly as validated as a constructed one**, and a bad document fails at decoding with
+RenG's own `require` message. The cost is twelve places to forget a property, which no compiler catches;
+the round-trip gate's fixture therefore uses a non-default value for every property, so a dropped one
+round-trips to something the original was not.
+
+**`kotlinx-serialization-core` is taken at `api` scope, and it is the only coordinate admitted there.**
+`implementation` would put `KSerializer` on the runtime classpath and leave it off every consumer's compile
+classpath — a public signature naming a type the consumer cannot see. Rentile `0.7.0` already declares
+`kotlinx-serialization-json` at runtime scope, so **no consumer's resolution graph gains an artifact**;
+RenG merely starts owning a version it already inherited. The policy cost was **six** refusal points, not
+the three the plan budgeted: `_FORBIDDEN_DEPENDENCY` rejects the word `serialization` by name, and
+`_EXPECTED_PLUGIN_BLOCKS` and `_PLUGIN_ACCESSORS` sit behind the allowlist and the two fingerprint sets.
+`_EXPECTED_PLUGIN_BLOCKS` now keeps history as a tuple of accepted forms, exactly as the fingerprints do.
+**Three separate places pin a dependency's call kind**, so a test for that rule only flips when all three
+are broken at once — which is how it was verified rather than assumed.
+
+**The baseline review happened on 2026-08-31.** Its record is
+`docs/research/2026-08-31-k-baseline-review.md`: 77 runs, 124 frames, 0 failed, every frame looked at on
+an M3 Max. What is right is listed there, including one thing worth having seen — on satellite imagery
+the polar cap's closure is plainly a fan of radial streaks above the top tile row, which is what
+"stretching the edge texel row" looks like when the texels are photographs.
+
+**It first reported three defects; two of them were my own test error, and that correction is the more
+useful half.** The corpus placed a pin and a quad at **`ABSOLUTE` altitude 0 in a valley whose floor is
+about 1,200 m**, found them invisible, and called it a renderer bug. They were underground, and RenG was
+right to hide them: `CONTEXT.md` makes altitude ellipsoidal metres and ADR 0040 keeps `ABSOLUTE` meaning
+that. Measured after the correction, the same quad in `GROUND_RELATIVE` draws **22,231 pixels at pitch 0
+and 10,641 at pitch 30**, and a ground-relative sticker over the city draws at altitude 0 and grows with
+height. **`GROUND_RELATIVE` works as designed.** Sea level is a degenerate altitude in mountainous
+terrain, and a fixture at a degenerate point proves nothing — the same lesson this project keeps
+relearning inside its own suites, met here in a corpus instead.
+
+**One defect is real: the ground vanishes at high zoom over high terrain.** Only styles that actually
+serve a DEM are affected, and `terrainShading` is not the trigger. The city (~100 m) and the ocean (~0 m)
+draw at every zoom and pitch tested; Yosemite (1,200–2,700 m) is blank at zoom 14 pitch 55 and blank at
+**every** pitch by zoom 15. Nothing fails, nothing warns, and the blank frame fetches *more* tiles than
+the working one (89 against 54, all HTTP 200).
+
+**The threshold tracks terrain height against camera height.** RenG derives camera altitude from zoom
+alone — `512 * 2^zoom` logical pixels for 40,075,017 m — so at zoom 15 the eye is on the order of 1,500 m
+above the *ellipsoid*, beneath Yosemite's walls. **That is a recorded design decision rather than an
+oversight**: E-terrain rejected an `elevationAt(lat, lon)` query as circular, so there is no terrain-aware
+camera by choice. What that decision does not cover is the *silence* — ADR 0041 makes terrain the one
+resource that degrades rather than failing a frame, and a blank frame with no diagnostic is neither.
+**Raising the camera, clamping the displacement, or announcing the condition is an owner decision and an
+ADR, not a fix to slip into a release.** It is also **not a regression**: terrain shipped in the public
+`0.4.0` and the behaviour reproduces against that coordinate; Cycle K touches none of it.
+
+**What K still owes.** The corpus carries no model, because a GLB url points at somebody's server and none
+is checked in, so the model pipeline is unreviewed. A plan file repeats a geometry's shader source once per
+frame, which is why the 48-frame storyboard is 124 KB. And `terrainShading = false` still fetches every DEM
+tile, so that flag governs shading rather than acquisition — recorded, not yet judged.
+
 Design decisions live in `CONTEXT.md` (vocabulary) and `docs/adr/` (ADRs 0001–0012 establish the
 original graphics contract, ADR 0013 governs fail-closed publication, ADRs 0014–0015 supersede
 preparation ordering and GL-deletion context behavior, ADRs 0016–0017 govern the Rentile firewall and
@@ -771,8 +857,14 @@ exercises the real published coordinate rather than a project dependency. It own
 headless CGL core-profile context reached through the stock `platform.OpenGLCommon` and `platform.OpenGL3`
 klibs with **no cinterop at all**, reporting `Apple M3 Max | 4.1 Metal - 90.5`. It drives a fixed 48-frame
 storyboard (`Storyboard.kt:25`, with frames 30..32 as negative cases), and it writes binary PPM and prints
-an `ffmpeg` line. The style URL carries the owner's API key, so no style is checked in: pass `-PstyleUrl=`
-or `RENG_HARNESS_STYLE_URL`.
+an `ffmpeg` line. Since Cycle K the storyboard is no longer a code path but one ordinary corpus file,
+`consumer-smoke/corpus/plans/storyboard.json`, and the harness reads plans rather than generating them.
+
+**`FramePlan` JSON came back in Cycle K; the AVFoundation encoder did not, and the distinction is the
+point.** I withdrew both and said reversing the first would be "cheap and compatible" if anything ever
+needed plan documents — Cycle K is that, and it cost one dependency and twelve serializers. The encoder
+stays withdrawn on its original argument, unchanged and still correct. The paragraph below is the
+reasoning as I recorded it, and only its serialization half is superseded.
 
 **`FramePlan` JSON and a self-contained AVFoundation encoder were withdrawn with Cycle I, deliberately.**
 The harness is verification code, so an encoder inside it is bug surface that can produce a misleading

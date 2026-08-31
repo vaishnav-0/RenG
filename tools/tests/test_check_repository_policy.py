@@ -372,6 +372,51 @@ _VERSION_CATALOG_WITH_DEVICE_TEST = _VERSION_CATALOG_WITH_COROUTINES.replace(
     'kotlinx-coroutines-core = ',
 )
 
+# ADR 0042's serialization runtime and plugin (Cycle K task 2), layered on the device-test fixtures
+# for the same reason those layer on the coroutines ones: the rest of `kmp/build.gradle.kts` must
+# stay recognizable to every other check, and the token stream has to match the real file exactly
+# for the shared build-fingerprint pin.
+#
+# The `api(...)` call is the point. It is the only coordinate in the repository admitted at that
+# scope, because the compiler plugin writes `serializer(): KSerializer<T>` into the published ABI
+# and `implementation` would leave `KSerializer` off every consumer's compile classpath.
+_KMP_BUILD_WITH_SERIALIZATION = _KMP_BUILD_WITH_DEVICE_TEST.replace(
+    "    alias(libs.plugins.maven.publish)\n}",
+    "    alias(libs.plugins.maven.publish)\n"
+    "    alias(libs.plugins.kotlin.serialization)\n}",
+).replace(
+    "            implementation(libs.kotlinx.coroutines.core)\n"
+    "        }\n",
+    "            implementation(libs.kotlinx.coroutines.core)\n"
+    "            api(libs.kotlinx.serialization.core)\n"
+    "        }\n",
+).replace(
+    "            implementation(libs.kotlinx.coroutines.test)\n"
+    "        }\n",
+    "            implementation(libs.kotlinx.coroutines.test)\n"
+    "            implementation(libs.kotlinx.serialization.json)\n"
+    "        }\n",
+    1,
+)
+
+_VERSION_CATALOG_WITH_SERIALIZATION = _VERSION_CATALOG_WITH_DEVICE_TEST.replace(
+    'kotlinxCoroutines = "1.11.0"\n',
+    'kotlinxCoroutines = "1.11.0"\n'
+    'kotlinxSerialization = "1.9.0"\n',
+).replace(
+    'rentile-kmp = { module = "com.rohittp.rentile:kmp", version.ref = "rentile" }\n',
+    'kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core",'
+    ' version.ref = "kotlinxSerialization" }\n'
+    'kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json",'
+    ' version.ref = "kotlinxSerialization" }\n'
+    'rentile-kmp = { module = "com.rohittp.rentile:kmp", version.ref = "rentile" }\n',
+).replace(
+    'maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublish" }\n',
+    'maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublish" }\n'
+    'kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization",'
+    ' version.ref = "kotlin" }\n',
+)
+
 PUBLIC_SMOKE_STEP = """      - name: Resolve six targets from the public repository without credentials
         run: >-
           ./gradlew --gradle-user-home "$PUBLIC_HOME" --refresh-dependencies
@@ -910,6 +955,105 @@ class RepositoryPolicyTests(unittest.TestCase):
             write(root, "kmp/build.gradle.kts", _KMP_BUILD_WITH_COROUTINES)
             write(root, "gradle/libs.versions.toml", _VERSION_CATALOG_WITH_COROUTINES)
             self.assertEqual([], check_repository(root))
+
+    def test_clean_fixture_with_serialization_dependency_and_catalog_passes(self) -> None:
+        # ADR 0042 end to end through the whole pipeline: the `api` call, the `[plugins]` entry,
+        # the two library coordinates, the `kotlinxSerialization` version row, the widened
+        # `plugins { }` token sequence and both build fingerprints have to agree at once. The
+        # fixture is deliberately not fingerprint-neutralized -- it must tokenize to exactly the
+        # value pinned for the real file on disk, which is the whole point of pinning it.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_clean_fixture(root)
+            write(root, "kmp/build.gradle.kts", _KMP_BUILD_WITH_SERIALIZATION)
+            write(root, "gradle/libs.versions.toml", _VERSION_CATALOG_WITH_SERIALIZATION)
+            self.assertEqual([], check_repository(root))
+
+    def test_api_scope_is_refused_for_every_coordinate_but_the_serialization_runtime(self) -> None:
+        # The `api` widening must not become "api is allowed now".
+        #
+        # The first case is the one that isolates the rule: ADR 0019's coroutines coordinate is
+        # already permitted in `commonMain`, so *moving* it to `api` -- rather than adding it --
+        # leaves the dependency set otherwise untouched and changes nothing but the call kind.
+        # An earlier draft of this test used `api(libs.rentile.kmp)` instead and proved nothing:
+        # that makes rentile appear twice, and the duplicate-coordinate rule refused it long
+        # before the api allowlist was consulted. Verified by mutation -- with all three layers
+        # of call-kind pinning broken, this case flips and the rentile one does not.
+        #
+        # The second case is a coordinate `commonMain` may not name at any scope, which is a
+        # separate rule (scope separation) worth pinning in the same place.
+        cases = {
+            "permitted coordinate moved to api": _KMP_BUILD_WITH_SERIALIZATION.replace(
+                "            implementation(libs.kotlinx.coroutines.core)\n", "",
+            ).replace(
+                "api(libs.kotlinx.serialization.core)",
+                "api(libs.kotlinx.coroutines.core)",
+            ),
+            "device-test coordinate hoisted into commonMain at api": (
+                _KMP_BUILD_WITH_SERIALIZATION.replace(
+                    "api(libs.kotlinx.serialization.core)",
+                    "api(libs.androidx.test.runner)",
+                )
+            ),
+        }
+        for name, build in cases.items():
+            with self.subTest(case=name), TemporaryDirectory() as directory:
+                root = Path(directory)
+                create_clean_fixture(root)
+                write(root, "kmp/build.gradle.kts", build)
+                write(root, "gradle/libs.versions.toml", _VERSION_CATALOG_WITH_SERIALIZATION)
+                with patch.dict(
+                    _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS,
+                    _neutralized_fingerprint_overrides(root),
+                    clear=False,
+                ):
+                    self.assertNotEqual([], check_dependencies(root))
+
+    def test_the_serialization_runtime_is_refused_at_implementation_scope(self) -> None:
+        # The other half of the same rule: the permitted *coordinate* at the wrong *call kind*.
+        # `api` is what ADR 0042 admits and what the published ABI needs, so demoting it to
+        # `implementation` -- which would leave `KSerializer` off every consumer's compile
+        # classpath while still resolving here -- has to be refused rather than quietly accepted.
+        #
+        # Three independent layers pin the call kind: `_dependency_call_shape_allowed`,
+        # `allowed_call_indices`, and `permitted_libs_dependency_coordinates` inside
+        # `_dependency_name_policy_token`. Breaking any one alone leaves the other two refusing,
+        # so this case only flips when all three are broken together -- which is how it was
+        # verified rather than assumed.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_clean_fixture(root)
+            write(root, "kmp/build.gradle.kts", _KMP_BUILD_WITH_SERIALIZATION.replace(
+                "api(libs.kotlinx.serialization.core)",
+                "implementation(libs.kotlinx.serialization.core)",
+            ))
+            write(root, "gradle/libs.versions.toml", _VERSION_CATALOG_WITH_SERIALIZATION)
+            with patch.dict(
+                _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS,
+                _neutralized_fingerprint_overrides(root),
+                clear=False,
+            ):
+                self.assertNotEqual([], check_dependencies(root))
+
+    def test_admitting_plugin_accessors_to_the_token_scan_admits_nothing_else(self) -> None:
+        # `_PLUGIN_ACCESSORS` joined the permitted token runs so that ADR 0042's accessor -- the
+        # first one containing a word `_FORBIDDEN_DEPENDENCY` rejects -- survives the scan. That
+        # must not turn `alias(...)` into a hole: an accessor that is not in `_PLUGIN_ACCESSORS`
+        # is still refused even though it sits in exactly the same syntactic position.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_clean_fixture(root)
+            write(root, "kmp/build.gradle.kts", _KMP_BUILD_WITH_SERIALIZATION.replace(
+                "alias(libs.plugins.kotlin.serialization)",
+                "alias(libs.plugins.kotlin.serialization.wire)",
+            ))
+            write(root, "gradle/libs.versions.toml", _VERSION_CATALOG_WITH_SERIALIZATION)
+            with patch.dict(
+                _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS,
+                _neutralized_fingerprint_overrides(root),
+                clear=False,
+            ):
+                self.assertNotEqual([], check_dependencies(root))
 
     def test_catalog_forbidden_scan_still_covers_text_outside_the_exact_tables(self) -> None:
         # Stripping the two permitted coroutines coordinates from the forbidden-word scan must

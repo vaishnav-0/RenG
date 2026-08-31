@@ -432,9 +432,52 @@ at `crf 12` / `yuv444p` or on the PPM frames directly. That caveat's permanent h
 Reversing this is cheap and compatible if a consumer ever needs RenG to hand over plan documents: the
 harness gains a parser and the decomposition gains a cycle. Nothing here forecloses that.
 
-## J — Golden-image corpus
+## J — Golden-image corpus — withdrawn 2026-08-31
 
-The gate that proves RenG still draws what it drew: a corpus of frame plans rendered per platform and
-compared against baselines with a tolerance. It slots into the same two places Rentile's corpus does — a
-job in `ci.yml` and a step in `publish.yml` before upload. Rentile's two credential-bearing corpus gates
-have no RenG analogue and were deliberately not ported.
+**Withdrawn by owner decision, and replaced by K.** The letter stays bound to its content so no prior
+reference breaks, the same convention I's withdrawal and the 2026-08-19 reorder used — and there are many
+such references, because most of this document defers pixel verification to J.
+
+J was to render a corpus per platform and compare it against **stored baselines with a tolerance**. Both
+halves of that turned out to be wrong for this project, and for the same underlying reason.
+
+**A stored baseline is a claim about a driver, not about RenG.** It must be produced somewhere, and
+wherever that is becomes the definition of correct. This repository already knows what that costs:
+`0.3.0` failed its first publication with `kotlin.AssertionError at null:-1` as its entire diagnostic
+because a hosted macOS runner has no GPU, and `Apple Software Renderer` dropped 3,005 of 15,876 interior
+pixels on a large quad. A baseline taken on an M3 Max and checked on that runner disagrees on thousands of
+pixels while RenG is unchanged; a baseline taken on the runner enshrines its defects. Six published targets
+multiply the problem by six.
+
+**And the tolerance that makes baselines survivable is what makes them blind.** Any threshold wide enough
+to admit that rasteriser's ~3,000 wrong pixels is roughly three thousand times wider than the signal a real
+regression emits in the same frame. J's own gate would have had to be set past the point where it could
+detect the things it existed to detect.
+
+**K compares two commits on one machine instead**, which dissolves both problems rather than balancing
+them: same driver, same libm, same rasteriser, so RenG's own source is the only variable left and the
+comparison can be exact. What J promised — "RenG still draws what it drew" — is what K delivers; what J
+also implied, that a stored image says RenG draws *correctly*, is what no automated corpus was ever going
+to deliver, and K assigns it to a human baseline review instead (ADR 0043).
+
+Two consequences. `publish.yml` gains **no** step: a release is cut from `main`, where a comparison against
+`main` is degenerate, so the gate lives on pull requests only. And Rentile's two credential-bearing corpus
+gates still have no RenG analogue and are still deliberately not ported.
+
+## K — Frame Plan corpus and branch comparison
+
+Its authority is `docs/superpowers/specs/2026-08-31-cycle-k-frame-plan-corpus-design.md` and its plan is
+`docs/superpowers/plans/2026-08-31-cycle-k-frame-plan-corpus.md`.
+
+**A Frame Plan becomes a document.** Twenty-three public types gain `serializer()` under ADR 0042's
+`kotlinx-serialization-core`, every one through a private surrogate whose `deserialize` calls the real
+public constructor — so a decoded plan is exactly as validated as a constructed one, and a document holding
+a value RenG refuses fails at decoding with RenG's own message rather than becoming a quietly illegal
+object. This is the reversal I's withdrawal explicitly left cheap and compatible: "the harness gains a
+parser and the decomposition gains a cycle." Both happened.
+
+The harness then takes a config and a plan file instead of nine flags, a corpus of named plans crosses
+those configs, and `tools/compare_rendered_frames.py` renders this working tree against a temporary
+worktree at `main` and compares frame by frame with no tolerance. `ci.yml` runs it on pull requests that
+bump major or minor, and says out loud that its verdict is a statement about change, never about
+correctness.

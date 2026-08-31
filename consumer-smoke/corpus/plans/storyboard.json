@@ -1,0 +1,3653 @@
+[
+  {
+    "frameIndex": 0,
+    "camera": {
+      "latitude": 37.7955,
+      "unwrappedLongitude": -122.41,
+      "zoom": 11.5,
+      "bearing": 0.0,
+      "pitch": 0.0
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 1,
+    "camera": {
+      "latitude": 37.79571276595745,
+      "unwrappedLongitude": -122.40965957446808,
+      "zoom": 11.553191489361701,
+      "bearing": 5.74468085106383,
+      "pitch": 0.07363493638211187
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 2,
+    "camera": {
+      "latitude": 37.79592553191489,
+      "unwrappedLongitude": -122.40931914893616,
+      "zoom": 11.606382978723405,
+      "bearing": 11.48936170212766,
+      "pitch": 0.2903017635783978
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 3,
+    "camera": {
+      "latitude": 37.79613829787234,
+      "unwrappedLongitude": -122.40897872340425,
+      "zoom": 11.659574468085106,
+      "bearing": 17.23404255319149,
+      "pitch": 0.6436435086637835
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 4,
+    "camera": {
+      "latitude": 37.79635106382978,
+      "unwrappedLongitude": -122.40863829787234,
+      "zoom": 11.712765957446809,
+      "bearing": 22.97872340425532,
+      "pitch": 1.1273031987131945
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 5,
+    "camera": {
+      "latitude": 37.79656382978723,
+      "unwrappedLongitude": -122.40829787234043,
+      "zoom": 11.76595744680851,
+      "bearing": 28.72340425531915,
+      "pitch": 1.7349238608015563
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 6,
+    "camera": {
+      "latitude": 37.796776595744674,
+      "unwrappedLongitude": -122.40795744680851,
+      "zoom": 11.819148936170214,
+      "bearing": 34.46808510638298,
+      "pitch": 2.4601485220037946
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 7,
+    "camera": {
+      "latitude": 37.796989361702124,
+      "unwrappedLongitude": -122.4076170212766,
+      "zoom": 11.872340425531915,
+      "bearing": 40.212765957446805,
+      "pitch": 3.2966202093948347
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 8,
+    "camera": {
+      "latitude": 37.797202127659574,
+      "unwrappedLongitude": -122.40727659574468,
+      "zoom": 11.925531914893616,
+      "bearing": 45.95744680851064,
+      "pitch": 4.237981950049604
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 9,
+    "camera": {
+      "latitude": 37.79741489361702,
+      "unwrappedLongitude": -122.40693617021276,
+      "zoom": 11.97872340425532,
+      "bearing": 51.702127659574465,
+      "pitch": 5.277876771043025
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 10,
+    "camera": {
+      "latitude": 37.79762765957447,
+      "unwrappedLongitude": -122.40659574468084,
+      "zoom": 12.03191489361702,
+      "bearing": 57.4468085106383,
+      "pitch": 6.409947699450024
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 11,
+    "camera": {
+      "latitude": 37.79784042553191,
+      "unwrappedLongitude": -122.40625531914893,
+      "zoom": 12.085106382978724,
+      "bearing": 63.19148936170213,
+      "pitch": 7.62783776234553
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 12,
+    "camera": {
+      "latitude": 37.79805319148936,
+      "unwrappedLongitude": -122.40591489361702,
+      "zoom": 12.138297872340425,
+      "bearing": 68.93617021276596,
+      "pitch": 8.925189986804464
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 13,
+    "camera": {
+      "latitude": 37.79826595744681,
+      "unwrappedLongitude": -122.4055744680851,
+      "zoom": 12.191489361702128,
+      "bearing": 74.68085106382979,
+      "pitch": 10.295647399901757
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 14,
+    "camera": {
+      "latitude": 37.79847872340425,
+      "unwrappedLongitude": -122.40523404255319,
+      "zoom": 12.24468085106383,
+      "bearing": 80.42553191489361,
+      "pitch": 11.732853028712327
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 15,
+    "camera": {
+      "latitude": 37.7986914893617,
+      "unwrappedLongitude": -122.40489361702127,
+      "zoom": 12.297872340425531,
+      "bearing": 86.17021276595744,
+      "pitch": 13.23044990031111
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 16,
+    "camera": {
+      "latitude": 37.798904255319144,
+      "unwrappedLongitude": -122.40455319148936,
+      "zoom": 12.351063829787234,
+      "bearing": 91.91489361702128,
+      "pitch": 14.782081041773015
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 17,
+    "camera": {
+      "latitude": 37.799117021276594,
+      "unwrappedLongitude": -122.40421276595744,
+      "zoom": 12.404255319148936,
+      "bearing": 97.65957446808511,
+      "pitch": 16.38138948017299
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 18,
+    "camera": {
+      "latitude": 37.799329787234036,
+      "unwrappedLongitude": -122.40387234042552,
+      "zoom": 12.457446808510639,
+      "bearing": 103.40425531914893,
+      "pitch": 18.02201824258594
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 19,
+    "camera": {
+      "latitude": 37.799542553191486,
+      "unwrappedLongitude": -122.40353191489362,
+      "zoom": 12.51063829787234,
+      "bearing": 109.14893617021276,
+      "pitch": 19.6976103560868
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 20,
+    "camera": {
+      "latitude": 37.799755319148936,
+      "unwrappedLongitude": -122.4031914893617,
+      "zoom": 12.563829787234042,
+      "bearing": 114.8936170212766,
+      "pitch": 21.401808847750498
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 21,
+    "camera": {
+      "latitude": 37.79996808510638,
+      "unwrappedLongitude": -122.40285106382979,
+      "zoom": 12.617021276595745,
+      "bearing": 120.63829787234042,
+      "pitch": 23.128256744651956
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 22,
+    "camera": {
+      "latitude": 37.80018085106383,
+      "unwrappedLongitude": -122.40251063829787,
+      "zoom": 12.670212765957446,
+      "bearing": 126.38297872340426,
+      "pitch": 24.8705970738661
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 23,
+    "camera": {
+      "latitude": 37.80039361702127,
+      "unwrappedLongitude": -122.40217021276595,
+      "zoom": 12.72340425531915,
+      "bearing": 132.12765957446808,
+      "pitch": 26.622472862467855
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 24,
+    "camera": {
+      "latitude": 37.80060638297872,
+      "unwrappedLongitude": -122.40182978723404,
+      "zoom": 12.77659574468085,
+      "bearing": 137.87234042553192,
+      "pitch": 28.377527137532145
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 25,
+    "camera": {
+      "latitude": 37.80081914893617,
+      "unwrappedLongitude": -122.40148936170212,
+      "zoom": 12.829787234042554,
+      "bearing": 143.61702127659575,
+      "pitch": 30.1294029261339
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 26,
+    "camera": {
+      "latitude": 37.80103191489361,
+      "unwrappedLongitude": -122.40114893617022,
+      "zoom": 12.882978723404255,
+      "bearing": 149.36170212765958,
+      "pitch": 31.87174325534805
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 27,
+    "camera": {
+      "latitude": 37.80124468085106,
+      "unwrappedLongitude": -122.4008085106383,
+      "zoom": 12.936170212765958,
+      "bearing": 155.10638297872342,
+      "pitch": 33.598191152249505
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 28,
+    "camera": {
+      "latitude": 37.801457446808506,
+      "unwrappedLongitude": -122.40046808510638,
+      "zoom": 12.98936170212766,
+      "bearing": 160.85106382978722,
+      "pitch": 35.302389643913195
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 29,
+    "camera": {
+      "latitude": 37.801670212765956,
+      "unwrappedLongitude": -122.40012765957447,
+      "zoom": 13.042553191489361,
+      "bearing": 166.59574468085106,
+      "pitch": 36.977981757414064
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 30,
+    "camera": {
+      "latitude": 37.8018829787234,
+      "unwrappedLongitude": -122.39978723404255,
+      "zoom": 13.095744680851064,
+      "bearing": 172.3404255319149,
+      "pitch": 38.618610519827016
+    },
+    "drawBasemap": false,
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 31,
+    "camera": {
+      "latitude": 37.80209574468085,
+      "unwrappedLongitude": -122.39944680851063,
+      "zoom": 13.148936170212766,
+      "bearing": 178.08510638297872,
+      "pitch": 40.21791895822698
+    },
+    "drawBasemap": false,
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 32,
+    "camera": {
+      "latitude": 37.8023085106383,
+      "unwrappedLongitude": -122.39910638297872,
+      "zoom": 13.202127659574469,
+      "bearing": 183.82978723404256,
+      "pitch": 41.76955009968889
+    },
+    "drawBasemap": false,
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 33,
+    "camera": {
+      "latitude": 37.80252127659574,
+      "unwrappedLongitude": -122.3987659574468,
+      "zoom": 13.25531914893617,
+      "bearing": 189.5744680851064,
+      "pitch": 43.26714697128767
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 34,
+    "camera": {
+      "latitude": 37.80273404255319,
+      "unwrappedLongitude": -122.3984255319149,
+      "zoom": 13.308510638297872,
+      "bearing": 195.31914893617022,
+      "pitch": 44.70435260009825
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 35,
+    "camera": {
+      "latitude": 37.80294680851063,
+      "unwrappedLongitude": -122.39808510638298,
+      "zoom": 13.361702127659575,
+      "bearing": 201.06382978723403,
+      "pitch": 46.07481001319553
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 36,
+    "camera": {
+      "latitude": 37.80315957446808,
+      "unwrappedLongitude": -122.39774468085106,
+      "zoom": 13.414893617021276,
+      "bearing": 206.80851063829786,
+      "pitch": 47.372162237654464
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 37,
+    "camera": {
+      "latitude": 37.803372340425526,
+      "unwrappedLongitude": -122.39740425531915,
+      "zoom": 13.46808510638298,
+      "bearing": 212.55319148936172,
+      "pitch": 48.59005230054998
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 38,
+    "camera": {
+      "latitude": 37.803585106382975,
+      "unwrappedLongitude": -122.39706382978723,
+      "zoom": 13.52127659574468,
+      "bearing": 218.29787234042553,
+      "pitch": 49.72212322895697
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 39,
+    "camera": {
+      "latitude": 37.803797872340425,
+      "unwrappedLongitude": -122.39672340425531,
+      "zoom": 13.574468085106382,
+      "bearing": 224.04255319148936,
+      "pitch": 50.7620180499504
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 40,
+    "camera": {
+      "latitude": 37.80401063829787,
+      "unwrappedLongitude": -122.3963829787234,
+      "zoom": 13.627659574468085,
+      "bearing": 229.7872340425532,
+      "pitch": 51.70337979060516
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 41,
+    "camera": {
+      "latitude": 37.80422340425532,
+      "unwrappedLongitude": -122.39604255319149,
+      "zoom": 13.680851063829788,
+      "bearing": 235.53191489361703,
+      "pitch": 52.53985147799621
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 42,
+    "camera": {
+      "latitude": 37.80443617021276,
+      "unwrappedLongitude": -122.39570212765958,
+      "zoom": 13.73404255319149,
+      "bearing": 241.27659574468083,
+      "pitch": 53.265076139198435
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 43,
+    "camera": {
+      "latitude": 37.80464893617021,
+      "unwrappedLongitude": -122.39536170212766,
+      "zoom": 13.787234042553191,
+      "bearing": 247.02127659574467,
+      "pitch": 53.87269680128681
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 44,
+    "camera": {
+      "latitude": 37.80486170212766,
+      "unwrappedLongitude": -122.39502127659574,
+      "zoom": 13.840425531914894,
+      "bearing": 252.76595744680853,
+      "pitch": 54.356356491336214
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 45,
+    "camera": {
+      "latitude": 37.8050744680851,
+      "unwrappedLongitude": -122.39468085106382,
+      "zoom": 13.893617021276595,
+      "bearing": 258.51063829787233,
+      "pitch": 54.7096982364216
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 46,
+    "camera": {
+      "latitude": 37.80528723404255,
+      "unwrappedLongitude": -122.39434042553191,
+      "zoom": 13.946808510638299,
+      "bearing": 264.25531914893617,
+      "pitch": 54.92636506361789
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "frameIndex": 47,
+    "camera": {
+      "latitude": 37.805499999999995,
+      "unwrappedLongitude": -122.39399999999999,
+      "zoom": 14.0,
+      "bearing": 270.0,
+      "pitch": 55.0
+    },
+    "stickers": [
+      {
+        "placement": {
+          "positionMode": "MAP",
+          "position": {
+            "x": 37.7955,
+            "y": -122.41,
+            "z": 0.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.0
+        },
+        "image": "reng-harness:sticker-pin.png"
+      },
+      {
+        "placement": {
+          "positionMode": "SCREEN",
+          "position": {
+            "x": 48.0,
+            "y": 48.0,
+            "z": 10.0
+          },
+          "rotationMode": "SCREEN",
+          "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scaleMode": "SCREEN",
+          "scale": 1.5
+        },
+        "image": "reng-harness:sticker-f.png"
+      }
+    ],
+    "geometries": [
+      {
+        "topLeft": {
+          "x": 37.801,
+          "y": -122.425,
+          "z": 0.0
+        },
+        "bottomRight": {
+          "x": 37.785,
+          "y": -122.395,
+          "z": 0.0
+        },
+        "shaderPair": {
+          "vertexSource": "#version 300 es\nin vec3 aPosition;\nin vec2 aTexCoord;\nuniform mat4 uModelViewProjection;\nout vec2 vTexCoord;\nvoid main() {\n    vTexCoord = aTexCoord;\n    gl_Position = uModelViewProjection * vec4(aPosition, 1.0);\n}\n",
+          "fragmentSource": "#version 300 es\nprecision highp float;\nin vec2 vTexCoord;\nuniform uint uFrameIndex;\nuniform vec3 uTint;\nout vec4 rengOut;\nvoid main() {\n    vec2 cell = fract(vTexCoord * 8.0);\n    float line = step(0.92, max(cell.x, cell.y));\n    // A scan band that walks north to south with the frame index, so a static geometry is\n    // distinguishable from an animated one at a glance.\n    float band = step(abs(vTexCoord.y - fract(float(uFrameIndex) / 24.0)), 0.03);\n    float alpha = max(line * 0.75, band * 0.55);\n    // The north edge is darker than the south edge, so a v-flip shows as an inverted ramp.\n    vec3 colour = mix(uTint * 0.25, uTint, vTexCoord.y);\n    rengOut = vec4(colour * alpha, alpha);\n}\n"
+        },
+        "uniforms": {
+          "uTint": {
+            "type": "ShaderValue.Vec3",
+            "x": 1.0,
+            "y": 0.35,
+            "z": 0.0
+          }
+        }
+      }
+    ]
+  }
+]

@@ -70,7 +70,19 @@ _FORBIDDEN_DEPENDENCY = re.compile(
 # pattern above still rejects every other library, including any other coroutines artifact, so
 # neither exemption can widen by accident.
 _PERMITTED_NEW_DEPENDENCIES = frozenset({"libs.kotlinx.coroutines.core"})
-_PERMITTED_NEW_TEST_DEPENDENCIES = frozenset({"libs.kotlinx.coroutines.test"})
+# ADR 0042's serialization runtime is the first dependency RenG takes whose types are deliberately
+# **public**: the compiler plugin generates `serializer(): KSerializer<T>` into the published ABI, so
+# `implementation` would put `KSerializer` on the runtime classpath and leave it off the consumer's
+# compile classpath -- a public signature naming a type the consumer cannot see. It is therefore the
+# one coordinate admitted at `api` scope, and the rule stays closed: every other coordinate, present
+# or future, is still refused unless it is `implementation`.
+_PERMITTED_API_DEPENDENCIES = frozenset({"libs.kotlinx.serialization.core"})
+_PERMITTED_NEW_TEST_DEPENDENCIES = frozenset({
+    "libs.kotlinx.coroutines.test",
+    # The round-trip gate needs a concrete format to round-trip *through*; `-core` defines no
+    # encoding. JSON is the corpus's own format, so the gate exercises the bytes the corpus holds.
+    "libs.kotlinx.serialization.json",
+})
 # ADR 0032 adds a third dependency scope, `androidDeviceTest`, in the same shape as the second
 # rather than as a blanket exemption for test source sets: `commonTest` stays policed, and this
 # scope names every coordinate it admits. Its required first call is `kotlin("test")` -- an
@@ -123,30 +135,43 @@ _LIBRARY_CREATED_DATA_CLASSES = (
     ("ResourceReportEntry", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
     ("ResourceFreeResult", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
 )
+# Each value is a tuple of equally-exact accepted `plugins { }` token sequences, in the same shape
+# and for the same reason as _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS: a superseded form stays
+# accepted forever because an ADR-era fixture in tools/tests depends on it. `kmp/build.gradle.kts`
+# holds two -- the pre-ADR-0042 form and the one with the serialization plugin, which is on disk.
 _EXPECTED_PLUGIN_BLOCKS = {
-    "build.gradle.kts": (
+    "build.gradle.kts": ((
         "alias", "(", "libs", ".", "plugins", ".", "kotlin", ".", "multiplatform", ")",
         "apply", "false",
         "alias", "(", "libs", ".", "plugins", ".", "android", ".", "kotlin", ".",
         "multiplatform", ".", "library", ")", "apply", "false",
         "alias", "(", "libs", ".", "plugins", ".", "maven", ".", "publish", ")",
         "apply", "false",
-    ),
-    "kmp/build.gradle.kts": (
+    ),),
+    "kmp/build.gradle.kts": ((
         "alias", "(", "libs", ".", "plugins", ".", "kotlin", ".", "multiplatform", ")",
         "alias", "(", "libs", ".", "plugins", ".", "android", ".", "kotlin", ".",
         "multiplatform", ".", "library", ")",
         "alias", "(", "libs", ".", "plugins", ".", "maven", ".", "publish", ")",
-    ),
-    "settings.gradle.kts": (
+    ), (
+        "alias", "(", "libs", ".", "plugins", ".", "kotlin", ".", "multiplatform", ")",
+        "alias", "(", "libs", ".", "plugins", ".", "android", ".", "kotlin", ".",
+        "multiplatform", ".", "library", ")",
+        "alias", "(", "libs", ".", "plugins", ".", "maven", ".", "publish", ")",
+        "alias", "(", "libs", ".", "plugins", ".", "kotlin", ".", "serialization", ")",
+    )),
+    "settings.gradle.kts": ((
         "id", "(", "org.gradle.toolchains.foojay-resolver-convention", ")",
         "version", "1.0.0",
-    ),
+    ),),
 }
 _PLUGIN_ACCESSORS = (
     ("libs", ".", "plugins", ".", "kotlin", ".", "multiplatform"),
     ("libs", ".", "plugins", ".", "android", ".", "kotlin", ".", "multiplatform", ".", "library"),
     ("libs", ".", "plugins", ".", "maven", ".", "publish"),
+    # ADR 0042. Applied only in `kmp/build.gradle.kts`; the root declares the other three with
+    # `apply false` and has no need to declare one nothing at the root applies.
+    ("libs", ".", "plugins", ".", "kotlin", ".", "serialization"),
 )
 _APPROVED_R2_TEMPLATE_LITERAL = '"s3://${r2Bucket.orNull ?: "r2-publishing-not-configured"}"'
 _APPROVED_R2_TEMPLATE_ASSIGNMENT = f"url = uri({_APPROVED_R2_TEMPLATE_LITERAL})"
@@ -259,8 +284,9 @@ _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS = {
     }),
     # These are SHA-256 over the *token stream* _build_configuration_fingerprint derives, not
     # whole-file digests: comments and whitespace are free, and any token is not. Each of these
-    # two files pins three equally-exact accepted forms -- the pre-Cycle-C original, ADR 0019's
-    # coroutines form, and ADR 0032's device-test form, which is the one currently on disk.
+    # two files pins four equally-exact accepted forms -- the pre-Cycle-C original, ADR 0019's
+    # coroutines form, ADR 0032's device-test form, and ADR 0042's serialization form, which is the
+    # one currently on disk.
     # Every form carries the rentile 0.7.0 bump (see base_versions below, which must move in
     # lockstep with these fingerprints), and the two older forms cannot be recomputed from disk;
     # they are the fixtures in tools/tests/test_check_repository_policy.py.
@@ -268,11 +294,13 @@ _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS = {
         "0f665393f96f3c78621ac757322a742f7737187e81410330434f901e003ea1e6",
         "cdfb80be9c5b2ea5c98ecbe8537a15ec4a0d7fe17a9c3291173fce0c66d20132",
         "14c2e746e14aeccda729881a3005f8708d5c56ade5741081ccca622081b69f57",
+        "e0fa49ba3e177fd8294990e4ae613cb4ad5d75e83b277aef6c7a12a96707a83a",
     }),
     "kmp/build.gradle.kts": frozenset({
         "cb2e7408aea431f014fbb1235b0a1793a39289a4dbf52c331e2f2fda23f236df",
         "386c6936c783eb1004ac0efe0a7954b0e93674d739f407e298e94a7a0763ccc7",
         "3d81ad92a07df321c226e3b796d02b7be85ca332b00f63e04c800d23fc399dfc",
+        "22c1bbba0dd403502accadb914d7bc7e8a6ce7e5cc625f4a3d09a4f75b0e02d0",
     }),
     "settings.gradle.kts": frozenset({
         "875c43c41cd359df0236f99f7cee86b020d168cc6c73f1a424db53a093eeaa31",
@@ -1179,7 +1207,8 @@ def _plugin_policy_token(root: Path, path: Path, tokens: Sequence[_Token]) -> _T
             return tokens[plugin_ranges[0][0]]
     elif (
         len(plugin_ranges) != 1
-        or tuple(token.value for token in tokens[plugin_ranges[0][1]:plugin_ranges[0][2]]) != expected
+        or tuple(token.value for token in tokens[plugin_ranges[0][1]:plugin_ranges[0][2]])
+        not in expected
     ):
         return (
             tokens[plugin_ranges[0][0]] if plugin_ranges
@@ -1246,21 +1275,33 @@ def _dependency_name_policy_token(
             continue
         if token.value == "libs":
             plugin_accessor = _plugin_accessor_at(tokens, index)
+            # Each entry pins the call kind alongside the coordinate. ADR 0042's serialization
+            # runtime is the sole `api` entry; everything else stays `implementation`, so widening
+            # for it cannot widen for anything else.
             permitted_libs_dependency_coordinates = (
-                ("libs", ".", "rentile", ".", "kmp"),
-                *_permitted_dependency_tokens(_PERMITTED_NEW_DEPENDENCIES),
-                *_permitted_dependency_tokens(_PERMITTED_NEW_TEST_DEPENDENCIES),
-                *_permitted_dependency_tokens(_PERMITTED_DEVICE_TEST_DEPENDENCIES),
+                ("implementation", ("libs", ".", "rentile", ".", "kmp")),
+                *(
+                    ("implementation", coordinate)
+                    for coordinate in (
+                        *_permitted_dependency_tokens(_PERMITTED_NEW_DEPENDENCIES),
+                        *_permitted_dependency_tokens(_PERMITTED_NEW_TEST_DEPENDENCIES),
+                        *_permitted_dependency_tokens(_PERMITTED_DEVICE_TEST_DEPENDENCIES),
+                    )
+                ),
+                *(
+                    ("api", coordinate)
+                    for coordinate in _permitted_dependency_tokens(_PERMITTED_API_DEPENDENCIES)
+                ),
             )
             permitted_libs_dependency = relative == "kmp/build.gradle.kts" and any(
                 index >= 2
                 and index - 2 in allowed_call_indices
-                and tokens[index - 2].value == "implementation"
+                and tokens[index - 2].value == call_kind
                 and tokens[index - 1].value == "("
                 and _token_sequence_at(tokens, index, coordinate_tokens)
                 and index + len(coordinate_tokens) < len(tokens)
                 and tokens[index + len(coordinate_tokens)].value == ")"
-                for coordinate_tokens in permitted_libs_dependency_coordinates
+                for call_kind, coordinate_tokens in permitted_libs_dependency_coordinates
             )
             if plugin_accessor is None and not permitted_libs_dependency:
                 return token
@@ -1642,17 +1683,17 @@ _CYCLE_B_DEPENDENCY_MESSAGE = (
 def _dependency_call_shape_allowed(
     calls: Sequence[tuple[str, tuple[str, ...]]],
     required: tuple[str, ...],
-    permitted_extras: Sequence[tuple[str, ...]],
+    permitted_extras: Sequence[tuple[str, tuple[str, ...]]],
 ) -> bool:
     """A source set's dependency calls are allowed when the first call is exactly the required
-    coordinate, and every call after it is, in order, one of the permitted extra coordinates
-    (ADR 0019's coroutines dependency) with no repeats and nothing else."""
+    coordinate at `implementation` scope, and every call after it is, in order, one of the permitted
+    extras -- each of which pins its **call kind** as well as its coordinate, so ADR 0042's
+    `api(libs.kotlinx.serialization.core)` cannot be used to smuggle any other coordinate to `api`."""
     if not calls or calls[0] != ("implementation", required):
         return False
     extras = calls[1:]
     return len(extras) <= len(permitted_extras) and all(
-        call == ("implementation", extra)
-        for call, extra in zip(extras, permitted_extras)
+        call == expected for call, expected in zip(extras, permitted_extras)
     )
 
 
@@ -1679,9 +1720,23 @@ def check_dependencies(root: Path) -> list[Violation]:
     expected_main = ("libs", ".", "rentile", ".", "kmp")
     expected_test = ("kotlin", "(", "test", ")")
     expected_device_test = expected_test
-    permitted_main = _permitted_dependency_tokens(_PERMITTED_NEW_DEPENDENCIES)
+    permitted_main_implementation = _permitted_dependency_tokens(_PERMITTED_NEW_DEPENDENCIES)
+    permitted_main_api = _permitted_dependency_tokens(_PERMITTED_API_DEPENDENCIES)
+    permitted_main = permitted_main_implementation + permitted_main_api
     permitted_test = _permitted_dependency_tokens(_PERMITTED_NEW_TEST_DEPENDENCIES)
     permitted_device_test = _permitted_dependency_tokens(_PERMITTED_DEVICE_TEST_DEPENDENCIES)
+    # The shape check pins the call kind of every extra, in the order the build file must list them:
+    # ADR 0019's coroutines at `implementation`, then ADR 0042's serialization runtime at `api`.
+    permitted_main_calls = (
+        *(("implementation", coordinate) for coordinate in permitted_main_implementation),
+        *(("api", coordinate) for coordinate in permitted_main_api),
+    )
+    permitted_test_calls = tuple(
+        ("implementation", coordinate) for coordinate in permitted_test
+    )
+    permitted_device_test_calls = tuple(
+        ("implementation", coordinate) for coordinate in permitted_device_test
+    )
     main_calls = [
         (token.value, tuple(item.value for item in arguments))
         for index, token, arguments in dependency_calls
@@ -1697,15 +1752,15 @@ def check_dependencies(root: Path) -> list[Violation]:
         for index, token, arguments in dependency_calls
         if _inside_ranges(index, device_test_ranges)
     ]
-    main_allowed = _dependency_call_shape_allowed(main_calls, expected_main, permitted_main)
-    test_allowed = _dependency_call_shape_allowed(test_calls, expected_test, permitted_test)
+    main_allowed = _dependency_call_shape_allowed(main_calls, expected_main, permitted_main_calls)
+    test_allowed = _dependency_call_shape_allowed(test_calls, expected_test, permitted_test_calls)
     # ADR 0032's scope is optional, unlike the other two: the pre-Cycle-H build file has no
     # `androidDeviceTest` block at all, and a repository that drops the device gate must still
     # pass. What it must never be is *unchecked* -- a block that exists is held to the same exact
     # shape as `commonMain` and `commonTest`, and the totals below still refuse a `dependencies {}`
     # call in any fourth place.
     device_test_allowed = not device_test_calls or _dependency_call_shape_allowed(
-        device_test_calls, expected_device_test, permitted_device_test,
+        device_test_calls, expected_device_test, permitted_device_test_calls,
     )
     allowed = (
         len(common_main_ranges) == 1
@@ -1718,14 +1773,22 @@ def check_dependencies(root: Path) -> list[Violation]:
         == len(main_calls) + len(test_calls) + len(device_test_calls)
     )
 
+    # `api` is admitted for exactly the coordinates in `_PERMITTED_API_DEPENDENCIES`, in `commonMain`
+    # only. Every other call in every scope must still be `implementation`.
     allowed_call_indices = frozenset(
         index
         for index, token, arguments in dependency_calls
-        if token.value == "implementation"
+        if (
+            token.value == "api"
+            and _inside_ranges(index, common_main_ranges)
+            and tuple(item.value for item in arguments) in permitted_main_api
+        )
+        or token.value == "implementation"
         and (
             (
                 _inside_ranges(index, common_main_ranges)
-                and tuple(item.value for item in arguments) in (expected_main, *permitted_main)
+                and tuple(item.value for item in arguments)
+                in (expected_main, *permitted_main_implementation)
             )
             or (
                 _inside_ranges(index, common_test_ranges)
@@ -1761,7 +1824,14 @@ def check_dependencies(root: Path) -> list[Violation]:
     kmp_indirection = _dependency_indirection_token(
         tokens, allowed_call_indices, allowed_dependency_markers,
     )
-    permitted_dependency_runs = permitted_main + permitted_test + permitted_device_test
+    # `_PLUGIN_ACCESSORS` joins the permitted runs because ADR 0042's is the first plugin whose
+    # accessor contains a word `_FORBIDDEN_DEPENDENCY` rejects -- `multiplatform`, `publish` and
+    # `android` never did. An accessor is pinned exactly as tightly as a coordinate: it must appear
+    # in `_PLUGIN_ACCESSORS`, inside an `alias(...)`, and in the exact token sequence
+    # `_EXPECTED_PLUGIN_BLOCKS` fixes for the file, so admitting it here widens nothing else.
+    permitted_dependency_runs = (
+        permitted_main + permitted_test + permitted_device_test + _PLUGIN_ACCESSORS
+    )
     forbidden_token = None
     for index, token in enumerate(tokens):
         arguments = _call_arguments(tokens, index)
@@ -1928,19 +1998,40 @@ def check_dependencies(root: Path) -> list[Violation]:
                 "version": {"ref": "androidxTestRunner"},
             },
         }
+        # ADR 0042's serialization runtime is a fourth, equally-exact accepted catalog shape. It
+        # carries no `[plugins]` version of its own: the serialization plugin ships with the
+        # compiler, so its entry refs `kotlin` and a version row for it would be a second source of
+        # truth that could disagree.
+        permitted_serialization_catalog_libraries = {
+            "kotlinx-serialization-core": {
+                "module": "org.jetbrains.kotlinx:kotlinx-serialization-core",
+                "version": {"ref": "kotlinxSerialization"},
+            },
+            "kotlinx-serialization-json": {
+                "module": "org.jetbrains.kotlinx:kotlinx-serialization-json",
+                "version": {"ref": "kotlinxSerialization"},
+            },
+        }
         coroutines_versions = base_versions | {"kotlinxCoroutines": "1.11.0"}
+        device_test_versions = coroutines_versions | {"androidxTestRunner": "1.7.0"}
         exact = exact and versions in (
             base_versions,
             coroutines_versions,
-            coroutines_versions | {"androidxTestRunner": "1.7.0"},
+            device_test_versions,
+            device_test_versions | {"kotlinxSerialization": "1.9.0"},
         )
         coroutines_libraries = base_libraries | permitted_catalog_libraries
+        device_test_libraries = coroutines_libraries | permitted_device_test_catalog_libraries
         exact = exact and libraries in (
             base_libraries,
             coroutines_libraries,
-            coroutines_libraries | permitted_device_test_catalog_libraries,
+            device_test_libraries,
+            device_test_libraries | permitted_serialization_catalog_libraries,
         )
-        exact = exact and plugins == {
+        # `[plugins]` was a single accepted shape until ADR 0042; it now accepts two, the original
+        # and the original plus the serialization plugin. The original stays accepted forever
+        # because the ADR-era fixtures depend on it, exactly as every superseded library shape does.
+        base_plugins = {
             "kotlin-multiplatform": {
                 "id": "org.jetbrains.kotlin.multiplatform",
                 "version": {"ref": "kotlin"},
@@ -1954,6 +2045,15 @@ def check_dependencies(root: Path) -> list[Violation]:
                 "version": {"ref": "mavenPublish"},
             },
         }
+        exact = exact and plugins in (
+            base_plugins,
+            base_plugins | {
+                "kotlin-serialization": {
+                    "id": "org.jetbrains.kotlin.plugin.serialization",
+                    "version": {"ref": "kotlin"},
+                },
+            },
+        )
         # The forbidden-word scan below runs over the *raw* text (it has to, to catch a rogue
         # table dict-equality above never even looks at, such as a smuggled [bundles] section),
         # so it would flag the two permitted coroutines entries' own key/value text purely
@@ -1968,13 +2068,27 @@ def check_dependencies(root: Path) -> list[Violation]:
         # masking it would only shrink what the scan covers.
         forbidden_scan_text = _mask_hash_comments(catalog_text)
         scan_tokens = _toml_tokens(forbidden_scan_text)
+        # ADR 0042's three entries are masked on the same terms as the coroutines ones: only when
+        # the entry the dict-equality above already confirmed is *exactly* the expected one, located
+        # by bare-token equality. `kotlinxSerialization` in `[versions]` needs no mask -- the word
+        # there is not hyphen-bounded, so the raw scan never matched it in the first place.
         permitted_spans = [
             span
-            for name, expected_entry in permitted_catalog_libraries.items()
+            for name, expected_entry in (
+                *permitted_catalog_libraries.items(),
+                *permitted_serialization_catalog_libraries.items(),
+            )
             if libraries.get(name) == expected_entry
             for span in (_toml_entry_span(scan_tokens, name),)
             if span is not None
         ]
+        if plugins.get("kotlin-serialization") == {
+            "id": "org.jetbrains.kotlin.plugin.serialization",
+            "version": {"ref": "kotlin"},
+        }:
+            plugin_span = _toml_entry_span(scan_tokens, "kotlin-serialization")
+            if plugin_span is not None:
+                permitted_spans.append(plugin_span)
         for start, end in permitted_spans:
             forbidden_scan_text = (
                 forbidden_scan_text[:start] + " " * (end - start) + forbidden_scan_text[end:]

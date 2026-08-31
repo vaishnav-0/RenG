@@ -258,9 +258,31 @@ for r in ('build.gradle.kts','gradle/libs.versions.toml','kmp/build.gradle.kts',
 ```
 
 **The trap that command does not solve:** `gradle/libs.versions.toml` and `kmp/build.gradle.kts` each pin
-**two** accepted fingerprints — the current form and the pre-Cycle-C coroutines-free form. Only one can be
-recomputed from disk; the other must be reconstructed by stripping the coroutines lines first. Both carry
-the Rentile version, so both move on every bump.
+**four** accepted fingerprints — the pre-Cycle-C original, ADR 0019's coroutines form, ADR 0032's
+device-test form, and ADR 0042's serialization form, which is the one on disk. Only the last can be
+recomputed by the command above; each older one must be reconstructed by stripping the later additions
+first, and each is the fixture a corresponding test in `tools/tests` depends on. All four carry the Rentile
+version, so **all four move on every bump** — this said "two" through two cycles that had already made it
+three, so count them in `check_repository_policy.py` rather than trusting this sentence.
+
+**`_EXPECTED_PLUGIN_BLOCKS` now keeps history the same way**, as a tuple of accepted `plugins { }` token
+sequences per file rather than one. ADR 0042 forced that: adding the serialization plugin to the single
+pinned sequence invalidated the form twenty-one fixtures build.
+
+**A fifth and sixth refusal point exist that the fingerprint story does not mention.**
+`_EXPECTED_PLUGIN_BLOCKS` pins the exact token sequence of every `plugins { }` block and `_PLUGIN_ACCESSORS`
+lists the permitted `libs.plugins.*` accessors, so a new plugin moves both. And `_FORBIDDEN_DEPENDENCY`
+rejects `wire`, `serialization`, `skiko`, `ktor`, `corpus`, `coroutines`, `crypto` and `hash` **by name**:
+a coordinate or accessor containing one of those words is refused wherever it appears, which is why ADR
+0042's accessor had to be admitted to the token scan explicitly.
+
+**One coordinate is admitted at `api` scope and exactly one:** ADR 0042's
+`kotlinx-serialization-core`, because the compiler plugin writes `serializer(): KSerializer<T>` into the
+published ABI and `implementation` would leave that type off every consumer's compile classpath. Three
+independent places pin the call kind per coordinate — `_dependency_call_shape_allowed`,
+`allowed_call_indices`, and `permitted_libs_dependency_coordinates` inside `_dependency_name_policy_token`.
+Breaking any one alone leaves the other two refusing, so a test for this rule only flips when all three are
+broken together.
 
 ## E-basemap, as released in `0.3.0`
 

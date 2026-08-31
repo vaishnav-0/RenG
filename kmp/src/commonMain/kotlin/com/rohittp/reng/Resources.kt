@@ -2,11 +2,15 @@ package com.rohittp.reng
 
 import com.rohittp.reng.internal.requireUnicodeScalars
 
+@kotlinx.serialization.Serializable
 public enum class AnchoringMode {
+    @kotlinx.serialization.SerialName("MAP")
     MAP,
+    @kotlinx.serialization.SerialName("SCREEN")
     SCREEN,
 }
 
+@kotlinx.serialization.Serializable(with = ResourceLocatorSerializer::class)
 public class ResourceLocator(value: String) {
     public val value: String
 

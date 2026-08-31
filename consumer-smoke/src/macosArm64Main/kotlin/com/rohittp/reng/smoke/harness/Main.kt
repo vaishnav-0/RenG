@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalForeignApi::class)
+
 package com.rohittp.reng.smoke.harness
 
 import com.rohittp.reng.Diagnostic
@@ -10,6 +12,9 @@ import com.rohittp.reng.Renderer
 import com.rohittp.reng.RendererConfiguration
 import com.rohittp.reng.ResourceLocator
 import com.rohittp.reng.createRenderer
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.toKString
+import platform.posix.getenv
 import kotlin.concurrent.AtomicReference
 import kotlin.system.exitProcess
 import kotlin.time.TimeSource
@@ -22,9 +27,6 @@ import kotlin.time.TimeSource
  * capture framebuffer, reads pixels back, and writes files; RenG only draws. Encoding is
  * `ffmpeg`'s, printed as a command at the end rather than performed here.
  */
-private const val OUTPUT_WIDTH: Int = 960
-private const val OUTPUT_HEIGHT: Int = 540
-
 /**
  * What the capture target holds before RenG draws into it. A saturated colour nothing in a map
  * style would produce, so "RenG drew nothing here" reads as itself rather than as a dark basemap.
@@ -34,8 +36,66 @@ private val UNDRAWN: IntArray = intArrayOf(0, 96, 32, 255)
 fun main(arguments: Array<String>) {
     val options = parseArguments(arguments) ?: exitProcess(2)
 
+    if (options.emitCorpusTo != null) {
+        corpusPlans().forEach { (name, plans) ->
+            val path = "${options.emitCorpusTo}/$name.json"
+            writeTextFile(path, encodePlans(plans))
+            println("  $name: ${plans.size} plan(s) -> $path")
+        }
+        return
+    }
+
+    if (options.emitPlansTo != null) {
+        // With `--plans`, this decodes that file and writes it back out, which is an idempotence
+        // check anyone can run: `--emit-plans` a corpus file onto itself and a clean `git diff` says
+        // the file survives a full decode/encode cycle. Without `--plans` it emits the built-in
+        // storyboard, which is how the first corpus file was authored.
+        val source = options.plansPath.takeIf { it.isNotBlank() }
+        val plans = if (source == null) {
+            storyboardPlans()
+        } else {
+            try {
+                decodePlans(readFileOrNull(source) ?: error("no plan file at $source"))
+            } catch (failure: IllegalArgumentException) {
+                println("plans: ${failure.message}")
+                exitProcess(2)
+            }
+        }
+        writeTextFile(options.emitPlansTo, encodePlans(plans))
+        println("wrote ${plans.size} plans to ${options.emitPlansTo}" +
+            if (source == null) " from the built-in storyboard" else " from $source")
+        return
+    }
+
+    val config = try {
+        decodeConfig(readFileOrNull(options.configPath) ?: error("no config at ${options.configPath}"))
+    } catch (failure: IllegalArgumentException) {
+        println("config: ${failure.message}")
+        exitProcess(2)
+    }
+
+    val plans = try {
+        decodePlans(readFileOrNull(options.plansPath) ?: error("no plan file at ${options.plansPath}"))
+    } catch (failure: IllegalArgumentException) {
+        println("plans: ${failure.message}")
+        exitProcess(2)
+    }
+
+    val styleUrl = try {
+        resolveStyleUrl(
+            styleId = config.styleId,
+            localProperties = readLocalProperty(readFileOrNull(options.localPropertiesPath), STYLE_BASE_KEY),
+            environment = getenv(STYLE_BASE_ENVIRONMENT_KEY)?.toKString(),
+        )
+    } catch (failure: IllegalArgumentException) {
+        println(failure.message)
+        exitProcess(2)
+    }
+
     val context = CglCoreProfileContext.create()
     println("Render Context: " + describeCurrentContext())
+    println("config ${config.name}: style ${config.styleId}, ${config.width}x${config.height}, " +
+        "terrainShading=${config.terrainShading}, ${plans.size} plans from ${options.plansPath}")
 
     val transport = NsUrlTransport(embeddedImages(), options.verbose)
     val store = MemoryStore()
@@ -44,11 +104,13 @@ fun main(arguments: Array<String>) {
     val renderer = try {
         createRenderer(
             RendererConfiguration(
-                outputPixelSize = OutputPixelSize(OUTPUT_WIDTH, OUTPUT_HEIGHT),
+                outputPixelSize = OutputPixelSize(config.width, config.height),
                 transport = transport,
                 store = store,
-                basemapStyle = ResourceLocator(options.styleUrl),
+                basemapStyle = ResourceLocator(styleUrl),
+                maximumBasemapTileInstances = config.maximumBasemapTileInstances,
                 diagnosticSink = diagnostics,
+                terrainShading = config.terrainShading,
             ),
         )
     } catch (failure: RenGException) {
@@ -57,29 +119,19 @@ fun main(arguments: Array<String>) {
         exitProcess(1)
     }
 
-    val target = CaptureTarget.create(OUTPUT_WIDTH, OUTPUT_HEIGHT)
+    val target = CaptureTarget.create(config.width, config.height)
     val started = TimeSource.Monotonic.markNow()
     var written = 0
     var failed = 0
 
     try {
-        framePlans(
-            groundless = options.groundless,
-            modelUrl = options.modelUrl,
-            labelless = options.labelless,
-            globe = options.globe,
-            baseZoom = options.baseZoom ?: DEFAULT_BASE_ZOOM,
-            zoomSpan = options.zoomSpan ?: DEFAULT_ZOOM_SPAN,
-            staticCamera = options.staticCamera,
-        )
-            .take(options.frameCount)
-            .forEach { plan ->
-                if (renderOneFrame(renderer, target, plan, options.outputDirectory)) {
-                    written += 1
-                } else {
-                    failed += 1
-                }
+        plans.forEach { plan ->
+            if (renderOneFrame(renderer, target, plan, options.outputDirectory)) {
+                written += 1
+            } else {
+                failed += 1
             }
+        }
     } finally {
         target.destroy()
         renderer.close()
@@ -176,57 +228,81 @@ private fun describeFrame(pixels: ByteArray): String {
 }
 
 private class HarnessOptions(
-    val styleUrl: String,
-    val modelUrl: String?,
+    val configPath: String,
+    val plansPath: String,
     val outputDirectory: String,
-    val frameCount: Int,
-    val groundless: Boolean,
-    val labelless: Boolean,
-    val globe: Boolean,
-    val baseZoom: Double?,
-    val zoomSpan: Double?,
-    val staticCamera: Boolean,
+    val localPropertiesPath: String,
+    val emitPlansTo: String?,
+    val emitCorpusTo: String?,
     val verbose: Boolean,
 )
 
+/**
+ * Three paths and a flag, and **an unrecognised argument is a hard failure**.
+ *
+ * The parser this replaced advanced `index += 2` unconditionally, so it read only even positions:
+ * a valueless flag ahead of a value option hid that option entirely, and silently, because an
+ * unmatched argument was merely skipped. `--globe` was emitted before `--zoom`, so every globe run
+ * ignored `--zoom` and rendered at the storyboard's default 11.5 -- a zoom where the sphere is
+ * larger than the viewport and a correct globe is indistinguishable from a flat map. The frames
+ * looked like a renderer defect and were investigated as one, for hours.
+ *
+ * Two things here make that class of failure impossible rather than unlikely. The flag pile is gone,
+ * so there is nothing left for a value to hide behind: what used to be nine flags is now a config
+ * file and a plan file. And anything this parser does not recognise stops the run, so a
+ * misremembered or misspelled argument can never again be read as "the default was wanted".
+ */
 private fun parseArguments(arguments: Array<String>): HarnessOptions? {
-    var styleUrl = ""
-    var modelUrl: String? = null
+    var configPath = ""
+    var plansPath = ""
     var outputDirectory = ""
-    var frameCount = FRAME_COUNT
-    val groundless = arguments.contains("--no-basemap")
-    val labelless = arguments.contains("--no-labels")
-    val globe = arguments.contains("--globe")
-    val staticCamera = arguments.contains("--static-camera")
-    var baseZoom: Double? = null
-    var zoomSpan: Double? = null
-    val verbose = arguments.contains("--verbose")
-    // Advance by one for a valueless flag and by two for an option that consumed its value. A fixed
-    // `index += 2` reads only even positions, so a single flag ahead of a value option hides that
-    // option entirely -- and silently, because an unmatched argument is not an error here. That is
-    // not hypothetical: `--globe` is emitted before `--zoom`, so every globe run ignored `--zoom` and
-    // rendered at the storyboard's default 11.5, where the sphere is larger than the viewport and a
-    // correct globe is indistinguishable from a flat map. The frames looked like a renderer defect.
+    var localPropertiesPath = "local.properties"
+    var emitPlansTo: String? = null
+    var emitCorpusTo: String? = null
+    var verbose = false
+
     var index = 0
     while (index < arguments.size) {
+        val argument = arguments[index]
         val value = arguments.getOrNull(index + 1)
-        val consumedValue = when (arguments[index]) {
-            "--style" -> { styleUrl = value ?: styleUrl; true }
-            "--model" -> { modelUrl = value?.takeIf(String::isNotBlank) ?: modelUrl; true }
-            "--out" -> { outputDirectory = value ?: outputDirectory; true }
-            "--frames" -> { frameCount = value?.toIntOrNull() ?: frameCount; true }
-            "--zoom" -> { baseZoom = value?.toDoubleOrNull() ?: baseZoom; true }
-            "--zoom-span" -> { zoomSpan = value?.toDoubleOrNull() ?: zoomSpan; true }
-            else -> false
+        fun requireValue(): String? {
+            if (value == null || value.startsWith("--")) {
+                println("$argument needs a value.")
+                return null
+            }
+            return value
         }
-        index += if (consumedValue) 2 else 1
+        when (argument) {
+            "--verbose" -> { verbose = true; index += 1 }
+            "--config" -> { configPath = requireValue() ?: return null; index += 2 }
+            "--plans" -> { plansPath = requireValue() ?: return null; index += 2 }
+            "--out" -> { outputDirectory = requireValue() ?: return null; index += 2 }
+            "--local-properties" -> { localPropertiesPath = requireValue() ?: return null; index += 2 }
+            "--emit-plans" -> { emitPlansTo = requireValue() ?: return null; index += 2 }
+            "--emit-corpus" -> { emitCorpusTo = requireValue() ?: return null; index += 2 }
+            else -> {
+                println(
+                    "Unrecognised argument `$argument`.\n" +
+                        "  --config <path>  --plans <path>  --out <directory>\n" +
+                        "  --local-properties <path>  --emit-plans <path>  " +
+                        "--emit-corpus <directory>  --verbose",
+                )
+                return null
+            }
+        }
     }
-    if (styleUrl.isBlank()) {
-        println(
-            "No style url. The owner's styles carry api keys, so none is checked in.\n" +
-                "  ./gradlew -p consumer-smoke runHarness -PstyleUrl=<style url> [-PmodelUrl=<glb url>]\n" +
-                "or set RENG_HARNESS_STYLE_URL in the environment.",
+
+    if (emitPlansTo != null || emitCorpusTo != null) {
+        return HarnessOptions(
+            "", plansPath, "", localPropertiesPath, emitPlansTo, emitCorpusTo, verbose,
         )
+    }
+    if (configPath.isBlank()) {
+        println("No config. Pass --config <path to a harness config json>.")
+        return null
+    }
+    if (plansPath.isBlank()) {
+        println("No plan file. Pass --plans <path to a json array of frame plans>.")
         return null
     }
     if (outputDirectory.isBlank()) {
@@ -234,8 +310,7 @@ private fun parseArguments(arguments: Array<String>): HarnessOptions? {
         return null
     }
     return HarnessOptions(
-        styleUrl, modelUrl, outputDirectory, frameCount, groundless, labelless, globe, baseZoom,
-        zoomSpan, staticCamera, verbose,
+        configPath, plansPath, outputDirectory, localPropertiesPath, null, null, verbose,
     )
 }
 
