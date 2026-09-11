@@ -14,6 +14,7 @@ import com.rohittp.reng.internal.failureContextDiagnostic
 import com.rohittp.reng.internal.firewall.AcquiredDemTile
 import com.rohittp.reng.internal.firewall.AcquiredLabelCandidates
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
+import com.rohittp.reng.internal.firewall.BasemapTilePixels
 import com.rohittp.reng.internal.firewall.ProductionRentilePrivateKeyResolver
 import com.rohittp.reng.internal.firewall.RenderedBasemapTile
 import com.rohittp.reng.internal.firewall.SpriteAtlasManifest
@@ -93,6 +94,7 @@ import com.rohittp.reng.internal.gl.uploadDemTexture
 import com.rohittp.reng.internal.gl.uploadGlyphAtlas
 import com.rohittp.reng.internal.gl.uploadModelPrimitive
 import com.rohittp.reng.internal.gl.uploadSpriteAtlas
+import com.rohittp.reng.internal.gl.uploadPremultipliedTexture
 import com.rohittp.reng.internal.gl.uploadTexture
 import com.rohittp.reng.internal.identity.CanonicalIdentityRegistry
 import com.rohittp.reng.internal.identity.EncodedFramePlan
@@ -477,11 +479,12 @@ internal class RenGPreparedFrame(
      * tile share one entry, one engine render and one later texture upload. Empty whenever the frame
      * draws no basemap, no style is configured, or the frame selected no tile.
      *
-     * The bytes are encoded PNG, exactly as `BasemapRasterizer.render` produced them. They are decoded
-     * and uploaded in [RenGRenderer.performDraw] rather than here, because a tile whose GL texture is
-     * still resident from an earlier frame must cost neither: `prepare()` has no render context, and
-     * decoding every tile of every frame unconditionally is precisely the per-frame cliff the resident
-     * texture budget exists to avoid.
+     * The bytes are either the engine's PNG or its already-premultiplied pixels, whichever ADR 0044's
+     * budget admitted when this frame was prepared. Either way they are uploaded in
+     * [RenGRenderer.performDraw] rather than here, because a tile whose GL texture is still resident
+     * from an earlier frame must cost nothing: `prepare()` has no render context, and touching every
+     * tile of every frame unconditionally is precisely the per-frame cliff the resident texture budget
+     * exists to avoid.
      */
     basemapTiles: List<RenderedBasemapTile>,
     /**
@@ -552,6 +555,20 @@ internal class RenGPreparedFrame(
     internal val groundInstances: List<PreparedGroundInstance> get() = ArrayList(groundInstanceSnapshot)
     internal val mapOrder: List<DrawnThingReference> get() = ArrayList(mapOrderSnapshot)
     internal val screenOrder: List<DrawnThingReference> get() = ArrayList(screenOrderSnapshot)
+
+    /**
+     * How many bytes of raw, not-yet-uploaded tile pixels this frame holds (ADR 0044); zero for a
+     * frame whose tiles are encoded.
+     *
+     * Derived from the tiles rather than passed in beside them, so the figure the renderer subtracts
+     * at [RenGRenderer.closePreparedFrame] cannot disagree with what this frame actually carries.
+     */
+    internal val rawTileBytes: Long = basemapTileSnapshot.sumOf { tile ->
+        when (val pixels = tile.pixels) {
+            is BasemapTilePixels.Raw -> pixels.rgba.size.toLong()
+            is BasemapTilePixels.Encoded -> 0L
+        }
+    }
 
     internal var closed: Boolean = false
         private set
@@ -953,6 +970,16 @@ internal class RenGRenderer(
     private var basemapWarningEmitted: Boolean = false
 
     /**
+     * Raw tile pixels held by every open Prepared Frame, in bytes (ADR 0044).
+     *
+     * Raised when a preparation takes `renderRaw`, lowered by exactly the closing frame's own
+     * [RenGPreparedFrame.rawTileBytes]. A plain `var` because it is touched only where every other
+     * piece of this class's mutable state is: inside a preparation, which `preparationMutex` admits
+     * one of at a time, and at [closePreparedFrame], which runs on the owning thread (ADR 0015).
+     */
+    private var outstandingRawTileBytes: Long = 0L
+
+    /**
      * The compiled basemap style of the **most recently prepared frame**, or `null` when that frame drew
      * neither the basemap nor its labels (or when no preparation has succeeded yet). Since E-labels task
      * 8b a `drawBasemap = false, drawLabels = true` frame holds its style here too: labels come from the
@@ -1248,7 +1275,7 @@ internal class RenGRenderer(
             previousSelectedLod = planned.spatialPlan.lodObservation.selectedLod
             previousLabelFade = labelFade.nextState
 
-            return RenGPreparedFrame(
+            val prepared = RenGPreparedFrame(
                 owner = this,
                 frameIndex = plan.frameIndex,
                 camera = plan.camera,
@@ -1266,6 +1293,11 @@ internal class RenGRenderer(
                 mapOrder = planned.spatialPlan.mapEntries.map { it.reference },
                 screenOrder = planned.spatialPlan.screenEntries.map { it.reference },
             )
+            // Counted once the frame exists, never at the render call: a preparation that threw
+            // after rendering its tiles leaves nothing outstanding for a close that never comes
+            // (ADR 0044).
+            outstandingRawTileBytes += prepared.rawTileBytes
+            return prepared
         } finally {
             preparationMutex.unlock()
         }
@@ -1913,8 +1945,26 @@ internal class RenGRenderer(
         // The batch owns engine-side resources and is closed as soon as the pixels are in hand: nothing
         // downstream of here reads it, because rendering is where a PreparedBatch's whole purpose ends.
         return basemapEngineHost.prepareTiles(style, canonicalTiles).use { prepared ->
-            basemapEngineHost.renderTiles(prepared)
+            basemapEngineHost.renderTiles(prepared, asRawPixels = rawTilesFit(prepared.tiles.size))
         }
+    }
+
+    /**
+     * Whether [tileCount] tiles of raw pixels still fit under
+     * [ResourceLimits.maximumInFlightRawBasemapTileBytes], counting what open Prepared Frames already
+     * hold (ADR 0044).
+     *
+     * The estimate is exact rather than a guess: Rentile renders square tiles at the configured
+     * output size, so a tile is `size * size * 4` bytes and the whole batch is that times its tile
+     * count, all of it known before the render call. Answering `false` costs the frame an encode and
+     * a decode -- the behaviour of every release before ADR 0044 -- and never fails it.
+     */
+    private fun rawTilesFit(tileCount: Int): Boolean {
+        val side = basemapEngineHost.tileOutputSizePixels.toLong()
+        val perTile = side * side * RGBA_BYTES_PER_PIXEL
+        val requested = perTile * tileCount.toLong()
+        return outstandingRawTileBytes + requested <=
+            configuration.resourceLimits.maximumInFlightRawBasemapTileBytes
     }
 
     /**
@@ -2574,6 +2624,15 @@ internal class RenGRenderer(
     }
 
     /**
+     * One freshly uploaded ground texture and the dimensions it was uploaded at.
+     *
+     * The dimensions travel with the name because the two pixel forms learn them differently -- a
+     * PNG only once decoded, raw pixels from the engine's own `widthPx`/`heightPx` -- and the GPU
+     * byte figure the registry is charged must be the uploaded texture's, not either input's.
+     */
+    private class UploadedGroundTile(val name: Int, val widthPx: Int, val heightPx: Int)
+
+    /**
      * Turns this frame's ground instances into drawable tiles, decoding and uploading only what is not
      * already on the GPU.
      *
@@ -2631,22 +2690,45 @@ internal class RenGRenderer(
                 val rendered = requireNotNull(renderedByKey[key]) {
                     "prepare() already proved every ground instance names a rendered tile"
                 }
-                val image = when (
-                    val decoded = decodePng(
-                        rendered.pngBytes,
-                        configuration.resourceLimits.maximumDecodedImageBytes,
+                // Exhaustive, with no `else`: a third pixel form must fail to compile here rather
+                // than reach a driver as an unhandled tile (ADR 0044).
+                val uploaded = when (val pixels = rendered.pixels) {
+                    is BasemapTilePixels.Encoded -> {
+                        val image = when (
+                            val decoded = decodePng(
+                                pixels.pngBytes,
+                                configuration.resourceLimits.maximumDecodedImageBytes,
+                            )
+                        ) {
+                            is PngDecodeResult.Success -> decoded.image
+                            else -> return GroundTilesResult.Failed(basemapTileDecodeFailure(key))
+                        }
+                        UploadedGroundTile(
+                            name = uploadTexture(binding, image, TextureContent.IMAGE),
+                            widthPx = image.width,
+                            heightPx = image.height,
+                        )
+                    }
+                    // `uploadPremultipliedTexture`, never `uploadTexture`: these bytes are already
+                    // premultiplied and the other entry point would do it twice.
+                    is BasemapTilePixels.Raw -> UploadedGroundTile(
+                        name = uploadPremultipliedTexture(
+                            binding,
+                            pixels.rgba,
+                            pixels.widthPx,
+                            pixels.heightPx,
+                        ),
+                        widthPx = pixels.widthPx,
+                        heightPx = pixels.heightPx,
                     )
-                ) {
-                    is PngDecodeResult.Success -> decoded.image
-                    else -> return GroundTilesResult.Failed(basemapTileDecodeFailure(key))
                 }
-                val name = uploadTexture(binding, image, TextureContent.IMAGE)
                 groundLeases += glObjectRegistry.registerTexture(
                     key = key,
-                    handle = GlObjectHandle(GlObjectType.TEXTURE, name),
-                    byteSize = image.width.toLong() * image.height.toLong() * RGBA_BYTES_PER_PIXEL,
+                    handle = GlObjectHandle(GlObjectType.TEXTURE, uploaded.name),
+                    byteSize = uploaded.widthPx.toLong() * uploaded.heightPx.toLong() *
+                        RGBA_BYTES_PER_PIXEL,
                 )
-                name
+                uploaded.name
             }
             texturesByKey[key] = texture
             tiles += SceneGroundTile(
@@ -2770,6 +2852,12 @@ internal class RenGRenderer(
         val fact = if (frame.closed) PreparedFrameFact.OwnedClosed else PreparedFrameFact.OwnedOpen
         val outcome = driver.run(RendererLifecycleOperation.ClosePreparedFrame(fact)) { operation ->
             if (operation is RendererLifecycleOperation.ClosePreparedFrame) {
+                // Inside the transition, and only on the open-to-closed one: `close()` is documented
+                // idempotent, so a second call arrives with `fact` already `OwnedClosed` and must not
+                // subtract this frame's raw bytes a second time (ADR 0044).
+                if (fact == PreparedFrameFact.OwnedOpen) {
+                    outstandingRawTileBytes -= frame.rawTileBytes
+                }
                 frame.markClosed()
                 null
             } else {

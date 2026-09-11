@@ -97,7 +97,7 @@ internal class BasemapEngineHost(
     transport: Transport,
     store: Store,
     private val cache: ResidentCache,
-    private val tileOutputSizePixels: Int = RenderOptions.DEFAULT_OUTPUT_SIZE_PX,
+    internal val tileOutputSizePixels: Int = RenderOptions.DEFAULT_OUTPUT_SIZE_PX,
     private val sha256: Sha256Function = PureKotlinSha256,
     private val privateKeyResolver: RentilePrivateKeyResolver = ProductionRentilePrivateKeyResolver(PureKotlinSha256),
 ) : AutoCloseable {
@@ -489,22 +489,53 @@ internal class BasemapEngineHost(
     /**
      * Draws [prepared]'s tiles. Performs no adapter call whatsoever: everything was acquired by
      * [prepareTiles], which is the whole point of Rentile's prepare/render split.
+     *
+     * [asRawPixels] picks `renderRaw` over `render` -- the same drawing with the PNG encode skipped
+     * (ADR 0044). The choice belongs to the caller, which is the only place that knows how many raw
+     * bytes are already outstanding; this host renders what it is asked for and reads no budget.
+     * Both forms carry the engine's own `contentKey`, so tile identity does not depend on which was
+     * taken.
      */
-    suspend fun renderTiles(prepared: PreparedBasemapTiles): List<RenderedBasemapTile> {
+    suspend fun renderTiles(
+        prepared: PreparedBasemapTiles,
+        asRawPixels: Boolean,
+    ): List<RenderedBasemapTile> {
         requireOpen()
         val styleDigest = prepared.style.digest
-        val batch = engineCall { engine.render(prepared.batch) }
         val tilesById = prepared.tiles.associateBy(::engineTileIdOf)
-        return batch.tiles.map { rendered ->
-            val tile = tilesById[rendered.id]
+
+        // One engine call either way, chosen by the caller's budget (ADR 0044) and never by
+        // anything this file knows: the firewall renders what it is asked to render.
+        fun carry(
+            id: TileId,
+            contentKey: String,
+            pixels: BasemapTilePixels,
+        ): RenderedBasemapTile {
+            val tile = tilesById[id]
                 ?: error("the engine rendered a tile this batch never asked for")
-            RenderedBasemapTile(
+            return RenderedBasemapTile(
                 key = basemapTileKey(styleDigest, tile, tileOutputSize, sha256),
                 tile = tile,
-                pngBytes = rendered.pngBytes,
-                contentKey = rendered.contentKey,
-                substitutions = prepared.batch.substitutions[rendered.id].orEmpty(),
+                pixels = pixels,
+                contentKey = contentKey,
+                substitutions = prepared.batch.substitutions[id].orEmpty(),
             )
+        }
+
+        return if (asRawPixels) {
+            val batch = engineCall { engine.renderRaw(prepared.batch) }
+            batch.tiles.map { rendered ->
+                carry(
+                    rendered.id,
+                    rendered.contentKey,
+                    BasemapTilePixels.Raw(rendered.rgbaBytes, rendered.widthPx, rendered.heightPx),
+                )
+            }
+        } else {
+            val batch = engineCall { engine.render(prepared.batch) }
+            batch.tiles.map { rendered ->
+                carry(rendered.id, rendered.contentKey, BasemapTilePixels.Encoded(rendered.pngBytes))
+            }
         }
     }
 
@@ -1078,11 +1109,31 @@ internal fun classifyGlyphRouteRefusal(
     else -> GlyphRouteRefusal.CREDENTIAL_MISMATCH
 }
 
-/** One rendered ground tile: RenG's own identity, the encoded pixels, and the engine's own provenance. */
+/**
+ * A rendered tile's pixels, in whichever form the engine was asked for (ADR 0044).
+ *
+ * The two carry the same picture and the same `contentKey`; they differ only in whether the encode
+ * was paid. The draw path matches on this exhaustively, with no `else`, so a third form would be a
+ * compile error at the upload site rather than a tile that silently draws nothing.
+ */
+internal sealed interface BasemapTilePixels {
+    /** The engine's PNG, decoded at upload. The form every release before ADR 0044 used. */
+    class Encoded(val pngBytes: ByteArray) : BasemapTilePixels
+
+    /**
+     * The engine's pixels, **already premultiplied** and uploaded without a decode.
+     *
+     * [rgba] is tightly packed RGBA8, `widthPx * heightPx * 4` bytes. It must reach
+     * `uploadPremultipliedTexture` and never `uploadTexture`, which would premultiply it twice.
+     */
+    class Raw(val rgba: ByteArray, val widthPx: Int, val heightPx: Int) : BasemapTilePixels
+}
+
+/** One rendered ground tile: RenG's own identity, its pixels, and the engine's own provenance. */
 internal class RenderedBasemapTile(
     val key: ResourceKey,
     val tile: CanonicalBasemapTile,
-    val pngBytes: ByteArray,
+    val pixels: BasemapTilePixels,
     val contentKey: String,
     val substitutions: List<ResourceSubstitution>,
 )

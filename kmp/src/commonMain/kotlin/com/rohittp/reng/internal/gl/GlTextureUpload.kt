@@ -122,7 +122,45 @@ internal fun uploadTexture(
         TextureContent.IMAGE -> premultiplyAlpha(bytes)
         TextureContent.DATA -> bytes
     }
+    return uploadRgba(binding, uploadBytes, image.width, image.height, sampler)
+}
 
+/**
+ * Uploads [rgba] as a `GL_TEXTURE_2D` **without premultiplying it**, and returns its object name.
+ *
+ * The one caller is the basemap ground path on Rentile's `renderRaw`, whose tiles arrive already
+ * premultiplied (ADR 0044). It exists as its own entry point rather than as a third
+ * [TextureContent] because the bytes cannot travel in a [DecodedImage]: that type's contract says
+ * unpremultiplied, in its own KDoc, and a variant that quietly carried the other kind would make
+ * that sentence false for every reader after this one.
+ *
+ * [sampler] defaults to [TextureContent.IMAGE]'s, which is what a basemap tile wants and has always
+ * had: linear filtering, clamped on both axes. Everything after the premultiply decision —
+ * generation, binding, the level-zero upload, the four `glTexParameteri` calls and the conditional
+ * mipmap — is [uploadRgba], shared with [uploadTexture] so the two paths cannot drift in anything
+ * except the one statement they are meant to differ in.
+ */
+internal fun uploadPremultipliedTexture(
+    binding: GlBinding,
+    rgba: ByteArray,
+    width: Int,
+    height: Int,
+    sampler: TextureSamplerState = defaultSamplerStateFor(TextureContent.IMAGE),
+): Int = uploadRgba(binding, rgba, width, height, sampler)
+
+/**
+ * The GL half both upload entry points share: everything that happens once the bytes are final.
+ *
+ * [uploadBytes] is uploaded exactly as given — whatever premultiplication the caller owed has
+ * already happened, or deliberately has not.
+ */
+private fun uploadRgba(
+    binding: GlBinding,
+    uploadBytes: ByteArray,
+    width: Int,
+    height: Int,
+    sampler: TextureSamplerState,
+): Int {
     val names = IntArray(1)
     binding.genTextures(1, names)
     val texture = names[0]
@@ -131,8 +169,8 @@ internal fun uploadTexture(
         target = GL_TEXTURE_2D,
         level = 0,
         internalFormat = GL_RGBA8,
-        width = image.width,
-        height = image.height,
+        width = width,
+        height = height,
         border = 0,
         format = GL_RGBA,
         type = GL_UNSIGNED_BYTE,

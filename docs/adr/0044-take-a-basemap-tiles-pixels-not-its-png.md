@@ -83,5 +83,13 @@ different camera. What transfers is the mechanism and its sign: RenG performed a
 per tile per prepare, and now performs neither while the budget holds. Anyone wanting a RenG number
 should take it from a real device, not from this file.
 
+**One observable behaviour does change, and it is a frame that used to fail and now draws.**
+`maximumDecodedImageBytes` below one tile made every basemap frame fail `RESOURCE_DECODE_FAILED` at
+`DRAW`, because every tile was decoded. On the raw path nothing is decoded, so that configuration now
+renders. This is the limit meaning what it says rather than a hole in it — it bounds decoding, and
+there is no decoding — but it is a real difference and it is recorded here rather than discovered.
+`RendererGroundTextureBudgetTest` still pins the failure by holding the raw budget at one byte, so
+the classification stays covered on the path that can still reach it.
+
 `render` stays on Rentile's interface and stays used by RenG — it is the fallback above. Removing it
 was never in question.

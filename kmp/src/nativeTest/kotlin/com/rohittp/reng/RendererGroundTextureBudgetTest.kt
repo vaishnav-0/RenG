@@ -355,11 +355,24 @@ class RendererGroundTextureBudgetTest {
      * [ResourceLimits.maximumDecodedImageBytes] is below one tile has configured a renderer that
      * cannot draw a basemap at all. It must say so as a typed failure naming the tile, at the stage the
      * decode actually happens, rather than throwing something untyped out of a GL draw call.
+     *
+     * **The raw-pixel budget is pinned to 1 byte here so the frame takes the encoded path, and that
+     * is the test's subject rather than a workaround.** Since ADR 0044 a decode only happens on that
+     * path; a frame rendered raw has nothing to decode and so has no decode to fail, which is why
+     * this test would otherwise draw successfully. Holding one budget down to exercise the other is
+     * what keeps this an assertion about decode classification, instead of letting it quietly become
+     * a second assertion about which render call was chosen.
      */
     @Test
     fun aTileTooLargeToDecodeFailsAsATypedDecodeFailureNamingTheTile() = runTest {
         val binding = styleGlBinding()
-        val renderer = groundRenderer(binding, limits = ResourceLimits(maximumDecodedImageBytes = 1L))
+        val renderer = groundRenderer(
+            binding,
+            limits = ResourceLimits(
+                maximumDecodedImageBytes = 1L,
+                maximumInFlightRawBasemapTileBytes = 1L,
+            ),
+        )
         val target = renderer.mintRenderTarget(FramebufferName(0u))
         val frame = renderer.prepare(basemapPlan(frameIndex = 0L))
 

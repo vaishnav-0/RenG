@@ -1,11 +1,13 @@
 package com.rohittp.reng
 
+import com.rohittp.reng.internal.firewall.BasemapTilePixels
 import com.rohittp.reng.internal.firewall.basemapTileKey
 import com.rohittp.reng.internal.planning.CanonicalBasemapTile
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -35,9 +37,13 @@ import kotlinx.coroutines.test.runTest
 class RendererBasemapTileTest {
 
     /**
-     * The whole path in one assertion set: the frame's four selected ground tiles come back as encoded
-     * pixels, each named by [basemapTileKey] over the style digest, the canonical tile, and the engine's
-     * output size — RenG's own derivation, deliberately not Rentile's `outputRequestKey`.
+     * The whole path in one assertion set: the frame's four selected ground tiles come back as raw
+     * premultiplied pixels, each named by [basemapTileKey] over the style digest, the canonical tile,
+     * and the engine's output size — RenG's own derivation, deliberately not Rentile's
+     * `outputRequestKey`.
+     *
+     * Raw rather than encoded because four tiles are 4 MiB against ADR 0044's 64 MiB default, so this
+     * is the path the default budget admits. The fallback has its own test below.
      */
     @Test
     fun rendersEveryGroundTileTheFrameSelectedAndNamesItWithRenGsOwnIdentity() = runTest {
@@ -63,16 +69,55 @@ class RendererBasemapTileTest {
                 "a rendered tile carries RenG's own canonical identity, not the engine's request key",
             )
             assertEquals(ResourceKind.BASEMAP_TILE, rendered.key.kind)
-            // Not merely non-empty: the cheapest way to claim these are encoded pixels rather than any
-            // non-empty byte array is the 8-byte signature the PNG format mandates.
-            assertContentEquals(
-                PNG_SIGNATURE,
-                rendered.pngBytes.take(PNG_SIGNATURE.size).toByteArray(),
-                "the engine produced encoded ground pixels",
+            // Not merely non-empty: raw pixels are claimed by their own arithmetic rather than by a
+            // signature, because they have none. Tight packing at the engine's output size is the
+            // whole contract `uploadPremultipliedTexture` relies on, so it is what is asserted.
+            val pixels = assertIs<BasemapTilePixels.Raw>(
+                rendered.pixels,
+                "the default budget admits raw pixels for a four-tile frame (ADR 0044)",
+            )
+            assertEquals(TILE_OUTPUT_SIZE.width, pixels.widthPx, "a tile is square at the engine's output size")
+            assertEquals(TILE_OUTPUT_SIZE.height, pixels.heightPx, "a tile is square at the engine's output size")
+            assertEquals(
+                pixels.widthPx * pixels.heightPx * 4,
+                pixels.rgba.size,
+                "raw pixels are tightly packed RGBA8 with no row padding",
             )
             assertTrue(rendered.contentKey.isNotEmpty(), "Rentile's own content key travels beside them")
             assertEquals(emptyList(), rendered.substitutions, "tile substitution stays disabled")
         }
+    }
+
+    /**
+     * A budget too small for one tile sends the whole frame down the encoded path (ADR 0044).
+     *
+     * One byte, not zero, and that is the point of the number: zero would also be satisfied by an
+     * implementation that never takes raw pixels at all, so it cannot tell a working budget from an
+     * unwired one. One byte is under a tile and over nothing, so only an implementation that actually
+     * compares outstanding-plus-requested against the limit produces this result. The companion test
+     * above, on the same fixture with the default limit, is the other half: together they show the
+     * decision moving with the budget rather than being fixed either way.
+     *
+     * The frame still draws. Falling back is the behaviour of every release before ADR 0044, so the
+     * assertion is that the tiles arrive encoded, not that anything degraded.
+     */
+    @Test
+    fun aBudgetBelowOneTileFallsBackToEncodedPixelsAndStillRendersEveryTile() = runTest {
+        val renderer = styleRenderer(
+            TileTransport(),
+            resourceLimits = ResourceLimits(maximumInFlightRawBasemapTileBytes = 1L),
+        ) as RenGRenderer
+
+        val frame = renderer.prepare(basemapPlan(frameIndex = 0L)) as RenGPreparedFrame
+
+        assertEquals(4, frame.basemapTiles.size, "the budget changes the form, never which tiles are drawn")
+        frame.basemapTiles.forEach { rendered ->
+            assertIs<BasemapTilePixels.Encoded>(
+                rendered.pixels,
+                "a budget under one tile cannot admit raw pixels",
+            )
+        }
+        assertEquals(0L, frame.rawTileBytes, "an encoded frame holds no raw bytes against the budget")
     }
 
     /**

@@ -188,12 +188,14 @@ internal fun styleRenderer(
     transport: Transport,
     store: Store = RecordingStyleStore(),
     basemapStyle: ResourceLocator? = ResourceLocator(STYLE_URL),
+    resourceLimits: ResourceLimits = ResourceLimits(),
 ): Renderer = createRenderer(
     RendererConfiguration(
         outputPixelSize = OutputPixelSize(64, 64),
         transport = transport,
         store = store,
         basemapStyle = basemapStyle,
+        resourceLimits = resourceLimits,
     ),
     styleGlBinding(),
     RenderContextProbe { RenderContextIdentity(1L) },
