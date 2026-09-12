@@ -387,12 +387,16 @@ internal fun drawGeometry(
         "a geometry may bind at most $MAXIMUM_CONSUMER_TEXTURES consumer textures"
     }
 
-    // Defensive snapshot: guards this call's own iteration against the maps being structurally
-    // mutated mid-call. The prepare()-vs-draw() gap is already closed by the time either map
-    // reaches this function -- see the KDoc above -- so this is a narrower, cheaper guarantee, not
-    // the load-bearing one.
-    val uniformsSnapshot = consumerUniforms.toMap()
-    val texturesSnapshot = consumerTextures.toMap()
+    // Iterated directly, not copied. Both maps are already private to the frame being drawn:
+    // `PreparedGeometry.uniformsSnapshot` is a `.toMap()` taken at prepare() time and never the
+    // caller's own reference, and the texture map is built fresh per frame from it. The copies that
+    // used to stand here guarded this call's iteration against a structural mutation that no
+    // production caller can perform, at the cost of two map copies per geometry per frame.
+    //
+    // That makes it the caller's obligation rather than this function's: pass maps nothing else can
+    // mutate while this call runs.
+    val uniformsSnapshot = consumerUniforms
+    val texturesSnapshot = consumerTextures
 
     // A grid the camera pruned to nothing draws nothing, and says so by touching no GL state at
     // all rather than by uploading two empty buffers and issuing a zero-count draw. A geometry
