@@ -13,6 +13,7 @@ import com.rohittp.reng.internal.projection.resolveMercatorCamera
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class GeometryPipelineTest {
@@ -325,6 +326,52 @@ class GeometryPipelineTest {
         assertTrue(binding.log.none { it.startsWith("uniform") }, "and it still binds nothing")
     }
 
+    /**
+     * A smaller draw after a larger one uploads its own bytes and none of the tail behind them.
+     *
+     * The vertex and index bytes are packed into scratch the pipeline keeps and grows by doubling, so
+     * after a big grid that scratch is longer than the next small grid needs and still holds the big
+     * grid's bytes past the prefix. Nothing reads the array's length: [GlBinding.bufferData] takes an
+     * explicit byte count and every platform actual forwards exactly that to `glBufferData`. This
+     * asserts both halves — the count shrinks to the small grid, and the bytes under it are the small
+     * grid's — because an implementation that passed `array.size` would upload the stale tail and
+     * draw the previous geometry's vertices, which is the failure this scratch could introduce.
+     */
+    @Test
+    fun aSmallerGridAfterALargerOneUploadsItsOwnByteCountAndNotTheScratchTail() {
+        val binding = RecordingGlBinding()
+        val pipeline = createPipeline(binding)
+
+        drawGeometry(binding, pipeline, largeTestGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L)
+        binding.log.clear()
+        drawGeometry(binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L)
+
+        val small = testGrid()
+        val expectedVertexBytes = small.interleavedVertices.size * Float.SIZE_BYTES
+        val expectedIndexBytes = small.triangleIndices.size * Short.SIZE_BYTES
+        // 0x8892 is GL_ARRAY_BUFFER and 0x8893 GL_ELEMENT_ARRAY_BUFFER, as CompositePipelineTest
+        // already matches them.
+        assertTrue(
+            binding.log.any { it.startsWith("bufferData(0x8892,$expectedVertexBytes,") },
+            "the second draw uploads its own vertex byte count, not the scratch's length: ${binding.log}",
+        )
+        assertTrue(
+            binding.log.any { it.startsWith("bufferData(0x8893,$expectedIndexBytes,") },
+            "and its own index byte count: ${binding.log}",
+        )
+
+        val uploaded = assertNotNull(binding.bufferDataPayloads[GL_ARRAY_BUFFER])
+        assertTrue(
+            uploaded.size > expectedVertexBytes,
+            "the scratch is genuinely longer than this draw, or the test proves nothing",
+        )
+        assertContentEquals(
+            littleEndianBytes(small.interleavedVertices),
+            uploaded.copyOf(expectedVertexBytes),
+            "the prefix GL is told to read is the small grid's own bytes",
+        )
+    }
+
     // --- Task 7/9b: consumer textures take deterministic, name-sorted units -------------------
     //
     // As of Task 9b, drawGeometry's consumerTextures parameter carries each name's ALREADY-UPLOADED
@@ -511,6 +558,19 @@ private fun testGrid(): GeometryGrid = GeometryGrid(
         1f, 0f, 0f, 1f, 1f,
     ),
     triangleIndices = shortArrayOf(0, 2, 3, 0, 3, 1),
+)
+
+/**
+ * A grid strictly larger than [testGrid] in both buffers, so drawing it first leaves the pipeline's
+ * scratch longer than the small grid needs and still holding these bytes past that prefix.
+ *
+ * The values are distinct from [testGrid]'s on purpose: a stale-tail bug that uploaded this grid's
+ * bytes under the small grid's count has to be visible as a content mismatch, not merely as a length.
+ */
+private fun largeTestGrid(): GeometryGrid = GeometryGrid(
+    cellsPerSide = 2,
+    interleavedVertices = FloatArray(9 * GEOMETRY_VERTEX_COMPONENT_COUNT) { index -> 100f + index },
+    triangleIndices = ShortArray(24) { index -> (index % 9).toShort() },
 )
 
 private fun testBounds(): FloatArray = floatArrayOf(-1.0f, -1.0f, 1.0f, 1.0f)

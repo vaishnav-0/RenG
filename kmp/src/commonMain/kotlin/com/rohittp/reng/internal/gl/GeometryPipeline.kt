@@ -111,6 +111,90 @@ internal class GeometryPipeline(
     /** [name]'s location in [program], from the memo above or from the driver exactly once. */
     fun consumerLocation(binding: GlBinding, name: String): Int =
         consumerLocations.getOrPut(name) { binding.getUniformLocation(program, name) }
+
+    /**
+     * The CPU byte buffers [drawGeometry] packs this pipeline's grid into before uploading it, reused
+     * across draws and grown by doubling.
+     *
+     * Each draw used to allocate two fresh `ByteArray`s sized to that draw's grid. On a Mercator
+     * geometry that is eighty bytes and beneath notice; on the globe and drape paths, where a grid
+     * reaches [MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE] cells a side, it is on the order of a
+     * megabyte per geometry per frame, allocated and discarded immediately.
+     *
+     * **They are only ever handed to [GlBinding.bufferData] with an explicit byte count**, which
+     * every platform actual passes straight to `glBufferData` while pinning the array from index
+     * zero -- so a scratch larger than this draw needs uploads exactly the prefix just packed, never
+     * the stale tail behind it. That is the whole safety argument for reusing them, and it is why
+     * neither is passed anywhere that would take its length from the array instead.
+     */
+    private var vertexScratch: ByteArray = ByteArray(0)
+    private var indexScratch: ByteArray = ByteArray(0)
+
+    /** The scratch [packVertexBytes] filled. Valid until the next call on this pipeline. */
+    val vertexBytes: ByteArray get() = vertexScratch
+
+    /** The scratch [packIndexBytes] filled. Valid until the next call on this pipeline. */
+    val indexBytes: ByteArray get() = indexScratch
+
+    /** Packs [values] little-endian into [vertexBytes] and returns how many bytes that took. */
+    fun packVertexBytes(values: FloatArray): Int {
+        val byteCount = values.size * Float.SIZE_BYTES
+        if (vertexScratch.size < byteCount) {
+            vertexScratch = ByteArray(grownScratchSize(vertexScratch.size, byteCount))
+        }
+        writeLittleEndianFloats(values, vertexScratch)
+        return byteCount
+    }
+
+    /** Packs [values] little-endian into [indexBytes] and returns how many bytes that took. */
+    fun packIndexBytes(values: ShortArray): Int {
+        val byteCount = values.size * Short.SIZE_BYTES
+        if (indexScratch.size < byteCount) {
+            indexScratch = ByteArray(grownScratchSize(indexScratch.size, byteCount))
+        }
+        writeLittleEndianShorts(values, indexScratch)
+        return byteCount
+    }
+}
+
+/**
+ * Doubling growth that always clears [required], from a zero-length start.
+ *
+ * Doubling rather than exact, matching [growIconBuffers]: exact growth reallocates on a grid that
+ * gained one cell, which is the allocation this exists to remove.
+ */
+private fun grownScratchSize(current: Int, required: Int): Int {
+    var size = if (current == 0) required else current
+    while (size < required) size *= 2
+    return size
+}
+
+/** Writes [values] little-endian into the first `values.size * 4` bytes of [out]. */
+private fun writeLittleEndianFloats(values: FloatArray, out: ByteArray) {
+    var offset = 0
+    values.forEach { value ->
+        val bits = value.toRawBits()
+        out[offset] = (bits and 0xff).toByte()
+        out[offset + 1] = ((bits ushr 8) and 0xff).toByte()
+        out[offset + 2] = ((bits ushr 16) and 0xff).toByte()
+        out[offset + 3] = ((bits ushr 24) and 0xff).toByte()
+        offset += Float.SIZE_BYTES
+    }
+}
+
+/**
+ * Writes [values] little-endian into the first `values.size * 2` bytes of [out], as
+ * `GL_UNSIGNED_SHORT` expects.
+ *
+ * A 16-bit index is what caps [MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE] at 128 for the globe ground
+ * and for a geometry grid alike: 129 x 129 is 16,641 vertices where 257 x 257 would overflow.
+ */
+private fun writeLittleEndianShorts(values: ShortArray, out: ByteArray) {
+    values.forEachIndexed { index, value ->
+        val bits = value.toInt()
+        out[index * 2] = (bits and 0xff).toByte()
+        out[index * 2 + 1] = ((bits ushr 8) and 0xff).toByte()
+    }
 }
 
 internal sealed interface GeometryPipelineResult {
@@ -318,10 +402,12 @@ internal fun drawGeometry(
     binding.useProgram(pipeline.program)
     binding.bindVertexArray(pipeline.vertexArray)
     binding.bindBuffer(GL_ARRAY_BUFFER, pipeline.vertexBuffer)
-    val vertexBytes = littleEndianBytes(grid.interleavedVertices)
-    binding.bufferData(GL_ARRAY_BUFFER, vertexBytes.size, vertexBytes, GL_DYNAMIC_DRAW)
-    val indexBytes = littleEndianUnsignedShortBytes(grid.triangleIndices)
-    binding.bufferData(GL_ELEMENT_ARRAY_BUFFER, indexBytes.size, indexBytes, GL_DYNAMIC_DRAW)
+    // Packed into the pipeline's reused scratch and uploaded by explicit byte count, never by array
+    // length: the scratch is a high-water buffer and its tail is whatever the last, larger draw left.
+    val vertexByteCount = pipeline.packVertexBytes(grid.interleavedVertices)
+    binding.bufferData(GL_ARRAY_BUFFER, vertexByteCount, pipeline.vertexBytes, GL_DYNAMIC_DRAW)
+    val indexByteCount = pipeline.packIndexBytes(grid.triangleIndices)
+    binding.bufferData(GL_ELEMENT_ARRAY_BUFFER, indexByteCount, pipeline.indexBytes, GL_DYNAMIC_DRAW)
 
     if (pipeline.modelViewProjectionLocation >= 0) {
         binding.uniformMatrix4fv(pipeline.modelViewProjectionLocation, 1, false, modelViewProjection)
@@ -377,22 +463,6 @@ private fun bindConsumerUniform(binding: GlBinding, location: Int, value: Shader
     is ShaderValue.Vec4 -> binding.uniform4f(location, value.x, value.y, value.z, value.w)
     is ShaderValue.Integer -> binding.uniform1i(location, value.value)
     is ShaderValue.Mat4 -> binding.uniformMatrix4fv(location, 1, false, value.elementsForCore())
-}
-
-/**
- * One grid vertex's index run, little-endian, as `GL_UNSIGNED_SHORT` expects.
- *
- * A 16-bit index is what caps [MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE] at 128 for the globe ground
- * and for a geometry grid alike: 129 x 129 is 16,641 vertices where 257 x 257 would overflow.
- */
-private fun littleEndianUnsignedShortBytes(values: ShortArray): ByteArray {
-    val bytes = ByteArray(values.size * Short.SIZE_BYTES)
-    values.forEachIndexed { index, value ->
-        val bits = value.toInt()
-        bytes[index * 2] = (bits and 0xff).toByte()
-        bytes[index * 2 + 1] = ((bits ushr 8) and 0xff).toByte()
-    }
-    return bytes
 }
 
 private const val GEOMETRY_POSITION_COMPONENT_COUNT: Int = 3
