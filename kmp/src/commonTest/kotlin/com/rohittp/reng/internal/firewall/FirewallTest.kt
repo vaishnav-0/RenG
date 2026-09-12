@@ -90,13 +90,29 @@ class FirewallTest {
         assertFailsWith<CancellationException> { fw.transport.execute(engineRequestFor(rasterRoute)) }
     }
 
+    /**
+     * **The reverse of what this case asserted before ADR 0050**, and deliberately kept next to
+     * [replaysALatchedFailureRatherThanRetryingTheConsumer] so the two read as the pair they are: a
+     * transport failure is a verdict about the resource and stays latched, a cancellation is a fact
+     * about one caller and is forgotten.
+     *
+     * The old assertion — one `executeCalls` across two callers — was a true reading of a registry
+     * that lived for exactly one preparation, where a cancelled route really did mean a cancelled
+     * invocation. It stops being true once an invocation spans a batch of independently cancellable
+     * frames, which is what the next ADR builds; leaving the pin in place would have made the
+     * poisoning it describes look intentional.
+     */
     @Test
-    fun replaysALatchedCancellationRatherThanRetryingTheConsumer() = runTest {
+    fun doesNotReplayALatchedCancellationToACallerThatWasNeverCancelled() = runTest {
         val transport = CountingTransport(throwable = CancellationException("cancelled"))
         val fw = firewall(transport = transport)
         assertFailsWith<CancellationException> { fw.transport.execute(engineRequestFor(rasterRoute)) }
+
+        // This caller's own context is active -- the cancellation above came from the adapter, not
+        // from cancelling anything -- so it must do the work rather than inherit a stranger's fate.
         assertFailsWith<CancellationException> { fw.transport.execute(engineRequestFor(rasterRoute)) }
-        assertEquals(1, transport.executeCalls)
+
+        assertEquals(2, transport.executeCalls, "a cancellation is not a verdict, so it is not replayed")
     }
 
     @Test
