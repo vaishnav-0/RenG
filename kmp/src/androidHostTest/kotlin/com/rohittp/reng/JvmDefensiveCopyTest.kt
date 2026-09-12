@@ -74,8 +74,8 @@ class JvmDefensiveCopyTest {
             )
 
             val entries = List(count) { reportEntry(it) }
-            val report = ResourceReport(entries, emptyUsage())
-            val equalReport = ResourceReport(entries.reversed(), emptyUsage())
+            val report = ResourceReport(entries, emptyUsage(), emptyResidency())
+            val equalReport = ResourceReport(entries.reversed(), emptyUsage(), emptyResidency())
             assertFreshMutableListCopies(
                 owner = report,
                 expected = report.entries,
@@ -243,4 +243,6 @@ class JvmDefensiveCopyTest {
         )
 
     private fun emptyUsage(): ResourceUsage = ResourceUsage(0L, 0L, 0L, false)
+
+    private fun emptyResidency(): ResourceResidency = ResourceResidency(0L, 0L, 0L, 0L)
 }

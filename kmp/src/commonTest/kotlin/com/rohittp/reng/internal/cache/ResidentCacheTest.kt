@@ -4,6 +4,7 @@ import com.rohittp.reng.ResourceClass
 import com.rohittp.reng.ResourceFreeResult
 import com.rohittp.reng.ResourceKey
 import com.rohittp.reng.ResourceKind
+import com.rohittp.reng.ResourceResidency
 import com.rohittp.reng.ResourceLocator
 import com.rohittp.reng.ResourceSelector
 import com.rohittp.reng.StoredRawResource
@@ -422,6 +423,58 @@ class ResidentCacheTest {
 
         assertNotNull(cache.current(superseded))
         assertNotNull(cache.current(neighbour))
+    }
+
+    @Test
+    fun theReportCountsWhatTheBudgetHasEvicted() {
+        val cache = ResidentCache(residentByteBudget = 64L)
+        cache.install(keyNamed("counted-first"), storedA, null)
+        assertEquals(
+            ResourceResidency(residentBytes = 64L, budgetBytes = 64L, evictedKeyCount = 0L, evictedBytes = 0L),
+            cache.report(ResourceSelector.All, noGpuObjects).cpuResidency,
+        )
+
+        cache.install(keyNamed("counted-second"), storedB, null)
+
+        // One key left for the budget, taking its 64 bytes with it, and the resident total is back
+        // inside the budget rather than merely reported as over it.
+        assertEquals(
+            ResourceResidency(residentBytes = 64L, budgetBytes = 64L, evictedKeyCount = 1L, evictedBytes = 64L),
+            cache.report(ResourceSelector.All, noGpuObjects).cpuResidency,
+        )
+    }
+
+    @Test
+    fun residencyIgnoresTheSelectorThatNarrowsTheEntries() {
+        val cache = ResidentCache()
+        val selected = keyNamed("residency-selected")
+        cache.install(selected, storedA, null)
+        cache.install(keyNamed("residency-unselected"), storedB, null)
+
+        val report = cache.report(ResourceSelector.ByKey(selected), noGpuObjects)
+
+        assertEquals(1, report.entries.size)
+        assertEquals(64L, report.totals.rawBytes)
+        // ADR 0048: the budget governs every key, so the figure measured against it is every key's.
+        // A selector-narrowed residency would invite a comparison that means nothing.
+        assertEquals(128L, report.cpuResidency.residentBytes)
+    }
+
+    @Test
+    fun closingTheCacheResetsItsCumulativeEvictionCounters() {
+        val cache = ResidentCache(residentByteBudget = 64L)
+        cache.install(keyNamed("closed-first"), storedA, null)
+        cache.install(keyNamed("closed-second"), storedB, null)
+        assertEquals(1L, cache.report(ResourceSelector.All, noGpuObjects).cpuResidency.evictedKeyCount)
+
+        cache.closeAll()
+
+        // "Since this renderer was created" ends when the renderer does, and a closed one answers
+        // an empty report anyway -- a surviving history would only be state to get wrong.
+        val residency = cache.report(ResourceSelector.All, noGpuObjects).cpuResidency
+        assertEquals(0L, residency.residentBytes)
+        assertEquals(0L, residency.evictedKeyCount)
+        assertEquals(0L, residency.evictedBytes)
     }
 }
 

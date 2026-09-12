@@ -4,6 +4,7 @@ import com.rohittp.reng.ResourceFreeResult
 import com.rohittp.reng.ResourceKey
 import com.rohittp.reng.ResourceReport
 import com.rohittp.reng.ResourceReportEntry
+import com.rohittp.reng.ResourceResidency
 import com.rohittp.reng.ResourceSelector
 import com.rohittp.reng.ResourceUsage
 import com.rohittp.reng.StoredRawResource
@@ -127,6 +128,13 @@ internal class ResidentCache(
      * [report] already pays once per `queryResources` and must not pay once per resource per frame.
      */
     private var residentBytes: Long = 0L
+
+    /**
+     * What the budget has cost since this cache was created, cumulative and never decreasing
+     * (ADR 0048). Counted here rather than per key because [evictOverBudget] removes the key.
+     */
+    private var evictedKeyCount: Long = 0L
+    private var evictedBytes: Long = 0L
 
     fun current(key: ResourceKey): ResidentGeneration? = locked {
         val generation = entries[key]?.current
@@ -257,7 +265,18 @@ internal class ResidentCache(
         val reportEntries = entries
             .filterKeys { it.matches(selector) }
             .map { (key, entry) -> entry.toReportEntry(key, gpuBytes(key)) }
-        ResourceReport(entries = reportEntries, totals = reportEntries.totalUsage())
+        ResourceReport(
+            entries = reportEntries,
+            totals = reportEntries.totalUsage(),
+            // Unfiltered on purpose: the budget governs every key, so reporting only the selected
+            // ones' bytes against it would invite a comparison that means nothing.
+            cpuResidency = ResourceResidency(
+                residentBytes = residentBytes,
+                budgetBytes = residentByteBudget,
+                evictedKeyCount = evictedKeyCount,
+                evictedBytes = evictedBytes,
+            ),
+        )
     }
 
     fun wasFreed(key: ResourceKey): Boolean = locked {
@@ -268,6 +287,11 @@ internal class ResidentCache(
         entries.clear()
         recency.clear()
         residentBytes = 0L
+        // The cumulative counters go with it. They are "since this renderer was created" (ADR 0048)
+        // and a closed renderer answers `emptyResourceReport()` regardless, so keeping a history
+        // nothing can read would only be state to get wrong.
+        evictedKeyCount = 0L
+        evictedBytes = 0L
     }
 
     /**
@@ -318,6 +342,8 @@ internal class ResidentCache(
             val generation = entry.current
             if (generation == null || generation.leaseCount > 0 || entry.retired.isNotEmpty()) continue
             residentBytes -= generation.byteSize
+            evictedKeyCount += 1L
+            evictedBytes += generation.byteSize
             entries.remove(key)
             recency.remove(key)
         }

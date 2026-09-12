@@ -63,9 +63,53 @@ public data class ResourceReportEntry internal constructor(
     }
 }
 
+/**
+ * What RenG's CPU-side resident cache is holding, what it is allowed to hold, and what its budget
+ * has already cost (ADR 0047, ADR 0048).
+ *
+ * [evictedKeyCount] and [evictedBytes] are **cumulative since the renderer was created** and never
+ * decrease. They cannot be per-key: an evicted key is removed from the cache outright, precisely so
+ * that a later reload is not mistaken for a reload after an explicit `freeResources` -- see ADR
+ * 0047. Read a difference between two reports to learn whether the budget is currently biting; read
+ * a single non-zero value to learn that something has left without the consumer asking.
+ *
+ * Every figure here describes the CPU cache alone -- the compiled style, sticker and geometry
+ * images, model GLBs. It is not a whole-renderer memory total: rendered basemap tiles are never
+ * installed in that cache, GPU bytes are reported per entry as [ResourceUsage.knownGpuBytes], and
+ * raw tile pixels in flight are governed by `ResourceLimits.maximumInFlightRawBasemapTileBytes`.
+ */
+@ConsistentCopyVisibility
+public data class ResourceResidency internal constructor(
+    /**
+     * Bytes the cache holds right now, across every key it has -- **not** only those matching the
+     * report's selector, because the budget those bytes are measured against governs all of them.
+     * This is why the figure is here and not derivable by summing [ResourceReport.entries].
+     */
+    public val residentBytes: Long,
+    /** `ResourceLimits.maximumResidentCpuResourceBytes`, repeated so [residentBytes] can be judged. */
+    public val budgetBytes: Long,
+    /** Keys evicted for the budget since this renderer was created. Monotonic. */
+    public val evictedKeyCount: Long,
+    /** Bytes reclaimed by those evictions. Monotonic. */
+    public val evictedBytes: Long,
+) {
+    init {
+        require(residentBytes >= 0L) { "residentBytes must be non-negative" }
+        require(budgetBytes >= 0L) { "budgetBytes must be non-negative" }
+        require(evictedKeyCount >= 0L) { "evictedKeyCount must be non-negative" }
+        require(evictedBytes >= 0L) { "evictedBytes must be non-negative" }
+    }
+}
+
 public class ResourceReport internal constructor(
     entries: List<ResourceReportEntry>,
     public val totals: ResourceUsage,
+    /**
+     * The CPU resident cache's budget and what it has already reclaimed. Named for its pool rather
+     * than called `residency`, because it describes one of this renderer's memory pools and reading
+     * it as the whole is the mistake ADR 0048 exists to prevent.
+     */
+    public val cpuResidency: ResourceResidency,
 ) {
     private val entrySnapshot: List<ResourceReportEntry> = entries.sortedWith(resourceReportEntryComparator)
 
@@ -73,11 +117,16 @@ public class ResourceReport internal constructor(
         get() = ArrayList(entrySnapshot)
 
     override fun equals(other: Any?): Boolean =
-        other is ResourceReport && entrySnapshot == other.entrySnapshot && totals == other.totals
+        other is ResourceReport &&
+            entrySnapshot == other.entrySnapshot &&
+            totals == other.totals &&
+            cpuResidency == other.cpuResidency
 
-    override fun hashCode(): Int = 31 * entrySnapshot.hashCode() + totals.hashCode()
+    override fun hashCode(): Int =
+        31 * (31 * entrySnapshot.hashCode() + totals.hashCode()) + cpuResidency.hashCode()
 
-    override fun toString(): String = "ResourceReport(entries=$entrySnapshot, totals=$totals)"
+    override fun toString(): String =
+        "ResourceReport(entries=$entrySnapshot, totals=$totals, cpuResidency=$cpuResidency)"
 }
 
 @ConsistentCopyVisibility

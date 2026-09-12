@@ -467,6 +467,7 @@ LIBRARY_CREATED_DATA_CLASSES = (
     ("ResourceUsage", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
     ("ResourceReportEntry", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
     ("ResourceFreeResult", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
+    ("ResourceResidency", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
 )
 
 

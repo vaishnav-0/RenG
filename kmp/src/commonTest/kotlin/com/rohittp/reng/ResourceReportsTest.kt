@@ -137,7 +137,7 @@ class ResourceReportsTest {
             entryWith(key = externalKey('a', ResourceClass.BASEMAP_STYLE)),
         )
         val totals = ResourceUsage(3L, 2L, 1L, false)
-        val report = ResourceReport(entries, totals)
+        val report = ResourceReport(entries, totals, noEvictions)
         entries.clear()
 
         assertEquals(
@@ -157,10 +157,16 @@ class ResourceReportsTest {
         returnedEntries.clear()
         assertEquals(6, report.entries.size)
 
-        val equalReport = ResourceReport(report.entries.reversed(), ResourceUsage(3L, 2L, 1L, false))
+        val equalReport = ResourceReport(report.entries.reversed(), ResourceUsage(3L, 2L, 1L, false), noEvictions)
         assertEquals(report, equalReport)
         assertEquals(report.hashCode(), equalReport.hashCode())
-        assertNotEquals(report, ResourceReport(report.entries, ResourceUsage(3L, 2L, 2L, false)))
+        assertNotEquals(report, ResourceReport(report.entries, ResourceUsage(3L, 2L, 2L, false), noEvictions))
+        // Residency is part of the report's identity: two reports over the same entries taken
+        // either side of an eviction are not the same report.
+        assertNotEquals(
+            report,
+            ResourceReport(report.entries, totals, noEvictions.copy(evictedKeyCount = 1L, evictedBytes = 8L)),
+        )
         assertRedacted(report.toString(), stableId('a'), stableId('b'), stableId('c'), stableId('d'), stableId('e'), stableId('f'))
     }
 
@@ -178,7 +184,7 @@ class ResourceReportsTest {
             entryWith(key = ResourceKey(ResourceKind.OFFSCREEN_SURFACE, stableId('c'), null)),
             entryWith(key = externalKey('d', ResourceClass.STICKER_IMAGE)),
         )
-        val report = ResourceReport(entries, ResourceUsage(0L, 0L, 0L, false))
+        val report = ResourceReport(entries, ResourceUsage(0L, 0L, 0L, false), noEvictions)
         entries.clear()
 
         assertEquals(
@@ -190,6 +196,18 @@ class ResourceReportsTest {
             ),
             report.entries.map { it.key },
         )
+    }
+
+    @Test
+    fun residencyRejectsEveryNegativeFigure() {
+        // All four are counts or byte totals, and the two eviction figures are cumulative and
+        // monotonic (ADR 0048), so a negative one means the accounting under it has gone wrong
+        // rather than that some resource has negative size.
+        ResourceResidency(residentBytes = 0L, budgetBytes = 0L, evictedKeyCount = 0L, evictedBytes = 0L)
+        assertFailsWith<IllegalArgumentException> { noEvictions.copy(residentBytes = -1L) }
+        assertFailsWith<IllegalArgumentException> { noEvictions.copy(budgetBytes = -1L) }
+        assertFailsWith<IllegalArgumentException> { noEvictions.copy(evictedKeyCount = -1L) }
+        assertFailsWith<IllegalArgumentException> { noEvictions.copy(evictedBytes = -1L) }
     }
 
     @Test
@@ -229,6 +247,18 @@ class ResourceReportsTest {
         ResourceKey(ResourceKind.EXTERNAL, stableId(stableIdCharacter), resourceClass)
 
     private fun stableId(character: Char): String = character.toString().repeat(64)
+
+    /**
+     * A cache that has evicted nothing, which is what every case here that is not about
+     * residency wants to say. Stated rather than defaulted on the constructor, because the
+     * two real construction sites must each decide what they are reporting.
+     */
+    private val noEvictions: ResourceResidency = ResourceResidency(
+        residentBytes = 0L,
+        budgetBytes = 0L,
+        evictedKeyCount = 0L,
+        evictedBytes = 0L,
+    )
 
     private fun assertRedacted(text: String, vararg sensitiveValues: String) {
         sensitiveValues.forEach { sensitiveValue ->

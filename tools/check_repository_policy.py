@@ -134,6 +134,7 @@ _LIBRARY_CREATED_DATA_CLASSES = (
     ("ResourceUsage", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
     ("ResourceReportEntry", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
     ("ResourceFreeResult", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
+    ("ResourceResidency", "kmp/src/commonMain/kotlin/com/rohittp/reng/ResourceReports.kt"),
 )
 # Each value is a tuple of equally-exact accepted `plugins { }` token sequences, in the same shape
 # and for the same reason as _EXPECTED_PRODUCTION_BUILD_FINGERPRINTS: a superseded form stays

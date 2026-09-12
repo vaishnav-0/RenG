@@ -798,6 +798,8 @@ final class com.rohittp.reng/ResourceLocator { // com.rohittp.reng/ResourceLocat
 }
 
 final class com.rohittp.reng/ResourceReport { // com.rohittp.reng/ResourceReport|null[0]
+    final val cpuResidency // com.rohittp.reng/ResourceReport.cpuResidency|{}cpuResidency[0]
+        final fun <get-cpuResidency>(): com.rohittp.reng/ResourceResidency // com.rohittp.reng/ResourceReport.cpuResidency.<get-cpuResidency>|<get-cpuResidency>(){}[0]
     final val entries // com.rohittp.reng/ResourceReport.entries|{}entries[0]
         final fun <get-entries>(): kotlin.collections/List<com.rohittp.reng/ResourceReportEntry> // com.rohittp.reng/ResourceReport.entries.<get-entries>|<get-entries>(){}[0]
     final val totals // com.rohittp.reng/ResourceReport.totals|{}totals[0]
@@ -831,6 +833,25 @@ final class com.rohittp.reng/ResourceReportEntry { // com.rohittp.reng/ResourceR
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ResourceReportEntry.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/ResourceReportEntry.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/ResourceReportEntry.toString|toString(){}[0]
+}
+
+final class com.rohittp.reng/ResourceResidency { // com.rohittp.reng/ResourceResidency|null[0]
+    final val budgetBytes // com.rohittp.reng/ResourceResidency.budgetBytes|{}budgetBytes[0]
+        final fun <get-budgetBytes>(): kotlin/Long // com.rohittp.reng/ResourceResidency.budgetBytes.<get-budgetBytes>|<get-budgetBytes>(){}[0]
+    final val evictedBytes // com.rohittp.reng/ResourceResidency.evictedBytes|{}evictedBytes[0]
+        final fun <get-evictedBytes>(): kotlin/Long // com.rohittp.reng/ResourceResidency.evictedBytes.<get-evictedBytes>|<get-evictedBytes>(){}[0]
+    final val evictedKeyCount // com.rohittp.reng/ResourceResidency.evictedKeyCount|{}evictedKeyCount[0]
+        final fun <get-evictedKeyCount>(): kotlin/Long // com.rohittp.reng/ResourceResidency.evictedKeyCount.<get-evictedKeyCount>|<get-evictedKeyCount>(){}[0]
+    final val residentBytes // com.rohittp.reng/ResourceResidency.residentBytes|{}residentBytes[0]
+        final fun <get-residentBytes>(): kotlin/Long // com.rohittp.reng/ResourceResidency.residentBytes.<get-residentBytes>|<get-residentBytes>(){}[0]
+
+    final fun component1(): kotlin/Long // com.rohittp.reng/ResourceResidency.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // com.rohittp.reng/ResourceResidency.component2|component2(){}[0]
+    final fun component3(): kotlin/Long // com.rohittp.reng/ResourceResidency.component3|component3(){}[0]
+    final fun component4(): kotlin/Long // com.rohittp.reng/ResourceResidency.component4|component4(){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ResourceResidency.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // com.rohittp.reng/ResourceResidency.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // com.rohittp.reng/ResourceResidency.toString|toString(){}[0]
 }
 
 final class com.rohittp.reng/ResourceUsage { // com.rohittp.reng/ResourceUsage|null[0]
