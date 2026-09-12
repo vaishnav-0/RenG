@@ -79,6 +79,13 @@ internal sealed interface RendererLifecycleOperation {
 
     data class QueryResources(val selector: ResourceSelector) : RendererLifecycleOperation
 
+    /**
+     * Reading the engine's accumulated counters (ADR 0049). Gated exactly where [QueryResources]
+     * is, and for the same reason: it takes nothing a preparation needs, and a closed renderer
+     * should answer an empty report rather than a stale one.
+     */
+    data object QueryMetrics : RendererLifecycleOperation
+
     data class FreeResources(val selector: ResourceSelector) : RendererLifecycleOperation
 
     data object NotifyGpuObjectsGone : RendererLifecycleOperation

@@ -30,6 +30,7 @@ import com.rohittp.reng.internal.planning.CanonicalBasemapTile
 import com.rohittp.reng.internal.resource.RentilePrivateKeyResolver
 import com.rohittp.reng.internal.resource.ResourceRouteKey
 import com.rohittp.reng.ResourceAccessMode as RenGResourceAccessMode
+import com.rohittp.reng.internal.metrics.EngineMetricRecorder
 import com.rohittp.rentile.BasemapRasterizer
 import com.rohittp.rentile.CredentialProvider
 import com.rohittp.rentile.GlyphTemplateMismatchException
@@ -37,7 +38,6 @@ import com.rohittp.rentile.GroundRadianceDescriptor
 import com.rohittp.rentile.LabelCandidateBatch
 import com.rohittp.rentile.LabelCandidatePlan
 import com.rohittp.rentile.MapSessionProvider
-import com.rohittp.rentile.MetricsSink
 import com.rohittp.rentile.PreparedBatch
 import com.rohittp.rentile.PreparedStyle
 import com.rohittp.rentile.RawResourceKey as EngineRawResourceKey
@@ -100,6 +100,11 @@ internal class BasemapEngineHost(
     internal val tileOutputSizePixels: Int = RenderOptions.DEFAULT_OUTPUT_SIZE_PX,
     private val sha256: Sha256Function = PureKotlinSha256,
     private val privateKeyResolver: RentilePrivateKeyResolver = ProductionRentilePrivateKeyResolver(PureKotlinSha256),
+    /**
+     * Where the engine's counters go (ADR 0049). Defaulted to a fresh recorder nothing reads, so
+     * every test constructing this host keeps working and no metric escapes into a shared one.
+     */
+    private val metricRecorder: EngineMetricRecorder = EngineMetricRecorder(),
 ) : AutoCloseable {
 
     private val consumerTransport: Transport = transport
@@ -128,7 +133,10 @@ internal class BasemapEngineHost(
             sessionProvider = MapSessionProvider.None,
             credentialProvider = CredentialProvider.None,
             clock = RentileClock.System,
-            metricsSink = MetricsSink.None,
+            // RenG's own recorder rather than MetricsSink.None: the engine's seventeen counters
+            // are the only measurement of this renderer's basemap path, and ADR 0049 gives them
+            // a RenG vocabulary to arrive in.
+            metricsSink = metricRecorder,
         ),
     )
 

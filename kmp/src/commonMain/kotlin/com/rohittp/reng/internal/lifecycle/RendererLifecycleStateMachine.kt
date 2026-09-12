@@ -97,6 +97,7 @@ internal object RendererLifecycleStateMachine {
         )
         RendererLifecycleOperation.ClearFrameHistory,
         is RendererLifecycleOperation.QueryResources,
+        RendererLifecycleOperation.QueryMetrics,
         -> executePermitted(snapshot, operation)
 
         is RendererLifecycleOperation.FreeResources ->
@@ -135,6 +136,7 @@ internal object RendererLifecycleStateMachine {
         RendererLifecycleOperation.ClearFrameHistory,
         is RendererLifecycleOperation.QueryResources,
         is RendererLifecycleOperation.FreeResources,
+        RendererLifecycleOperation.QueryMetrics,
         -> executePermitted(snapshot, operation)
 
         RendererLifecycleOperation.NotifyGpuObjectsGone -> noOp(snapshot)
@@ -182,6 +184,7 @@ internal object RendererLifecycleStateMachine {
 
         is RendererLifecycleOperation.QueryResources,
         is RendererLifecycleOperation.FreeResources,
+        RendererLifecycleOperation.QueryMetrics,
         -> emptyResourceResult(snapshot)
 
         RendererLifecycleOperation.AdoptCurrentRenderContext -> failed(

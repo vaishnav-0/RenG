@@ -134,6 +134,37 @@ class RendererBasemapTileTest {
      * only the first half would pass on a build that drew no ground at all.
      */
     @Test
+    fun aRasterisingPreparationReportsTheEnginesCountersAndACloseForgetsThem() = runTest {
+        val renderer = styleRenderer(TileTransport())
+        assertEquals(emptyMap(), renderer.queryMetrics().counters, "nothing has happened yet")
+
+        renderer.prepare(basemapPlan(frameIndex = 0L))
+
+        val metrics = renderer.queryMetrics()
+        // Before ADR 0049 this was unconditionally empty: RenG installed MetricsSink.None and threw
+        // every counter the engine produced away. This case lives here rather than beside the other
+        // metric tests for the reason this whole suite is native-only -- androidHostTest resolves
+        // skiko without its native library, so no renderer-level basemap preparation completes there.
+        assertEquals(4L, metrics[RenGMetricName.ENGINE_TILES_RENDERED], "four tiles: ${metrics.counters}")
+        assertTrue(metrics[RenGMetricName.ENGINE_TILE_DRAW_NANOS] > 0L, "drawing took no time at all")
+        assertEquals(
+            0L,
+            metrics[RenGMetricName.ENGINE_METRICS_UNRECOGNISED],
+            "this engine emitted a metric RenG has no name for: ${metrics.counters}",
+        )
+        // The outside view of ADR 0044: a frame taking the raw-pixel path encodes no PNG, so these
+        // two stay at zero while four tiles are rasterised. Nothing else in the tree can observe it.
+        assertEquals(0L, metrics[RenGMetricName.ENGINE_TILE_PNG_BYTES])
+        assertEquals(0L, metrics[RenGMetricName.ENGINE_TILE_PNG_ENCODE_NANOS])
+
+        renderer.close()
+
+        // Empty rather than the final totals: a monotonic series that simply stopped moving reads as
+        // a quiet renderer, which a closed one is not.
+        assertEquals(emptyMap(), renderer.queryMetrics().counters)
+    }
+
+    @Test
     fun aCameraWhoseTilesAreAlreadyDrawnRasterisesNothingAndStillPlacesItsGround() = runTest {
         val transport = TileTransport()
         val renderer = styleRenderer(transport) as RenGRenderer

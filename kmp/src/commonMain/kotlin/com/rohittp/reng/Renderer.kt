@@ -114,6 +114,13 @@ public sealed interface Renderer : AutoCloseable {
 
     public fun queryResources(selector: ResourceSelector = ResourceSelector.All): ResourceReport
 
+    /**
+     * Every counter the basemap engine has reported to this renderer, as a running total since it
+     * was created (ADR 0049). A closed renderer answers an empty report, exactly as
+     * [queryResources] does.
+     */
+    public fun queryMetrics(): MetricReport
+
     public fun freeResources(selector: ResourceSelector = ResourceSelector.All): ResourceFreeResult
 
     public fun notifyGpuObjectsGone(): Unit

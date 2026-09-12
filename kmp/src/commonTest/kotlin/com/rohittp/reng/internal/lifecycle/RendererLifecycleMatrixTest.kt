@@ -56,6 +56,15 @@ class RendererLifecycleMatrixTest {
                 awaiting = Expected.Execute(),
                 closed = Expected.Outcome(RendererLifecycleOutcome.EmptyResourceResult),
             ),
+            // Gated exactly as QueryResources is, which is the decision ADR 0049 takes rather than
+            // reading the metric recorder directly: reading counters is safe everywhere, and a
+            // single ungated public query would be a special case for whoever reads this next.
+            MatrixCase(
+                operation = RendererLifecycleOperation.QueryMetrics,
+                live = Expected.Execute(),
+                awaiting = Expected.Execute(),
+                closed = Expected.Outcome(RendererLifecycleOutcome.EmptyResourceResult),
+            ),
             MatrixCase(
                 operation = RendererLifecycleOperation.NotifyGpuObjectsGone,
                 live = Expected.Action(RendererLifecycleAction.AwaitRenderCallQuiescence),

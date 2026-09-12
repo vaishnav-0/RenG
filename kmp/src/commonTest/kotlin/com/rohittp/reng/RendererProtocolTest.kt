@@ -170,6 +170,7 @@ class RendererProtocolTest {
         val cancellation: Unit = renderer.cancelPreparations()
         val historyClear: Unit = renderer.clearFrameHistory()
         val report: ResourceReport = renderer.queryResources()
+        val metrics: MetricReport = renderer.queryMetrics()
         val freeResult: ResourceFreeResult = renderer.freeResources()
         val gpuObjectsGone: Unit = renderer.notifyGpuObjectsGone()
         val contextAdoption: Unit = renderer.adoptCurrentRenderContext()
@@ -188,6 +189,7 @@ class RendererProtocolTest {
             preparedBatch,
             cancellation,
             historyClear,
+            metrics,
             report,
             freeResult,
             gpuObjectsGone,

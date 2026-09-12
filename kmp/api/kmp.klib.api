@@ -152,6 +152,33 @@ final enum class com.rohittp.reng/RenGErrorCode : kotlin/Enum<com.rohittp.reng/R
     final fun values(): kotlin/Array<com.rohittp.reng/RenGErrorCode> // com.rohittp.reng/RenGErrorCode.values|values#static(){}[0]
 }
 
+final enum class com.rohittp.reng/RenGMetricName : kotlin/Enum<com.rohittp.reng/RenGMetricName> { // com.rohittp.reng/RenGMetricName|null[0]
+    enum entry ENGINE_METRICS_UNRECOGNISED // com.rohittp.reng/RenGMetricName.ENGINE_METRICS_UNRECOGNISED|null[0]
+    enum entry ENGINE_RESOURCE_DECODED_BYTES // com.rohittp.reng/RenGMetricName.ENGINE_RESOURCE_DECODED_BYTES|null[0]
+    enum entry ENGINE_RESOURCE_REQUESTS // com.rohittp.reng/RenGMetricName.ENGINE_RESOURCE_REQUESTS|null[0]
+    enum entry ENGINE_RESOURCE_WIRE_BYTES // com.rohittp.reng/RenGMetricName.ENGINE_RESOURCE_WIRE_BYTES|null[0]
+    enum entry ENGINE_REVALIDATIONS_FAILED // com.rohittp.reng/RenGMetricName.ENGINE_REVALIDATIONS_FAILED|null[0]
+    enum entry ENGINE_REVALIDATIONS_NOT_MODIFIED // com.rohittp.reng/RenGMetricName.ENGINE_REVALIDATIONS_NOT_MODIFIED|null[0]
+    enum entry ENGINE_REVALIDATIONS_REPLACED // com.rohittp.reng/RenGMetricName.ENGINE_REVALIDATIONS_REPLACED|null[0]
+    enum entry ENGINE_REVALIDATIONS_STARTED // com.rohittp.reng/RenGMetricName.ENGINE_REVALIDATIONS_STARTED|null[0]
+    enum entry ENGINE_SINGLE_FLIGHT_JOINS // com.rohittp.reng/RenGMetricName.ENGINE_SINGLE_FLIGHT_JOINS|null[0]
+    enum entry ENGINE_STORE_HITS // com.rohittp.reng/RenGMetricName.ENGINE_STORE_HITS|null[0]
+    enum entry ENGINE_STORE_MISSES // com.rohittp.reng/RenGMetricName.ENGINE_STORE_MISSES|null[0]
+    enum entry ENGINE_TILES_RENDERED // com.rohittp.reng/RenGMetricName.ENGINE_TILES_RENDERED|null[0]
+    enum entry ENGINE_TILE_DRAW_NANOS // com.rohittp.reng/RenGMetricName.ENGINE_TILE_DRAW_NANOS|null[0]
+    enum entry ENGINE_TILE_EXACT_RECOVERIES // com.rohittp.reng/RenGMetricName.ENGINE_TILE_EXACT_RECOVERIES|null[0]
+    enum entry ENGINE_TILE_PNG_BYTES // com.rohittp.reng/RenGMetricName.ENGINE_TILE_PNG_BYTES|null[0]
+    enum entry ENGINE_TILE_PNG_ENCODE_NANOS // com.rohittp.reng/RenGMetricName.ENGINE_TILE_PNG_ENCODE_NANOS|null[0]
+    enum entry ENGINE_TILE_RESOURCE_SUBSTITUTIONS // com.rohittp.reng/RenGMetricName.ENGINE_TILE_RESOURCE_SUBSTITUTIONS|null[0]
+    enum entry ENGINE_WARM_ALREADY_IN_FLIGHT // com.rohittp.reng/RenGMetricName.ENGINE_WARM_ALREADY_IN_FLIGHT|null[0]
+
+    final val entries // com.rohittp.reng/RenGMetricName.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<com.rohittp.reng/RenGMetricName> // com.rohittp.reng/RenGMetricName.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): com.rohittp.reng/RenGMetricName // com.rohittp.reng/RenGMetricName.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<com.rohittp.reng/RenGMetricName> // com.rohittp.reng/RenGMetricName.values|values#static(){}[0]
+}
+
 final enum class com.rohittp.reng/ResourceAccessMode : kotlin/Enum<com.rohittp.reng/ResourceAccessMode> { // com.rohittp.reng/ResourceAccessMode|null[0]
     enum entry CACHE_ONLY // com.rohittp.reng/ResourceAccessMode.CACHE_ONLY|null[0]
     enum entry NORMAL // com.rohittp.reng/ResourceAccessMode.NORMAL|null[0]
@@ -280,6 +307,7 @@ sealed interface com.rohittp.reng/Renderer : kotlin/AutoCloseable { // com.rohit
     abstract fun freeResources(com.rohittp.reng/ResourceSelector = ...): com.rohittp.reng/ResourceFreeResult // com.rohittp.reng/Renderer.freeResources|freeResources(com.rohittp.reng.ResourceSelector){}[0]
     abstract fun mintRenderTarget(com.rohittp.reng/FramebufferName): com.rohittp.reng/RenderTarget // com.rohittp.reng/Renderer.mintRenderTarget|mintRenderTarget(com.rohittp.reng.FramebufferName){}[0]
     abstract fun notifyGpuObjectsGone() // com.rohittp.reng/Renderer.notifyGpuObjectsGone|notifyGpuObjectsGone(){}[0]
+    abstract fun queryMetrics(): com.rohittp.reng/MetricReport // com.rohittp.reng/Renderer.queryMetrics|queryMetrics(){}[0]
     abstract fun queryResources(com.rohittp.reng/ResourceSelector = ...): com.rohittp.reng/ResourceReport // com.rohittp.reng/Renderer.queryResources|queryResources(com.rohittp.reng.ResourceSelector){}[0]
     abstract suspend fun cancelPreparations() // com.rohittp.reng/Renderer.cancelPreparations|cancelPreparations(){}[0]
     abstract suspend fun prepare(com.rohittp.reng/FramePlan, com.rohittp.reng/ResourceAccessMode = ...): com.rohittp.reng/PreparedFrame // com.rohittp.reng/Renderer.prepare|prepare(com.rohittp.reng.FramePlan;com.rohittp.reng.ResourceAccessMode){}[0]
@@ -586,6 +614,16 @@ final class com.rohittp.reng/Geometry { // com.rohittp.reng/Geometry|null[0]
     final object Companion { // com.rohittp.reng/Geometry.Companion|null[0]
         final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Geometry> // com.rohittp.reng/Geometry.Companion.serializer|serializer(){}[0]
     }
+}
+
+final class com.rohittp.reng/MetricReport { // com.rohittp.reng/MetricReport|null[0]
+    final val counters // com.rohittp.reng/MetricReport.counters|{}counters[0]
+        final fun <get-counters>(): kotlin.collections/Map<com.rohittp.reng/RenGMetricName, kotlin/Long> // com.rohittp.reng/MetricReport.counters.<get-counters>|<get-counters>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/MetricReport.equals|equals(kotlin.Any?){}[0]
+    final fun get(com.rohittp.reng/RenGMetricName): kotlin/Long // com.rohittp.reng/MetricReport.get|get(com.rohittp.reng.RenGMetricName){}[0]
+    final fun hashCode(): kotlin/Int // com.rohittp.reng/MetricReport.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // com.rohittp.reng/MetricReport.toString|toString(){}[0]
 }
 
 final class com.rohittp.reng/Model { // com.rohittp.reng/Model|null[0]

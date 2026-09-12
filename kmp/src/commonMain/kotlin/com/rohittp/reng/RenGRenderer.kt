@@ -110,6 +110,7 @@ import com.rohittp.reng.internal.label.LabelFadeState
 import com.rohittp.reng.internal.label.LabelGroundElevation
 import com.rohittp.reng.internal.label.advanceLabelFade
 import com.rohittp.reng.internal.label.placeLabels
+import com.rohittp.reng.internal.metrics.EngineMetricRecorder
 import com.rohittp.reng.internal.lifecycle.GpuLedger
 import com.rohittp.reng.internal.lifecycle.PreparedFrameFact
 import com.rohittp.reng.internal.lifecycle.RenderTargetFact
@@ -831,6 +832,7 @@ internal class RenGRenderer(
     private val basemapEngineHost: BasemapEngineHost,
     private val programs: GlProgramCache,
     private val glObjectRegistry: GlObjectRegistry,
+    private val metricRecorder: EngineMetricRecorder,
     initialGlState: InternalGlState,
 ) : Renderer {
 
@@ -2223,6 +2225,18 @@ internal class RenGRenderer(
             // assert while that texture was resident.
             RendererLifecycleOutcome.Succeeded, RendererLifecycleOutcome.NoOp ->
                 residentCache.report(selector, glObjectRegistry::gpuByteAccount)
+            is RendererLifecycleOutcome.Failed -> throw outcome.failure.toException()
+        }
+    }
+
+    override fun queryMetrics(): MetricReport {
+        val outcome = driver.run(RendererLifecycleOperation.QueryMetrics) { null }
+        return when (outcome) {
+            // A closed renderer answers empty rather than its final totals. The counters are alive
+            // only while the renderer is, and reporting a frozen history would make a monotonic
+            // series look as though it had simply stopped moving -- ADR 0049.
+            RendererLifecycleOutcome.EmptyResourceResult -> MetricReport(emptyMap())
+            RendererLifecycleOutcome.Succeeded, RendererLifecycleOutcome.NoOp -> metricRecorder.snapshot()
             is RendererLifecycleOutcome.Failed -> throw outcome.failure.toException()
         }
     }
