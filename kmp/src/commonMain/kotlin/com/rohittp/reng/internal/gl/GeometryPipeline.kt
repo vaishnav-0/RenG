@@ -88,7 +88,30 @@ internal class GeometryPipeline(
     val resolutionLocation: Int,
     val geometryBoundsLocation: Int,
     val frameIndexLocation: Int,
-)
+) {
+    /**
+     * Consumer uniform and sampler names resolved against [program], memoised on first use.
+     *
+     * The six documented names above are resolved once at creation, because they are known then. A
+     * consumer's own names are not -- they arrive with each `Geometry` -- so [drawGeometry] asked the
+     * driver for every one of them on every draw. A geometry declaring forty-six uniforms is
+     * forty-six `glGetUniformLocation` calls per instance per frame, each a driver-side string
+     * lookup, for an answer that cannot change: a location is a property of the linked program, and
+     * this pipeline and that program are deleted together in [deleteGeometryPipeline], so the memo
+     * can never outlive what it describes.
+     *
+     * **A negative location is cached too, and deliberately.** `getUniformLocation` returns a
+     * negative for a name the program never declared, which is the documented "do not bind" signal
+     * at the top of this file. That answer is as permanent as a positive one, so re-asking for it
+     * every frame is the same waste with none of the benefit -- and a shader that legitimately
+     * declares fewer names than a material offers is ordinary rather than an error.
+     */
+    private val consumerLocations: MutableMap<String, Int> = HashMap()
+
+    /** [name]'s location in [program], from the memo above or from the driver exactly once. */
+    fun consumerLocation(binding: GlBinding, name: String): Int =
+        consumerLocations.getOrPut(name) { binding.getUniformLocation(program, name) }
+}
 
 internal sealed interface GeometryPipelineResult {
     data class Created(val pipeline: GeometryPipeline) : GeometryPipelineResult
@@ -231,12 +254,15 @@ internal fun deleteGeometryPipeline(
  * [com.rohittp.reng.internal.image.DecodedImage] — the caller assembling one frame's
  * [SceneGeometry]s uploads (and caches, by `ResourceKey`, through `GlObjectRegistry`) once, so this
  * function issues no [uploadTexture] call of its own and cannot be the site of Task 9b's
- * texture-lifetime leak. Each name is looked up against [pipeline]'s program with
- * [GlBinding.getUniformLocation] **at draw time** — the same "bind only when declared" rule
- * [pipeline]'s own six locations already follow, applied here because a consumer name's location
- * cannot be cached at pipeline-creation time the way the six documented ones are: the pipeline is
- * shared and content-keyed by [ShaderPair] alone, while the set of consumer names varies by
- * `Geometry` instance. Both maps are iterated in ascending key order (plain `String` comparison,
+ * texture-lifetime leak. Each name is resolved against [pipeline]'s program through
+ * [GeometryPipeline.consumerLocation] — the same "bind only when declared" rule [pipeline]'s own six
+ * locations already follow, reached differently because a consumer name's location cannot be
+ * resolved at pipeline-creation time the way the six documented ones are: the pipeline is shared and
+ * content-keyed by [ShaderPair] alone, while the set of consumer names varies by `Geometry`
+ * instance. So it is resolved on **first** draw that names it and memoised on the pipeline
+ * thereafter, which is sound for the same reason creation-time resolution is: a location depends on
+ * nothing but the linked program and the name, and the pipeline owns that program for its whole
+ * life. Both maps are iterated in ascending key order (plain `String` comparison,
  * i.e. UTF-16 code-unit order — the same fixed, non-locale-sensitive ordering the canonical frame
  * encoding uses) purely so the same document always assigns the same texture units; the order
  * uniforms are set in has no observable effect since each lands at its own independent location.
@@ -317,14 +343,14 @@ internal fun drawGeometry(
     }
 
     uniformsSnapshot.entries.sortedBy { it.key }.forEach { (name, value) ->
-        val location = binding.getUniformLocation(pipeline.program, name)
+        val location = pipeline.consumerLocation(binding, name)
         if (location >= 0) {
             bindConsumerUniform(binding, location, value)
         }
     }
 
     texturesSnapshot.entries.sortedBy { it.key }.forEachIndexed { unitIndex, (name, texture) ->
-        val samplerLocation = binding.getUniformLocation(pipeline.program, name)
+        val samplerLocation = pipeline.consumerLocation(binding, name)
         binding.activeTexture(GL_TEXTURE0 + unitIndex)
         binding.bindTexture(GL_TEXTURE_2D, texture)
         if (samplerLocation >= 0) {

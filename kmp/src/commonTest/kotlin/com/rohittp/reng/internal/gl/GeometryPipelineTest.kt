@@ -254,6 +254,77 @@ class GeometryPipelineTest {
         assertTrue(binding.log.none { it.startsWith("uniform") }, "an undeclared consumer name binds nothing")
     }
 
+    /**
+     * A consumer name costs one `glGetUniformLocation` for the life of the pipeline, not one per draw.
+     *
+     * Three draws over one pipeline with two names: six lookups would be one per name per draw, and
+     * the assertion is two, one per distinct name. A location depends on nothing but the linked
+     * program and the name, and the pipeline owns that program until [deleteGeometryPipeline] takes
+     * both, so a second ask can only repeat the first answer. On a consumer program declaring
+     * forty-six uniforms that is forty-six driver string lookups saved per instance per frame.
+     */
+    @Test
+    fun aConsumerNamesLocationIsAskedOfTheDriverOncePerPipelineRatherThanOncePerDraw() {
+        val binding = RecordingGlBinding().withDeclaredNames("uAlpha" to 4, "uBeta" to 5)
+        val pipeline = createPipeline(binding)
+        binding.log.clear()
+
+        repeat(3) {
+            drawGeometry(
+                binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+                consumerUniforms = mapOf(
+                    "uAlpha" to ShaderValue.Scalar(1f),
+                    "uBeta" to ShaderValue.Scalar(2f),
+                ),
+            )
+        }
+
+        assertEquals(
+            listOf(
+                "getUniformLocation(${pipeline.program},uAlpha)",
+                "getUniformLocation(${pipeline.program},uBeta)",
+            ),
+            binding.log.filter { it.startsWith("getUniformLocation(") },
+            "each consumer name is resolved once and memoised on the pipeline",
+        )
+        // The uniforms are still set on every draw: the memo removes the lookup, never the bind, or
+        // the second frame would draw with the first frame's values.
+        assertEquals(
+            6,
+            binding.log.count { it.startsWith("uniform1f(") },
+            "three draws still bind both uniforms",
+        )
+    }
+
+    /**
+     * An undeclared name is memoised too, so a material offering more than its shader declares stops
+     * costing a lookup per draw as well.
+     *
+     * Worth its own test because the negative answer is the one an implementation is likeliest to
+     * leave uncached: a memo that only stores successes would quietly re-ask forever for exactly the
+     * names that never resolve.
+     */
+    @Test
+    fun anUndeclaredConsumerNameIsMemoisedRatherThanReAskedOnEveryDraw() {
+        val binding = RecordingGlBinding().withNoDeclaredNames()
+        val pipeline = createPipeline(binding)
+        binding.log.clear()
+
+        repeat(3) {
+            drawGeometry(
+                binding, pipeline, testGrid(), IDENTITY_4X4, 1f, 1f, testBounds(), frameIndex = 0L,
+                consumerUniforms = mapOf("uUnused" to ShaderValue.Scalar(1f)),
+            )
+        }
+
+        assertEquals(
+            1,
+            binding.log.count { it.startsWith("getUniformLocation(") },
+            "a name the program does not declare is asked once, and the negative answer is kept",
+        )
+        assertTrue(binding.log.none { it.startsWith("uniform") }, "and it still binds nothing")
+    }
+
     // --- Task 7/9b: consumer textures take deterministic, name-sorted units -------------------
     //
     // As of Task 9b, drawGeometry's consumerTextures parameter carries each name's ALREADY-UPLOADED
