@@ -79,7 +79,9 @@ internal fun createRenderer(
         is InternalGlStateResult.Failed -> throw result.failure.toException()
     }
 
-    val residentCache = ResidentCache()
+    val residentCache = ResidentCache(
+        residentByteBudget = configuration.resourceLimits.maximumResidentCpuResourceBytes,
+    )
 
     // The renderer's one long-lived Rentile engine (ADR 0016). Constructed here rather than lazily
     // because setup is where every renderer-lifetime resource is fixed (ADR 0012) and because building it

@@ -27,6 +27,17 @@ internal class ResidentGeneration(
     var leaseCount: Int = 0
         private set
 
+    /**
+     * What this generation costs the byte budget (ADR 0047), read once at construction.
+     *
+     * `byteSnapshot` is the internal no-copy accessor, so `.size` is a field read rather than the
+     * array copy `bytes` would make — this is computed for every install and must not be the
+     * expensive one. The decoded half is always zero in production today, because every install
+     * passes `decoded = null`; it is included so the figure stays right the day one does not.
+     */
+    val byteSize: Long =
+        stored.byteSnapshot.size.toLong() + (decoded?.byteCount ?: 0).toLong()
+
     fun addLease() {
         leaseCount += 1
     }
@@ -67,8 +78,12 @@ private class KeyEntry {
  * The resident cache: one entry per [ResourceKey] holding generations, leases, and a reload marker.
  *
  * Exactly one generation per key is `current`; superseding it (a fresh [install]) or freeing its key
- * retires it. A retired generation with no outstanding lease is dropped immediately — there is no
- * automatic eviction of a leased one, and no automatic eviction at all otherwise. [free] retires every
+ * retires it. A retired generation with no outstanding lease is dropped immediately, and since ADR
+ * 0047 an **unleased current** generation is evicted too, least-recently-used first, once
+ * [residentByteBudget] is exceeded — a leased one never is, at any size, because a budget bounds what
+ * may stay resident rather than what must go. An evicted key is removed outright and is never marked
+ * `freed`: that marker means the consumer asked, and [wasFreed] turns it into a diagnostic that would
+ * then blame them for this cache's own decision. [free] retires every
  * generation for a matched key, marks the key `freed` (the reload marker [wasFreed] answers), deletes
  * every unleased generation, and reports the rest deferred; a key with no current generation and no
  * retired generation counts as already free. Accessing a freed key never fails here: the next [install]
@@ -82,12 +97,41 @@ private class KeyEntry {
  * decides the outcome, so a free that wins reports its generation deferred and a release that wins lets
  * the following free see nothing left to defer.
  */
-internal class ResidentCache {
+internal class ResidentCache(
+    /**
+     * The byte budget unleased resources are evicted down to (ADR 0047).
+     *
+     * Defaults to `Long.MAX_VALUE`, a cache that never evicts — which is what every test constructing
+     * this without an argument gets, and what every release before ADR 0047 behaved like.
+     */
+    private val residentByteBudget: Long = Long.MAX_VALUE,
+) {
     private val mutex = Mutex()
     private val entries: MutableMap<ResourceKey, KeyEntry> = mutableMapOf()
 
+    /**
+     * Least-recently-used first, holding exactly the keys [entries] holds.
+     *
+     * A `LinkedHashMap` used as an ordered set, the shape `GlObjectRegistry.unleasedOrder` already
+     * uses for GPU textures. Recency is bumped by removing and re-inserting — that is what moves a
+     * key to the end, and it is why [entries] cannot carry this order itself: `getOrPut` on a plain
+     * map does not reorder on a hit.
+     */
+    private val recency: LinkedHashMap<ResourceKey, Unit> = LinkedHashMap()
+
+    /**
+     * Bytes of every generation [entries] holds, maintained on install and eviction rather than
+     * summed on demand.
+     *
+     * Summed would mean walking every generation of every key on every install, which is the cost
+     * [report] already pays once per `queryResources` and must not pay once per resource per frame.
+     */
+    private var residentBytes: Long = 0L
+
     fun current(key: ResourceKey): ResidentGeneration? = locked {
-        entries[key]?.current
+        val generation = entries[key]?.current
+        if (generation != null) touch(key)
+        generation
     }
 
     fun install(
@@ -100,6 +144,9 @@ internal class ResidentCache {
         val generation = ResidentGeneration(key = key, stored = stored, decoded = decoded)
         entry.current = generation
         entry.freed = false
+        residentBytes += generation.byteSize
+        touch(key)
+        evictOverBudget()
         generation
     }
 
@@ -134,6 +181,11 @@ internal class ResidentCache {
         generation.addLease()
         entry.current = generation
         entry.freed = false
+        residentBytes += generation.byteSize
+        touch(key)
+        // Safe to sweep here: this generation already holds the caller's lease, so it can never be
+        // its own victim however far over budget the install pushed the cache.
+        evictOverBudget()
         Lease(generation)
     }
 
@@ -150,6 +202,7 @@ internal class ResidentCache {
     fun observeAndTakeLease(key: ResourceKey): Lease? = locked {
         val generation = entries[key]?.current ?: return@locked null
         generation.addLease()
+        touch(key)
         Lease(generation)
     }
 
@@ -158,7 +211,8 @@ internal class ResidentCache {
         val generation = lease.generation
         generation.removeLease()
         if (generation.leaseCount == 0) {
-            entries[generation.key]?.retired?.remove(generation)
+            val removed = entries[generation.key]?.retired?.remove(generation) == true
+            if (removed) residentBytes -= generation.byteSize
         }
     }
 
@@ -212,6 +266,8 @@ internal class ResidentCache {
 
     fun closeAll(): Unit = locked {
         entries.clear()
+        recency.clear()
+        residentBytes = 0L
     }
 
     /**
@@ -224,6 +280,46 @@ internal class ResidentCache {
         entry.current = null
         if (superseded.leaseCount > 0) {
             entry.retired += superseded
+        } else {
+            // Dropped entirely, so its bytes leave with it. A retired-but-leased generation stays
+            // counted, because it is still held.
+            residentBytes -= superseded.byteSize
+        }
+    }
+
+    /**
+     * Moves [key] to the most-recently-used end of [recency], and holds the invariant that [recency]
+     * never names a key [entries] has dropped: a key with no entry is not re-inserted.
+     */
+    private fun touch(key: ResourceKey) {
+        if (!entries.containsKey(key)) return
+        recency.remove(key)
+        recency[key] = Unit
+    }
+
+    /**
+     * Evicts least-recently-used keys until [residentBytes] is within [residentByteBudget].
+     *
+     * A key is a candidate only when its current generation holds no lease and it has no retired
+     * generations — a retired generation exists only because something leases it, so such a key is in
+     * use by definition. A leased key is skipped rather than stopping the sweep, so one live frame
+     * cannot pin the whole cache above its budget.
+     *
+     * The evicted key is **removed from [entries] outright and never marked `freed`** (ADR 0047):
+     * `freed` means the consumer asked, and `wasFreed` turns it into a diagnostic blaming them for a
+     * decision this cache made on its own.
+     */
+    private fun evictOverBudget() {
+        if (residentBytes <= residentByteBudget) return
+        val candidates = recency.keys.toList()
+        for (key in candidates) {
+            if (residentBytes <= residentByteBudget) return
+            val entry = entries[key] ?: continue
+            val generation = entry.current
+            if (generation == null || generation.leaseCount > 0 || entry.retired.isNotEmpty()) continue
+            residentBytes -= generation.byteSize
+            entries.remove(key)
+            recency.remove(key)
         }
     }
 

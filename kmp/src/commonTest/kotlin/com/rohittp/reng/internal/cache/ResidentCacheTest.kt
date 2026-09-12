@@ -18,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -267,6 +268,161 @@ class ResidentCacheTest {
         assertEquals(0L, totals.knownGpuBytes)
         assertFalse(totals.hasUnknownGpuBytes)
     }
+
+    @Test
+    fun anUnleasedResourceIsEvictedOnceTheBudgetIsExceeded() {
+        // Every fixture resource is exactly 64 raw bytes, so a 64-byte budget holds one of them and
+        // is breached by the second.
+        val cache = ResidentCache(residentByteBudget = 64L)
+        val first = keyNamed("evict-first")
+        val second = keyNamed("evict-second")
+        cache.install(first, storedA, null)
+
+        cache.install(second, storedB, null)
+
+        assertNull(cache.current(first))
+        assertNotNull(cache.current(second))
+        assertEquals(1, cache.report(ResourceSelector.All, noGpuObjects).entries.size)
+    }
+
+    @Test
+    fun aLeasedResourceIsNeverEvictedHoweverFarOverBudget() {
+        // A budget of one byte: every install breaches it, so nothing survives here except by the
+        // lease rule itself.
+        val cache = ResidentCache(residentByteBudget = 1L)
+        val leased = keyNamed("leased-survivor")
+        val unleased = keyNamed("unleased-victim")
+        val lease = cache.installAndTakeLease(leased, storedA, null)
+
+        cache.install(unleased, storedB, null)
+
+        // Staying 127 bytes over budget is the correct outcome, not a leak: a live Prepared Frame
+        // still needs this generation, and the budget bounds what may stay resident, never what must
+        // go. The unleased neighbour is what the sweep is allowed to reclaim, and it has.
+        assertNotNull(cache.current(leased))
+        assertNull(cache.current(unleased))
+        cache.releaseLease(lease)
+    }
+
+    @Test
+    fun theLeastRecentlyUsedResourceIsTheOneEvicted() {
+        val cache = ResidentCache(residentByteBudget = 128L)
+        val oldest = keyNamed("lru-oldest")
+        val middle = keyNamed("lru-middle")
+        val newest = keyNamed("lru-newest")
+        cache.install(oldest, storedA, null)
+        cache.install(middle, storedB, null)
+        // Observing the oldest makes it the most recent. Without that, install order alone would
+        // decide the victim and this case would pass against a plain insertion-ordered queue.
+        assertNotNull(cache.current(oldest))
+
+        cache.install(newest, storedA, null)
+
+        assertNull(cache.current(middle))
+        assertNotNull(cache.current(oldest))
+        assertNotNull(cache.current(newest))
+    }
+
+    @Test
+    fun anEvictedKeyIsForgottenRatherThanMarkedFreed() {
+        val cache = ResidentCache(residentByteBudget = 64L)
+        val evicted = keyNamed("forgotten-key")
+        cache.install(evicted, storedA, null)
+        cache.install(keyNamed("forgotten-key-pressure"), storedB, null)
+
+        assertNull(cache.current(evicted))
+        // The decision ADR 0047 turns on. `freed` means the consumer asked, and `wasFreed` is what
+        // raises RESOURCE_RELOADED_AFTER_FREE -- a diagnostic about the consumer's behaviour. An
+        // eviction is this renderer's own decision about a resource nobody stopped wanting, so an
+        // evicted key must read back exactly like one never seen.
+        assertFalse(cache.wasFreed(evicted))
+        assertEquals(
+            ResourceFreeResult(matchedKeys = 0, fullyFreedKeys = 0, deferredKeys = 0, alreadyFreeKeys = 0),
+            cache.free(ResourceSelector.ByKey(evicted)),
+        )
+    }
+
+    @Test
+    fun aKeyWhoseRetiredGenerationIsStillLeasedIsNotEvicted() {
+        val cache = ResidentCache(residentByteBudget = 64L)
+        val pinned = keyNamed("retired-pinned")
+        val lease = cache.takeLease(cache.install(pinned, storedA, null))
+        // Superseding moves the leased generation to `retired` and leaves an unleased current one.
+        // Judged on its current generation alone the key looks evictable; it is not, because
+        // something still holds the generation behind it.
+        cache.install(pinned, storedB, null)
+
+        cache.install(keyNamed("retired-pinned-pressure"), storedA, null)
+
+        assertNotNull(cache.current(pinned))
+        cache.releaseLease(lease)
+    }
+
+    @Test
+    fun releasingTheLastLeaseMakesAKeyEvictableAtTheNextInstall() {
+        val cache = ResidentCache(residentByteBudget = 64L)
+        val held = keyNamed("held-then-released")
+        val lease = cache.installAndTakeLease(held, storedA, null)
+        cache.install(keyNamed("held-pressure-one"), storedB, null)
+        assertNotNull(cache.current(held))
+
+        cache.releaseLease(lease)
+        cache.install(keyNamed("held-pressure-two"), storedA, null)
+
+        // Releasing a lease does not itself evict -- the sweep runs where the total can grow, which
+        // is an install. This is the pair that matters for a closing Prepared Frame (ADR 0045).
+        assertNull(cache.current(held))
+    }
+
+    @Test
+    fun decodedPixelsAreChargedToTheBudgetAlongsideRawBytes() {
+        // 64 raw + 64 decoded against 64 raw alone. Were the decoded half charged at zero the two
+        // installs would total exactly the budget and nothing would be evicted at all, which is the
+        // mutation this case exists to catch.
+        val cache = ResidentCache(residentByteBudget = 128L)
+        val plain = keyNamed("plain-cost")
+        val decoded = keyNamed("decoded-cost")
+        cache.install(plain, storedA, null)
+
+        cache.install(decoded, storedB, decodedOf(64))
+
+        assertNull(cache.current(plain))
+        assertNotNull(cache.current(decoded))
+    }
+
+    @Test
+    fun supersedingAnUnleasedGenerationDoesNotLeaveItsBytesCharged() {
+        // A budget for exactly two 64-byte generations, and exactly two are ever resident here. The
+        // reinstall replaces rather than adds, so if the superseded generation's bytes stayed charged
+        // the cache would believe itself full and evict a key nothing had finished with.
+        val cache = ResidentCache(residentByteBudget = 128L)
+        val reinstalled = keyNamed("superseded-unleased")
+        val neighbour = keyNamed("superseded-neighbour")
+        cache.install(reinstalled, storedA, null)
+        cache.install(reinstalled, storedB, null)
+
+        cache.install(neighbour, storedA, null)
+
+        assertNotNull(cache.current(reinstalled))
+        assertNotNull(cache.current(neighbour))
+    }
+
+    @Test
+    fun aRetiredGenerationsBytesLeaveTheBudgetWhenItsLastLeaseIsReleased() {
+        // The other half of the same accounting: a superseded generation that *was* leased stays
+        // charged, correctly, until the lease goes -- and must stop being charged when it does.
+        val cache = ResidentCache(residentByteBudget = 128L)
+        val superseded = keyNamed("retired-bytes-superseded")
+        val neighbour = keyNamed("retired-bytes-neighbour")
+        val lease = cache.takeLease(cache.install(superseded, storedA, null))
+        cache.install(superseded, storedB, null)
+        cache.releaseLease(lease)
+
+        cache.install(neighbour, storedA, null)
+
+        assertNotNull(cache.current(superseded))
+        assertNotNull(cache.current(neighbour))
+    }
 }
 
 /**
@@ -293,6 +449,15 @@ private val externalStickerKey = ResourceKeyDeriver().external(
 private val externalModelKey = ResourceKeyDeriver().external(
     ResourceClass.MODEL_GLB,
     ResourceLocator("resident-cache-test-model"),
+).key
+
+/**
+ * A fresh key per eviction case, because eviction is about which keys a cache holds and the shared
+ * fixtures above are reused across cases in one file.
+ */
+private fun keyNamed(name: String): ResourceKey = ResourceKeyDeriver().external(
+    ResourceClass.MODEL_TEXTURE,
+    ResourceLocator(name),
 ).key
 
 private val storedA: StoredRawResource = storedResource("a".repeat(64))

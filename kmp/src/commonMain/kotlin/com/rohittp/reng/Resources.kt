@@ -148,6 +148,27 @@ public data class ResourceLimits(
      * would silently re-bind every positional construction.
      */
     public val maximumInFlightRawBasemapTileBytes: Long = 64L * 1024L * 1024L,
+    /**
+     * How many bytes of **encoded, unleased** consumer resources may stay resident on the CPU before
+     * least-recently-used eviction reclaims them (ADR 0047).
+     *
+     * This bounds what `acquireFrameResources` installs: the compiled style document, every sticker
+     * and geometry-consumer image, and every model GLB. It does **not** bound rendered basemap tiles,
+     * which are never installed in that cache — those are bounded on the GPU by
+     * [maximumResidentGpuTextureBytes] and, in flight, by [maximumInFlightRawBasemapTileBytes].
+     *
+     * A resource still leased by a live Prepared Frame is never evicted, even past this budget: this
+     * bounds what **may** stay resident, never what **must**. Exceeding it because a frame in flight
+     * still needs a resource is the correct outcome, exactly as it is for the GPU texture budget.
+     *
+     * The default is deliberately below [maximumDecodedImageBytes], which is a per-image ceiling
+     * rather than a total, and below the GPU budget: these are encoded bytes, the cheaper
+     * representation, and a consumer holding more than this in resources nothing is drawing is
+     * holding something it is not using.
+     *
+     * Declared last, for the ABI reason [maximumInFlightRawBasemapTileBytes] already gives.
+     */
+    public val maximumResidentCpuResourceBytes: Long = 128L * 1024L * 1024L,
 ) {
     init {
         val minimum = 1L
@@ -190,6 +211,11 @@ public data class ResourceLimits(
         // not the degenerate "no budget at all" that a zero means for every other field above.
         require(maximumInFlightRawBasemapTileBytes in 0L..maximum) {
             "maximumInFlightRawBasemapTileBytes must be within the supported range"
+        }
+        // Zero is admissible for the same reason it is above: it says "keep nothing unleased", which
+        // is coherent -- every resource is evicted the moment its last frame closes.
+        require(maximumResidentCpuResourceBytes in 0L..maximum) {
+            "maximumResidentCpuResourceBytes must be within the supported range"
         }
     }
 }
