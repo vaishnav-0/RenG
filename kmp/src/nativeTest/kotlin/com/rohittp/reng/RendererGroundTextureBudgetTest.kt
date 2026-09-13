@@ -403,14 +403,21 @@ class RendererGroundTextureBudgetTest {
 
     /**
      * The GL name every `genTextures(1)` in [log] produced, in call order, read back from the
-     * `bindTexture` the uploader issues immediately afterwards — [RecordingGlBinding] hands out names
-     * through an `IntArray` the log line cannot carry, and the bind is where the name it just took
-     * becomes visible.
+     * `bindTexture` the uploader issues next — [RecordingGlBinding] hands out names through an
+     * `IntArray` the log line cannot carry, and the bind is where the name it just took becomes
+     * visible.
+     *
+     * "Next", not "immediately next": since ADR 0055 the binding saves the unit it is about to
+     * overwrite, so a `getIntegerv` for that unit's prior state sits between the two. The upload
+     * still binds the name it just generated; it is simply no longer the adjacent log line, and
+     * asserting adjacency was pinning a fixture detail rather than the behaviour.
      */
     private fun uploadedTextureNames(log: List<String>): List<Int> =
         log.indices.filter { log[it] == "genTextures(1)" }.map { index ->
-            val bind = log[index + 1]
-            requireNotNull(boundTextureName(bind)) { "an upload binds the name it just generated, not \"$bind\"" }
+            val bind = log.drop(index + 1).firstOrNull { boundTextureName(it) != null }
+            requireNotNull(bind?.let(::boundTextureName)) {
+                "an upload binds the name it just generated; none followed genTextures at $index"
+            }
         }
 
     /** The texture name in a `bindTexture(<target>,<name>)` log line, or null for any other line. */

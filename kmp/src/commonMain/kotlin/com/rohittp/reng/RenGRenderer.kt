@@ -36,6 +36,7 @@ import com.rohittp.reng.internal.gl.GlProgramCache
 import com.rohittp.reng.internal.gl.GlobeGroundPipeline
 import com.rohittp.reng.internal.gl.GlobeGroundPipelineResult
 import com.rohittp.reng.internal.gl.GpuTextureResidency
+import com.rohittp.reng.internal.gl.withCapturedGlState
 import com.rohittp.reng.internal.gl.GroundPipeline
 import com.rohittp.reng.internal.gl.GroundPipelineResult
 import com.rohittp.reng.internal.gl.IconBatch
@@ -2460,22 +2461,34 @@ internal class RenGRenderer(
         val textureLeases = ArrayList<TextureLease>(frame.basemapTiles.size + 1)
         var unrelievedResidency: GpuTextureResidency? = null
         val failure = try {
-            when (val resolved = resolveGroundTiles(frame, textureLeases)) {
-                is GroundTilesResult.Failed -> resolved.failure
-                is GroundTilesResult.Resolved -> drawResolvedFrame(
-                    frame = frame,
-                    framebufferName = framebufferName,
-                    profile = profile,
-                    surface = surface,
-                    composite = composite,
-                    sticker = sticker,
-                    ground = ground,
-                    label = label,
-                    icon = icon,
-                    resolvedCamera = resolvedCamera,
-                    sceneGroundTiles = resolved.tiles,
-                    textureLeases = textureLeases,
-                )
+            // The captured region opens HERE, not inside drawFrame (ADR 0054). `resolveGroundTiles`
+            // uploads every ground tile that is not already resident, and an upload ends by binding
+            // its new texture without putting back what was there — on whatever unit the host left
+            // active. Capturing after that recorded RenG's own texture as if it were the host's and
+            // faithfully restored it, losing the host's binding: measured at four of a frame's
+            // twenty-four texture binds landing before the capture began.
+            //
+            // `drawFrame` still opens a region of its own for every other caller, and finds this one
+            // already open and joins it.
+            withCapturedGlState(binding, profile) { captured ->
+                when (val resolved = resolveGroundTiles(frame, textureLeases, captured)) {
+                    is GroundTilesResult.Failed -> resolved.failure
+                    is GroundTilesResult.Resolved -> drawResolvedFrame(
+                        frame = frame,
+                        framebufferName = framebufferName,
+                        profile = profile,
+                        surface = surface,
+                        composite = composite,
+                        sticker = sticker,
+                        ground = ground,
+                        label = label,
+                        icon = icon,
+                        resolvedCamera = resolvedCamera,
+                        sceneGroundTiles = resolved.tiles,
+                        textureLeases = textureLeases,
+                        binding = captured,
+                    )
+                }
             }
         } finally {
             unrelievedResidency = releaseTextureLeases(textureLeases)
@@ -2542,6 +2555,8 @@ internal class RenGRenderer(
         resolvedCamera: ResolvedFrameCamera,
         sceneGroundTiles: List<SceneGroundTile>,
         textureLeases: MutableList<TextureLease>,
+        /** The captured binding (ADR 0054), shadowing the renderer's own for this draw. */
+        binding: GlBinding,
     ): FailureDescriptor? {
         val sceneStickers = frame.stickers.map { preparedSticker ->
             val texture = cachedTexture(preparedSticker.resourceKey) {
@@ -2863,6 +2878,8 @@ internal class RenGRenderer(
     private fun resolveGroundTiles(
         frame: RenGPreparedFrame,
         groundLeases: MutableList<TextureLease>,
+        /** The captured binding (ADR 0054): uploads here overwrite texture units the host owns. */
+        binding: GlBinding,
     ): GroundTilesResult {
         val groundInstances = frame.groundInstances
         if (groundInstances.isEmpty()) return GroundTilesResult.Resolved(emptyList())

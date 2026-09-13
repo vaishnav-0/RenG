@@ -193,7 +193,7 @@ private fun assertStateRoundTripIsExact(binding: GlBinding, profile: RenderConte
     GlErrorQueue.drainOnEntry(binding)
 
     perturbRestoredState(binding, profile, scratch, variant = 0)
-    val captured = captureGlState(binding, profile, CONFORMANCE_TEXTURE_UNITS)
+    val captured = captureGlState(binding, profile)
     assertEquals(
         GL_NO_ERROR,
         GlErrorQueue.firstOwnError(binding),
@@ -201,13 +201,13 @@ private fun assertStateRoundTripIsExact(binding: GlBinding, profile: RenderConte
     )
 
     perturbRestoredState(binding, profile, scratch, variant = 1)
-    val different = captureGlState(binding, profile, CONFORMANCE_TEXTURE_UNITS)
+    val different = captureGlState(binding, profile)
     assertTrue(captured != different, "the perturbation must actually change every captured item")
 
     restoreGlState(binding, captured)
     assertEquals(
         captured,
-        captureGlState(binding, profile, CONFORMANCE_TEXTURE_UNITS),
+        captureGlState(binding, profile),
         "save, perturb, and restore must be byte-exact",
     )
     assertEquals(GL_NO_ERROR, GlErrorQueue.firstOwnError(binding))
@@ -619,7 +619,12 @@ private fun assertOffscreenCompositeAndRestore(binding: GlBinding, profile: Rend
     binding.bindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
     GlErrorQueue.drainOnEntry(binding)
 
-    val before = captureGlState(binding, profile, CONFORMANCE_TEXTURE_UNITS)
+    val before = captureGlState(binding, profile)
+    // Texture units are no longer part of the snapshot -- a draw saves each unit it writes and
+    // restores exactly those (ADR 0055). This suite is the only place that checks the claim against
+    // a real driver, so it reads every unit either side of the frame rather than the ones RenG
+    // happened to track.
+    val unitsBefore = captureTextureUnits(binding, CONFORMANCE_TEXTURE_UNITS)
     val failure = drawFrame(
         binding = binding,
         profile = profile,
@@ -633,8 +638,13 @@ private fun assertOffscreenCompositeAndRestore(binding: GlBinding, profile: Rend
     assertNull(failure, "a Cycle D frame must draw without provoking a GL error")
     assertEquals(
         before,
-        captureGlState(binding, profile, CONFORMANCE_TEXTURE_UNITS),
+        captureGlState(binding, profile),
         "the documented state must be identical before and after a draw",
+    )
+    assertEquals(
+        unitsBefore,
+        captureTextureUnits(binding, CONFORMANCE_TEXTURE_UNITS),
+        "every texture unit must be identical before and after a draw, tracked or not",
     )
 
     val pixel = ByteArray(4)

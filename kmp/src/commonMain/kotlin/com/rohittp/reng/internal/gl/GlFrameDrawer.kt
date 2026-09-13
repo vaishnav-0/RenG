@@ -18,19 +18,6 @@ internal val EmptyGlFrameContent: GlFrameContent = GlFrameContent { }
  */
 internal const val REVERSE_Z_FAR_DEPTH: Float = 0.0f
 
-/**
- * How many texture units one frame captures and restores.
- *
- * ADR 0023's Restore Set covers "the bindings on the units RenG uses", and the widest user is
- * [drawGeometry], which binds one unit per consumer texture up to [MAXIMUM_CONSUMER_TEXTURES].
- * Capturing only [COMPOSITE_TEXTURE_UNIT_COUNT] left units 1..14 clobbered and never restored --
- * a shipped ADR 0006/0023 violation. This is deliberately a fixed maximum rather than a per-frame
- * count threaded down from the caller: a count derived from the frame's own content is one more
- * thing a future pass can forget to widen, and the whole defect this replaces was exactly that
- * kind of omission. Both GL 3.3 core and GLES 3.0 mandate at least sixteen per-stage texture image
- * units, so `GL_TEXTURE0 + 14` is always a valid unit on every context RenG adopts.
- */
-internal val FRAME_TEXTURE_UNIT_COUNT: Int = maxOf(COMPOSITE_TEXTURE_UNIT_COUNT, MAXIMUM_CONSUMER_TEXTURES)
 
 /**
  * Draws one frame: clears and renders [content] into RenG's own offscreen surface, then composites
@@ -79,7 +66,7 @@ internal fun drawFrame(
 ): FailureDescriptor? {
     GlErrorQueue.drainOnEntry(binding)
 
-    return withCapturedGlState(binding, profile, FRAME_TEXTURE_UNIT_COUNT) {
+    return withCapturedGlState(binding, profile) { binding ->
         binding.pixelStorei(GL_UNPACK_ALIGNMENT, GL_UNPACK_ALIGNMENT_DEFAULT)
         binding.pixelStorei(GL_UNPACK_ROW_LENGTH, 0)
         binding.pixelStorei(GL_UNPACK_SKIP_ROWS, 0)

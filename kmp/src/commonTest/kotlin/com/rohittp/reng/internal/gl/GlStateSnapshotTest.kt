@@ -7,50 +7,57 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GlStateSnapshotTest {
-    @Test fun activeTextureIsReadFirstAndReinstatedAfterThePerUnitLoop() {
+    /**
+     * **Reversed by ADR 0055.** This case used to assert that capture walked every texture unit up
+     * front. It no longer does: a unit is saved by the binding that overwrites it, so a capture that
+     * draws nothing must touch no unit at all — 30 queries and 16 writes that used to be paid on
+     * every frame regardless of content.
+     */
+    @Test fun captureTouchesNoTextureUnitAtAll() {
         val binding = populatedBinding()
-        captureGlState(binding, esProfile(), textureUnitCount = 2)
-        val activeReads = binding.log.indexOfFirst { it == "getIntegerv(0x84E0)" }
-        val firstUnitSwitch = binding.log.indexOfFirst { it == "activeTexture(0x84C0)" }
-        val firstBindingRead = binding.log.indexOfFirst { it == "getIntegerv(0x8069)" }
-        assertEquals(0, activeReads)
-        assertTrue(activeReads < firstUnitSwitch)
-        assertTrue(firstUnitSwitch < firstBindingRead)
-        assertEquals("activeTexture(0x84C3)", binding.log.last { it.startsWith("activeTexture") })
+        captureGlState(binding, esProfile())
+        assertTrue(
+            binding.log.none { it.startsWith("activeTexture") },
+            "capture must not walk the texture units: ${binding.log}",
+        )
+        assertTrue(binding.log.none { it == "getIntegerv(0x8069)" }, "nor read a unit's 2D binding")
     }
 
-    @Test fun restoreReinstatesTheActiveUnitLast() {
+    @Test fun restoreTouchesNoTextureUnitEither() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 2)
+        val snapshot = captureGlState(binding, esProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
-        assertEquals("activeTexture(0x84C3)", binding.log.last())
+        assertTrue(
+            binding.log.none { it.startsWith("activeTexture") || it.startsWith("bindSampler") },
+            "texture units belong to TextureUnitCapturingBinding now: ${binding.log}",
+        )
     }
 
     @Test fun theElementArrayBufferBindingIsNeverQueried() {
         val binding = populatedBinding()
-        captureGlState(binding, esProfile(), textureUnitCount = 1)
+        captureGlState(binding, esProfile())
         assertTrue(binding.log.none { it == "getIntegerv(0x8895)" })
         assertTrue(binding.log.any { it == "getIntegerv(0x8894)" })
     }
 
     @Test fun desktopOnlyTokensAreQueriedOnlyOnADesktopContext() {
         val esBinding = populatedBinding()
-        val esSnapshot = captureGlState(esBinding, esProfile(), textureUnitCount = 1)
+        val esSnapshot = captureGlState(esBinding, esProfile())
         assertNull(esSnapshot.drawBuffer)
         assertNull(esSnapshot.lineSmoothEnabled)
         assertTrue(esBinding.log.none { it == "getIntegerv(0xC01)" })
         assertTrue(esBinding.log.none { it == "isEnabled(0xB20)" })
 
         val desktopBinding = populatedBinding()
-        val desktopSnapshot = captureGlState(desktopBinding, desktopProfile(), textureUnitCount = 1)
+        val desktopSnapshot = captureGlState(desktopBinding, desktopProfile())
         assertEquals(GL_BACK, desktopSnapshot.drawBuffer)
         assertEquals(false, desktopSnapshot.lineSmoothEnabled)
     }
 
     @Test fun theUnpackAlignmentDefaultIsFourNotOne() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, esProfile())
         assertEquals(4, snapshot.unpackAlignment)
         assertEquals(4, snapshot.packAlignment)
         assertEquals(GL_UNPACK_ALIGNMENT_DEFAULT, snapshot.unpackAlignment)
@@ -58,14 +65,14 @@ class GlStateSnapshotTest {
 
     @Test fun captureRestoreCaptureIsIdenticalOnTheFake() {
         val binding = populatedBinding()
-        val first = captureGlState(binding, desktopProfile(), textureUnitCount = 3)
+        val first = captureGlState(binding, desktopProfile())
         restoreGlState(binding, first)
-        val second = captureGlState(binding, desktopProfile(), textureUnitCount = 3)
+        val second = captureGlState(binding, desktopProfile())
         assertEquals(first, second)
     }
 
     @Test fun theSnapshotCoversEverySetMemberTheSpecificationNames() {
-        val snapshot = captureGlState(populatedBinding(), desktopProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(populatedBinding(), desktopProfile())
         assertEquals(listOf(0f, 0f, 0f, 0f), snapshot.blendColour)
         assertEquals(listOf(0f, 1f), snapshot.depthRange)
         assertEquals(listOf(0, 0, 64, 64), snapshot.viewport)
@@ -85,7 +92,7 @@ class GlStateSnapshotTest {
 
     @Test fun restoreWritesBackFramebufferAndBufferBindings() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, esProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
         assertTrue(binding.log.contains("bindFramebuffer(0x8CA9,11)"))
@@ -108,7 +115,7 @@ class GlStateSnapshotTest {
      */
     @Test fun theIndexedUniformBufferBindingIsCapturedAndRestored() {
         val binding = RecordingGlBinding().apply { indexedUniformBuffer[0] = 77 }
-        withCapturedGlState(binding, esProfile(), FRAME_TEXTURE_UNIT_COUNT) {
+        withCapturedGlState(binding, esProfile()) {
             binding.bindBufferBase(GL_UNIFORM_BUFFER, 0, 5)
         }
         assertEquals(77, binding.indexedUniformBuffer[0], "a caller's own UBO binding must survive a RenG frame")
@@ -116,7 +123,7 @@ class GlStateSnapshotTest {
 
     @Test fun restoreWritesBackBlendState() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, esProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
         assertTrue(binding.log.contains("enable(0xBE2)"))
@@ -127,7 +134,7 @@ class GlStateSnapshotTest {
 
     @Test fun restoreWritesBackDepthState() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, esProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
         assertTrue(binding.log.contains("enable(0xB71)"))
@@ -139,7 +146,7 @@ class GlStateSnapshotTest {
 
     @Test fun restoreWritesBackRasterizerAndScissorState() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, esProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
         assertTrue(binding.log.contains("disable(0xB44)"))
@@ -152,7 +159,7 @@ class GlStateSnapshotTest {
 
     @Test fun restoreWritesBackColourWriteMaskAndClearColour() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, esProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
         assertTrue(binding.log.contains("colorMask(true,true,true,true)"))
@@ -161,7 +168,7 @@ class GlStateSnapshotTest {
 
     @Test fun restoreWritesBackPixelStoreState() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, esProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
         assertTrue(binding.log.contains("pixelStorei(0xCF5,4)"))
@@ -173,7 +180,7 @@ class GlStateSnapshotTest {
 
     @Test fun restoreWritesBackDialectGatedState() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, desktopProfile(), textureUnitCount = 1)
+        val snapshot = captureGlState(binding, desktopProfile())
         binding.log.clear()
         restoreGlState(binding, snapshot)
         assertTrue(binding.log.contains("enable(0x8DB9)"))
@@ -182,16 +189,99 @@ class GlStateSnapshotTest {
         assertTrue(binding.log.contains("disable(0xB20)"))
     }
 
-    @Test fun restoreWritesBackEveryTextureUnitsBindings() {
+    /**
+     * The replacement for `restoreWritesBackEveryTextureUnitsBindings`, which asserted the fixed
+     * walk. The guarantee is unchanged — a unit RenG wrote is put back — but it is now paid for only
+     * where it is owed (ADR 0055).
+     */
+    @Test fun aWrittenTextureUnitIsSavedBeforeItIsOverwrittenAndPutBackAfter() {
         val binding = populatedBinding()
-        val snapshot = captureGlState(binding, esProfile(), textureUnitCount = 2)
+        val tracking = TextureUnitCapturingBinding(binding)
         binding.log.clear()
-        restoreGlState(binding, snapshot)
-        assertTrue(binding.log.contains("activeTexture(0x84C0)"))
-        assertTrue(binding.log.contains("activeTexture(0x84C1)"))
-        assertTrue(binding.log.contains("bindTexture(0xDE1,7)"))
-        assertTrue(binding.log.contains("bindSampler(0,2)"))
-        assertTrue(binding.log.contains("bindSampler(1,2)"))
+
+        tracking.activeTexture(GL_TEXTURE0 + 1)
+        tracking.bindTexture(GL_TEXTURE_2D, 99)
+        tracking.bindSampler(1, 99)
+
+        // Saved once, at the first write, and never re-read on the second.
+        assertEquals(1, tracking.touchedUnitCount)
+        assertEquals(1, binding.log.count { it == "getIntegerv(0x8069)" }, "one 2D-binding read: ${binding.log}")
+
+        binding.log.clear()
+        tracking.restoreTouchedUnits()
+
+        // populatedBinding() seeds unit 1 with texture 7 and sampler 2, which is what must come back.
+        assertEquals("activeTexture(0x84C1)", binding.log.first())
+        assertTrue(binding.log.contains("bindTexture(0xDE1,7)"), binding.log.toString())
+        assertTrue(binding.log.contains("bindSampler(1,2)"), binding.log.toString())
+        assertEquals("activeTexture(0x84C3)", binding.log.last(), "the active unit is reinstated last")
+    }
+
+    @Test fun anUntouchedTextureUnitIsNeverReadAndNeverWritten() {
+        val binding = populatedBinding()
+        val tracking = TextureUnitCapturingBinding(binding)
+        binding.log.clear()
+
+        tracking.activeTexture(GL_TEXTURE0)
+        tracking.bindTexture(GL_TEXTURE_2D, 99)
+        tracking.restoreTouchedUnits()
+
+        // The old fixed walk restored unit 1 on every frame whether or not anything wrote to it.
+        assertEquals(
+            0,
+            binding.log.count { it == "activeTexture(0x84C1)" },
+            "a unit nothing wrote must cost nothing: ${binding.log}",
+        )
+    }
+
+    /**
+     * A texture bound with no sampler beside it, which is what `drawGeometry` does for every
+     * consumer texture. The sampler path must not be what makes a unit safe.
+     */
+    @Test fun aTextureBoundWithoutASamplerStillSavesItsUnit() {
+        val binding = populatedBinding()
+        val tracking = TextureUnitCapturingBinding(binding)
+        binding.log.clear()
+
+        tracking.activeTexture(GL_TEXTURE0 + 1)
+        tracking.bindTexture(GL_TEXTURE_2D, 99)
+
+        assertEquals(1, tracking.touchedUnitCount, "binding a texture must save the unit on its own")
+        binding.log.clear()
+        tracking.restoreTouchedUnits()
+        assertTrue(binding.log.contains("bindTexture(0xDE1,7)"), binding.log.toString())
+    }
+
+    @Test fun aSamplerBoundToAUnitThatIsNotActiveStillSavesThatUnit() {
+        val binding = populatedBinding()
+        val tracking = TextureUnitCapturingBinding(binding)
+        binding.log.clear()
+
+        // glBindSampler names a unit without making it active. RenG always binds a sampler to the
+        // unit it just made active, so this path is not taken today -- it is implemented rather than
+        // asserted because that is exactly the kind of claim ADR 0055 stops this file relying on.
+        tracking.bindSampler(1, 99)
+
+        assertEquals(1, tracking.touchedUnitCount)
+
+        // The *sequence* is the assertion, not the value: RecordingGlBinding answers a query from a
+        // map keyed by token alone, so it cannot tell unit 1's binding from unit 3's and a test
+        // comparing values would pass whichever unit was read. Reading unit 1 requires making it
+        // active and putting the previous unit back, and those two calls are observable.
+        assertEquals(
+            listOf(
+                "activeTexture(0x84C1)",   // reach unit 1, which is not the active one
+                "getIntegerv(0x8069)",     // GL_TEXTURE_BINDING_2D
+                "getIntegerv(0x8919)",     // GL_SAMPLER_BINDING
+                "activeTexture(0x84C3)",   // put the caller's active unit back
+                "bindSampler(1,99)",       // and only then let the write through
+            ),
+            binding.log.toList(),
+        )
+
+        binding.log.clear()
+        tracking.restoreTouchedUnits()
+        assertTrue(binding.log.contains("bindSampler(1,2)"), binding.log.toString())
     }
 
     /**
@@ -209,7 +299,7 @@ class GlStateSnapshotTest {
         binding.log.clear()
 
         val thrown = assertFailsWith<IllegalStateException> {
-            withCapturedGlState(binding, profile, textureUnitCount = 1) {
+            withCapturedGlState(binding, profile) {
                 binding.bindFramebuffer(GL_DRAW_FRAMEBUFFER, 7)
                 throw IllegalStateException("frame content failed")
             }

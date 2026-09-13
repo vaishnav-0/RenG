@@ -33,8 +33,6 @@ internal data class GlTextureUnitState(
 internal const val RENG_JOINT_UNIFORM_BINDING_POINT: Int = 0
 
 internal data class GlStateSnapshot(
-    val activeTextureUnit: Int,
-    val textureUnits: List<GlTextureUnitState>,
     val drawFramebuffer: Int,
     val readFramebuffer: Int,
     val renderbuffer: Int,
@@ -105,26 +103,9 @@ internal data class GlStateSnapshot(
 internal fun captureGlState(
     binding: GlBinding,
     profile: RenderContextProfile,
-    textureUnitCount: Int,
 ): GlStateSnapshot {
-    require(textureUnitCount > 0) { "at least one texture unit is captured" }
-
-    val activeTextureUnit = binding.integer(GL_ACTIVE_TEXTURE)
-    val units = ArrayList<GlTextureUnitState>(textureUnitCount)
-    for (index in 0 until textureUnitCount) {
-        binding.activeTexture(GL_TEXTURE0 + index)
-        units += GlTextureUnitState(
-            unit = GL_TEXTURE0 + index,
-            texture2d = binding.integer(GL_TEXTURE_BINDING_2D),
-            sampler = binding.integer(GL_SAMPLER_BINDING),
-        )
-    }
-    binding.activeTexture(activeTextureUnit)
-
     val desktop = profile.dialect == ShaderDialect.DESKTOP
     return GlStateSnapshot(
-        activeTextureUnit = activeTextureUnit,
-        textureUnits = units,
         drawFramebuffer = binding.integer(GL_DRAW_FRAMEBUFFER_BINDING),
         readFramebuffer = binding.integer(GL_READ_FRAMEBUFFER_BINDING),
         renderbuffer = binding.integer(GL_RENDERBUFFER_BINDING),
@@ -165,6 +146,30 @@ internal fun captureGlState(
         drawBuffer = if (desktop) binding.integer(GL_DRAW_BUFFER) else null,
         lineSmoothEnabled = if (desktop) binding.isEnabled(GL_LINE_SMOOTH) else null,
     )
+}
+
+/**
+ * Reads [textureUnitCount] units' 2D bindings and samplers.
+ *
+ * **Not used by capture any more** (ADR 0055 saves a unit when a draw first writes it). This exists
+ * for verification: a conformance check should look at more units than the implementation tracks,
+ * precisely so that a unit RenG touched and failed to restore is visible. Production never walks a
+ * fixed set; the thing checking production does.
+ */
+internal fun captureTextureUnits(binding: GlBinding, textureUnitCount: Int): List<GlTextureUnitState> {
+    require(textureUnitCount > 0) { "at least one texture unit is captured" }
+    val activeTextureUnit = binding.integer(GL_ACTIVE_TEXTURE)
+    val units = ArrayList<GlTextureUnitState>(textureUnitCount)
+    for (index in 0 until textureUnitCount) {
+        binding.activeTexture(GL_TEXTURE0 + index)
+        units += GlTextureUnitState(
+            unit = GL_TEXTURE0 + index,
+            texture2d = binding.integer(GL_TEXTURE_BINDING_2D),
+            sampler = binding.integer(GL_SAMPLER_BINDING),
+        )
+    }
+    binding.activeTexture(activeTextureUnit)
+    return units
 }
 
 private fun GlBinding.integer(pname: Int): Int = integers(pname, 1).single()
@@ -278,12 +283,6 @@ internal fun restoreGlState(binding: GlBinding, snapshot: GlStateSnapshot) {
     snapshot.drawBuffer?.let { binding.drawBuffers(1, intArrayOf(it)) }
     snapshot.lineSmoothEnabled?.let { binding.setEnabled(GL_LINE_SMOOTH, it) }
 
-    snapshot.textureUnits.forEach { unit ->
-        binding.activeTexture(unit.unit)
-        binding.bindTexture(GL_TEXTURE_2D, unit.texture2d)
-        binding.bindSampler(unit.unit - GL_TEXTURE0, unit.sampler)
-    }
-    binding.activeTexture(snapshot.activeTextureUnit)
 }
 
 private fun GlBinding.setEnabled(cap: Int, enabled: Boolean) {
@@ -300,13 +299,26 @@ private fun GlBinding.setEnabled(cap: Int, enabled: Boolean) {
 internal inline fun <T> withCapturedGlState(
     binding: GlBinding,
     profile: RenderContextProfile,
-    textureUnitCount: Int,
-    block: () -> T,
+    block: (GlBinding) -> T,
 ): T {
-    val snapshot = captureGlState(binding, profile, textureUnitCount)
+    // Already capturing: run inside the region that is open and leave both the capture and the
+    // restore to whoever opened it (ADR 0054). The same root/join shape ADR 0051 gave `withOperation`,
+    // and for the same reason -- an invariant that held for one caller has to survive being called
+    // from inside another. A second capture here would not be wrong, only paid twice.
+    if (binding is TextureUnitCapturingBinding) return block(binding)
+
+    // The texture units are captured by the binding below, one at a time and only when the draw
+    // actually overwrites one (ADR 0055); everything else is captured here and now, because it is
+    // written from too many places to intercept and is a fixed, small set.
+    val tracked = TextureUnitCapturingBinding(binding)
+    val snapshot = captureGlState(binding, profile)
     try {
-        return block()
+        return block(tracked)
     } finally {
         restoreGlState(binding, snapshot)
+        // After the rest of the state, so that a restore which rebinds a framebuffer or a program
+        // cannot be undone by a texture unit switch, and because the active unit must be the last
+        // thing written either way.
+        tracked.restoreTouchedUnits()
     }
 }
