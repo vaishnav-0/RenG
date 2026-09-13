@@ -45,6 +45,82 @@ class ClassGateRunnerTest {
         // decode gates to RESOURCE_DECODE_FAILED, feature gates to UNSUPPORTED_RESOURCE_FEATURE.
     }
 
+    // ---- ADR 0060: a gate that passed these bytes need not run again ----------------------------
+
+    /**
+     * The cache is observed by feeding the second call **bytes that do not match the digest**, which
+     * is the only way to tell "answered from memory" from "re-derived and passed" without a counter.
+     * A lying digest is not something RenG can produce — `contentDigest` is a SHA-256 of the bytes —
+     * so this input exists to make the memo visible and for no other reason.
+     */
+    @Test
+    fun aSecondAskAboutTheSameBytesIsAnsweredFromMemory() = runTest {
+        val runner = RenGClassGateRunner(ResourceLimits())
+        val digest = "c".repeat(64)
+        assertEquals(
+            SuppliedValidationOutcome.Valid,
+            runner.run(ResourceClassGate.DECODE_PNG, stickerContent(validPng, digest)),
+        )
+
+        assertEquals(
+            SuppliedValidationOutcome.Valid,
+            runner.run(ResourceClassGate.DECODE_PNG, stickerContent(corruptPng, digest)),
+            "the gate must not have run again: these bytes would not pass it",
+        )
+    }
+
+    @Test
+    fun aFailureIsNeverRemembered() = runTest {
+        val runner = RenGClassGateRunner(ResourceLimits())
+        val digest = "d".repeat(64)
+        assertIs<SuppliedValidationOutcome.Failed>(
+            runner.run(ResourceClassGate.DECODE_PNG, stickerContent(corruptPng, digest)),
+        )
+
+        // ADR 0060's asymmetry. A failure can be about this run rather than these bytes -- an image
+        // over `maximumDecodedImageBytes`, a limit the consumer may raise between frames -- so
+        // remembering one would turn a transient refusal into a permanent verdict. An implementation
+        // that cached failures would answer Failed here.
+        assertEquals(
+            SuppliedValidationOutcome.Valid,
+            runner.run(ResourceClassGate.DECODE_PNG, stickerContent(validPng, digest)),
+        )
+    }
+
+    @Test
+    fun oneGatesPassDoesNotAnswerForAnother() = runTest {
+        val runner = RenGClassGateRunner(ResourceLimits())
+        val digest = "e".repeat(64)
+        assertEquals(
+            SuppliedValidationOutcome.Valid,
+            runner.run(ResourceClassGate.PARSE_GLB, content(ResourceClass.MODEL_GLB, validGlb, digest = digest)),
+        )
+
+        // The three gates ask different questions of one resource, which is why the key carries the
+        // gate. A GLB is not a PNG, and a memo keyed on the digest alone would say it was.
+        assertIs<SuppliedValidationOutcome.Failed>(
+            runner.run(ResourceClassGate.DECODE_PNG, stickerContent(validGlb, digest)),
+        )
+    }
+
+    @Test
+    fun theOldestPassIsForgottenOnceTheBoundIsReached() = runTest {
+        val runner = RenGClassGateRunner(ResourceLimits())
+        val first = "0".repeat(64)
+        runner.run(ResourceClassGate.DECODE_PNG, stickerContent(validPng, first))
+
+        // 512 further distinct digests push the first out, oldest first.
+        repeat(512) { index ->
+            runner.run(ResourceClassGate.DECODE_PNG, stickerContent(validPng, index.toString().padStart(64, 'f')))
+        }
+
+        // Forgotten, so the gate runs again -- and these bytes do not pass it. Forgetting costs one
+        // re-validation, which is what every release before this did for every resource every frame.
+        assertIs<SuppliedValidationOutcome.Failed>(
+            runner.run(ResourceClassGate.DECODE_PNG, stickerContent(corruptPng, first)),
+        )
+    }
+
     @Test
     fun enforcesTheDecodedCeilingFromHeaderDimensions() = runTest {
         val runner = RenGClassGateRunner(ResourceLimits(maximumDecodedImageBytes = 1024L))
@@ -113,6 +189,12 @@ private fun content(
     resourceClass: ResourceClass,
     bytes: ByteArray,
     provenance: ContentProvenance = ContentProvenance.TRANSPORT_200,
+    /**
+     * Defaulted so every case written before ADR 0060 keeps the fixture it had — note that default
+     * means every content in this file shares one digest, which is fine because the gate cache is
+     * keyed by gate *and* digest and `kotlin.test` gives each method its own runner.
+     */
+    digest: String = "b".repeat(64),
 ): ResolvedResourceContent {
     val route = ResourceRouteKey(
         accessMode = ResourceAccessMode.NORMAL,
@@ -123,13 +205,14 @@ private fun content(
     val resourceKey = ResourceKey(ResourceKind.EXTERNAL, "a".repeat(64), resourceClass)
     val stored = StoredRawResource(
         bytes = bytes,
-        contentDigest = "b".repeat(64),
+        contentDigest = digest,
         metadata = StoredRawResourceMetadata(storedAtEpochMillis = 0L),
     )
     return ResolvedResourceContent(route, resourceKey, stored, provenance)
 }
 
-private fun stickerContent(bytes: ByteArray) = content(ResourceClass.STICKER_IMAGE, bytes)
+private fun stickerContent(bytes: ByteArray, digest: String = "b".repeat(64)) =
+    content(ResourceClass.STICKER_IMAGE, bytes, digest = digest)
 
 private fun modelContent(bytes: ByteArray) = content(ResourceClass.MODEL_GLB, bytes)
 
