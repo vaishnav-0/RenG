@@ -296,6 +296,17 @@ internal class ResourceActionExecutor(
                 // that decides for itself whether there is a sink to write to.
                 // DriverCancellationTest.contentAcquiredBeforeCancellationMayRemainResident is the test
                 // that catches the collapsed form.
+                // Freshly resolved does not mean different (ADR 0059). A resource whose server
+                // declares no freshness is re-read from the Store on every frame, and installing a
+                // byte-identical twin of the generation already here costs the budget twice, retires
+                // a generation nothing asked to retire, and throws away anything attached to it --
+                // the decoded pixels most of all. Same key and same digest is the same content, so
+                // the existing generation is re-leased instead.
+                val reused = cache.observeAndTakeLease(content.resourceKey, content.stored.contentDigest)
+                if (reused != null) {
+                    recordLease(reused)
+                    return SuppliedInstallOutcome.Succeeded
+                }
                 val lease = cache.installAndTakeLease(content.resourceKey, content.stored, decoded = null)
                 recordLease(lease)
                 SuppliedInstallOutcome.Succeeded

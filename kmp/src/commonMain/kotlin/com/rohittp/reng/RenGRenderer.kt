@@ -1975,8 +1975,15 @@ internal class RenGRenderer(
         }
 
         val decodedByKey = imageReferences.associate { reference ->
-            val stored = residentCache.current(reference.resourceKey)?.stored
+            val generation = residentCache.current(reference.resourceKey)
                 ?: error("a successful resource operation must leave its content resident")
+            // Decoded once per generation, not once per frame (ADR 0059). The only consumer of these
+            // pixels is `cachedTexture`'s upload lambda, which does not run once a texture is
+            // registered -- so before this, every frame after a sticker's first decoded its PNG and
+            // threw the result away. Measured at 14.3 ms for one 512x512 image on a native build,
+            // against a consumer frame budget of about 51 ms.
+            generation.decoded?.let { return@associate reference.resourceKey to it }
+            val stored = generation.stored
             val image = when (
                 val decoded = decodePng(stored.bytes, configuration.resourceLimits.maximumDecodedImageBytes)
             ) {
@@ -1994,6 +2001,9 @@ internal class RenGRenderer(
                     ),
                 )
             }
+            // Charged to maximumResidentCpuResourceBytes here, which is what keeps this memo bounded
+            // and what finally makes `queryResources`' decodedCpuBytes a number rather than a zero.
+            residentCache.attachDecoded(generation, image)
             reference.resourceKey to image
         }
         return FrameAcquisition(

@@ -23,8 +23,18 @@ import kotlinx.coroutines.sync.Mutex
 internal class ResidentGeneration(
     val key: ResourceKey,
     val stored: StoredRawResource,
-    val decoded: DecodedImage?,
+    decoded: DecodedImage?,
 ) {
+    /**
+     * This generation's decoded pixels, once something has decoded them (ADR 0059).
+     *
+     * Attachable after construction rather than passed at install, because the resource driver that
+     * installs bytes knows nothing about images: the decode needs `ResourceLimits` and a failure
+     * vocabulary that belong to the renderer, and happens a step later.
+     */
+    var decoded: DecodedImage? = decoded
+        private set
+
     var leaseCount: Int = 0
         private set
 
@@ -36,8 +46,23 @@ internal class ResidentGeneration(
      * expensive one. The decoded half is always zero in production today, because every install
      * passes `decoded = null`; it is included so the figure stays right the day one does not.
      */
-    val byteSize: Long =
-        stored.byteSnapshot.size.toLong() + (decoded?.byteCount ?: 0).toLong()
+    var byteSize: Long = stored.byteSnapshot.size.toLong() + (decoded?.byteCount ?: 0).toLong()
+        private set
+
+    /**
+     * Attaches [image] unless something already has, and answers how many bytes that added — zero
+     * when it did not, which is what keeps the cache's account true if two callers race.
+     *
+     * First writer wins. Two decodes of one generation produce equal pixels (the bytes are the same
+     * bytes), so which is kept cannot matter; charging once is the only thing that can.
+     */
+    fun attachDecoded(image: DecodedImage): Long {
+        if (decoded != null) return 0L
+        decoded = image
+        val added = image.byteCount.toLong()
+        byteSize += added
+        return added
+    }
 
     fun addLease() {
         leaseCount += 1
@@ -158,6 +183,22 @@ internal class ResidentCache(
         generation
     }
 
+    /**
+     * Records [image] as [generation]'s decoded pixels and charges them to the budget (ADR 0059).
+     *
+     * The sweep afterwards may evict the very generation just attached to, when nothing leases it.
+     * That is correct: the caller holds the image it just decoded and draws this frame with it, and
+     * what eviction decides is only whether the next frame decodes again. A budget that would not
+     * bind on the largest thing in this cache would not be a budget.
+     */
+    fun attachDecoded(generation: ResidentGeneration, image: DecodedImage): Unit = locked {
+        val added = generation.attachDecoded(image)
+        if (added == 0L) return@locked
+        residentBytes += added
+        touch(generation.key)
+        evictOverBudget()
+    }
+
     fun takeLease(generation: ResidentGeneration): Lease = locked {
         generation.addLease()
         Lease(generation)
@@ -207,8 +248,15 @@ internal class ResidentCache(
      * reports honestly as "nothing was resident to lease" rather than leasing a generation this cache no
      * longer tracks.
      */
-    fun observeAndTakeLease(key: ResourceKey): Lease? = locked {
+    fun observeAndTakeLease(key: ResourceKey, requiredDigest: String? = null): Lease? = locked {
         val generation = entries[key]?.current ?: return@locked null
+        // A caller holding freshly resolved bytes asks for the digest it resolved: same key and same
+        // digest is the same content, so the generation already here will do and a byte-identical
+        // twin need not be installed (ADR 0059). Checked inside the lock for the reason everything
+        // else here is: a check outside it is the two-call gap this method exists to close.
+        if (requiredDigest != null && generation.stored.contentDigest != requiredDigest) {
+            return@locked null
+        }
         generation.addLease()
         touch(key)
         Lease(generation)

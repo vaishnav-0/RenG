@@ -38,6 +38,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RendererFactoryTest {
@@ -885,6 +886,49 @@ class RendererFactoryTest {
             "the next draw must re-upload the primitive rather than reuse a forgotten handle: ${binding.log}",
         )
         assertEquals(1, transport.executeCalls, "re-uploading must not re-fetch the GLB")
+    }
+
+    @Test
+    fun aStickersImageIsDecodedOncePerGenerationRatherThanOncePerFrame() = runTest {
+        val binding = validGlesBinding()
+        val transport = CountingTransport()
+        val renderer = createRenderer(testConfiguration(transport = transport), binding, fixedProbe())
+        fun plan(frameIndex: Long) = FramePlan(
+            frameIndex = frameIndex,
+            camera = testCamera(),
+            stickers = listOf(Sticker(testPlacement(), ResourceLocator("https://example.invalid/a.png"))),
+        )
+
+        val first = renderer.prepare(plan(0L)) as RenGPreparedFrame
+        val selector = ResourceSelector.ByClass(ResourceClass.STICKER_IMAGE)
+
+        // ADR 0047 recorded decodedCpuBytes as "charged at zero throughout ... the field exists for a
+        // decode path this cache does not yet have". ADR 0059 is that path, so this is the first
+        // number this report has ever been able to give.
+        val decodedBytes = renderer.queryResources(selector).totals.decodedCpuBytes
+        assertTrue(decodedBytes > 0L, "the decode must be attached to its generation")
+
+        val second = renderer.prepare(plan(1L)) as RenGPreparedFrame
+
+        // The proof the second frame did not decode again: it is holding the first frame's pixels.
+        // Before ADR 0059 every frame after the first decoded the PNG and then discarded the result,
+        // because `cachedTexture` skips its upload lambda once a texture is registered -- measured at
+        // 14.3 ms for one 512x512 image on a native build.
+        assertSame(
+            first.stickers.single().image,
+            second.stickers.single().image,
+            "a second frame must reuse the decode, not repeat it",
+        )
+        assertEquals(
+            1,
+            renderer.queryResources(selector).entries.single().residentGenerationCount,
+            "and must re-lease the generation rather than install a byte-identical new one",
+        )
+        assertEquals(
+            decodedBytes,
+            renderer.queryResources(selector).totals.decodedCpuBytes,
+            "and must not charge the budget twice for one image",
+        )
     }
 
     @Test

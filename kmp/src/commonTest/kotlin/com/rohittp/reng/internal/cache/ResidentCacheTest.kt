@@ -426,6 +426,87 @@ class ResidentCacheTest {
     }
 
     @Test
+    fun aDigestThatDoesNotMatchRefusesToReLeaseTheGenerationAlreadyHere() {
+        val cache = ResidentCache()
+        val key = keyNamed("digest-guard")
+        cache.install(key, storedA, null)
+
+        // The whole safety of ADR 0059's re-lease rests here. Same key and same digest is the same
+        // content, so re-leasing is free; a *different* digest is a resource whose content changed,
+        // and answering with the generation already here would serve stale bytes forever.
+        assertNotNull(
+            cache.observeAndTakeLease(key, storedA.contentDigest),
+            "identical content must re-lease rather than install a twin",
+        )
+        assertNull(
+            cache.observeAndTakeLease(key, storedB.contentDigest),
+            "changed content must fall through to a fresh install",
+        )
+        assertNotNull(
+            cache.observeAndTakeLease(key),
+            "a caller with no digest to offer asks no digest question",
+        )
+    }
+
+    @Test
+    fun aDecodeIsAttachedOnceAndChargedOnce() {
+        val cache = ResidentCache(residentByteBudget = 1024L)
+        val key = keyNamed("attach-once")
+        val generation = cache.install(key, storedA, null)
+
+        cache.attachDecoded(generation, decodedOf(100))
+        // A second attach is the racing caller ADR 0059 describes: equal pixels either way, so the
+        // first is kept and -- the part that matters -- the bytes are charged once.
+        cache.attachDecoded(generation, decodedOf(100))
+
+        assertEquals(164L, cache.report(ResourceSelector.All, noGpuObjects).cpuResidency.residentBytes)
+        assertEquals(100L, cache.report(ResourceSelector.All, noGpuObjects).totals.decodedCpuBytes)
+    }
+
+    @Test
+    fun anAttachedDecodeIsReadBackFromTheGeneration() {
+        val cache = ResidentCache()
+        val key = keyNamed("attach-readback")
+        val image = decodedOf(64)
+        cache.install(key, storedA, null)
+
+        assertNull(cache.current(key)?.decoded, "nothing has decoded it yet")
+        cache.attachDecoded(cache.current(key)!!, image)
+
+        // The whole point: the next frame finds the pixels instead of decoding the PNG again.
+        assertSame(image, cache.current(key)?.decoded)
+    }
+
+    @Test
+    fun attachingADecodeCanPushTheCacheOverItsBudgetAndEvict() {
+        // 64 raw bytes fit; 64 + 100 decoded do not.
+        val cache = ResidentCache(residentByteBudget = 100L)
+        val key = keyNamed("attach-evicts")
+        val generation = cache.install(key, storedA, null)
+
+        cache.attachDecoded(generation, decodedOf(100))
+
+        // Evicted by its own decode, and that is correct: the caller holds the image it just made and
+        // draws this frame with it. What eviction decides is only whether the next frame decodes
+        // again -- a budget that would not bind on the largest thing here would not be a budget.
+        assertNull(cache.current(key))
+        assertEquals(0L, cache.report(ResourceSelector.All, noGpuObjects).cpuResidency.residentBytes)
+    }
+
+    @Test
+    fun aSupersededGenerationTakesItsDecodeWithIt() {
+        val cache = ResidentCache()
+        val key = keyNamed("attach-superseded")
+        cache.attachDecoded(cache.install(key, storedA, null), decodedOf(64))
+
+        cache.install(key, storedB, null)
+
+        // Invalidation for free (ADR 0059): different content is a different locator and therefore a
+        // different key, but a *re-install* of the same key must not hand back the old pixels.
+        assertNull(cache.current(key)?.decoded)
+    }
+
+    @Test
     fun theReportCountsWhatTheBudgetHasEvicted() {
         val cache = ResidentCache(residentByteBudget = 64L)
         cache.install(keyNamed("counted-first"), storedA, null)
