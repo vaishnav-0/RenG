@@ -173,7 +173,24 @@ internal class BasemapEngineHost(
         routes: List<ResourceRouteKey> = emptyList(),
         block: suspend () -> T,
     ): T {
-        check(activeOperation == null) { "a basemap engine host drives one preparation invocation at a time" }
+        val open = activeOperation
+        if (open != null) {
+            // Joining a batch root that is already open (ADR 0051). Both conditions are checked
+            // rather than assumed: a plain invocation nested inside another is still the concurrency
+            // bug this check has always caught, and one registry is never shared across access modes.
+            check(open.shared) { "a basemap engine host drives one preparation invocation at a time" }
+            check(open.accessMode == accessMode) {
+                "a shared preparation invocation is never joined under a different access mode"
+            }
+            registerRoutes(routes)
+            // A scope of its own, for the reason the root's is NOT: the Job every Rentile rasterizer
+            // entry point reads is already supplied by the root this block runs inside, so that is
+            // not what this buys. What it buys is that a frame's own children are awaited before the
+            // frame returns, so one frame's stray work cannot run on into the next frame of the
+            // batch -- joined and root blocks then behave identically, which is the least surprising
+            // thing for a caller that cannot see which it got.
+            return coroutineScope { block() }
+        }
         val registry = OperationRegistry(
             transport = consumerTransport,
             store = consumerStore,
@@ -183,6 +200,39 @@ internal class BasemapEngineHost(
         activeOperation = FirewallOperation(accessMode, registry)
         return try {
             registerRoutes(routes)
+            coroutineScope { block() }
+        } finally {
+            activeOperation = null
+        }
+    }
+
+    /**
+     * Opens one invocation that every [withOperation] inside [block] joins instead of opening its own
+     * (ADR 0051), so a `prepareBatch` gets one route index and one set of single-flight latches for
+     * the whole batch rather than one per frame.
+     *
+     * The cost this removes is measured: three frames over one camera cost 14 engine resource
+     * requests where one frame costs 6, because each frame re-asked for the four tiles the frame
+     * before it had already fetched.
+     *
+     * Opening is still exclusive — this is the root, and a root may not nest inside anything.
+     */
+    suspend fun <T> withSharedOperation(
+        accessMode: RenGResourceAccessMode,
+        block: suspend () -> T,
+    ): T {
+        check(activeOperation == null) { "a basemap engine host drives one preparation invocation at a time" }
+        activeOperation = FirewallOperation(
+            accessMode = accessMode,
+            registry = OperationRegistry(
+                transport = consumerTransport,
+                store = consumerStore,
+                privateKeyResolver = privateKeyResolver,
+                sha256 = sha256,
+            ),
+            shared = true,
+        )
+        return try {
             coroutineScope { block() }
         } finally {
             activeOperation = null
@@ -981,6 +1031,12 @@ internal class BasemapEngineHost(
     private class FirewallOperation(
         val accessMode: RenGResourceAccessMode,
         val registry: OperationRegistry,
+        /**
+         * Whether a nested [withOperation] may join this one rather than failing (ADR 0051). False
+         * for an ordinary single-frame invocation, so a plain nesting still fails as loudly as it
+         * always has.
+         */
+        val shared: Boolean = false,
     ) {
         val transport: EngineResourceTransport = FirewallTransport(registry)
         val store: EngineRawResourceStore = FirewallStore(registry)

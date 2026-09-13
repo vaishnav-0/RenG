@@ -1085,6 +1085,102 @@ class BasemapEngineHostTest {
             host.close()
         }
     }
+
+    // ---- a shared invocation, which a batch's frames join (ADR 0051) ------------------------------
+
+    @Test
+    fun aSharedInvocationIsJoinedByTheFramesInsideItRatherThanReplaced() = runTest {
+        val transport = CountingHostTransport(throwable = RuntimeException("adapter down"))
+        val host = basemapEngineHost(transport = transport)
+        try {
+            host.withSharedOperation(ResourceAccessMode.NORMAL) {
+                val style = host.withOperation(ResourceAccessMode.NORMAL, listOf(hostRasterRoute)) {
+                    host.preparedStyle(hostStyleKey, hostStyleRecord(), HOST_STYLE_BASE_URI)
+                }
+                repeat(2) {
+                    host.withOperation(ResourceAccessMode.NORMAL, listOf(hostRasterRoute)) {
+                        assertFailsWith<RenGException> { host.prepareTiles(style, listOf(HOST_RASTER_TILE)) }
+                    }
+                }
+            }
+            // The mirror image of givesEachPreparationInvocationItsOwnOperationRegistry, which asserts
+            // 2 for the same two invocations run as roots. Inside a shared root they join one registry,
+            // so the second finds the first's latch and the consumer is never asked again.
+            assertEquals(1, transport.executeCalls, "frames inside one shared invocation share its latches")
+        } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun aPlainInvocationNestedInsideAnotherStillFails() = runTest {
+        val host = basemapEngineHost()
+        try {
+            assertFailsWith<IllegalStateException> {
+                host.withOperation(ResourceAccessMode.NORMAL) {
+                    // Only a *shared* root may be joined. Concurrency is not nesting, and this check is
+                    // the one that catches two preparations sharing a host -- ADR 0051 moves it to "one
+                    // root at a time" rather than removing it.
+                    host.withOperation(ResourceAccessMode.NORMAL) { }
+                }
+            }
+        } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun aSharedInvocationIsNeverJoinedUnderADifferentAccessMode() = runTest {
+        val host = basemapEngineHost()
+        try {
+            assertFailsWith<IllegalStateException> {
+                host.withSharedOperation(ResourceAccessMode.NORMAL) {
+                    // One registry is never shared across modes: its routes carry the mode they were
+                    // preregistered under, so a joiner asking under another would answer from routes
+                    // that never agreed to it.
+                    host.withOperation(ResourceAccessMode.RELOAD) { }
+                }
+            }
+        } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun aJoinedBlockStillCarriesTheJobRentilesRasterizerReads() {
+        val host = basemapEngineHost()
+        var observedJob: Job? = null
+        var failure: Throwable? = null
+        var finished = false
+        try {
+            // Same construction, and the same requirement, as
+            // givesTheInvocationItsOwnJobEvenWhenTheCallerContextHasNone: every Rentile rasterizer
+            // entry point reads `currentCoroutineContext().job`, so a joined frame with no Job would
+            // fail every prepareTiles with an opaque BASEMAP_RENDER_FAILED.
+            //
+            // The Job here comes from the *root's* scope, not from the joined block's own -- removing
+            // the inner `coroutineScope` leaves this passing, which is why that inner scope is
+            // justified by child-bounding rather than by this property.
+            val invocation: suspend () -> Unit = {
+                host.withSharedOperation(ResourceAccessMode.NORMAL) {
+                    host.withOperation(ResourceAccessMode.NORMAL) {
+                        observedJob = currentCoroutineContext()[Job]
+                    }
+                }
+            }
+            invocation.startCoroutine(
+                Continuation(EmptyCoroutineContext) { result ->
+                    failure = result.exceptionOrNull()
+                    finished = true
+                },
+            )
+            assertTrue(finished, "an invocation over an empty block completes without ever dispatching")
+            assertNull(failure, "a caller without a Job is a legal caller")
+            assertNotNull(observedJob, "a joined block must supply the Job Rentile's rasterizer reads")
+        } finally {
+            host.close()
+        }
+    }
 }
 
 // ---- fixtures ------------------------------------------------------------------------------------

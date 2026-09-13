@@ -1747,7 +1747,18 @@ internal class RenGRenderer(
                 ),
             )
         }
-        return plans.map { prepare(it, accessMode) }
+        if (plans.isEmpty()) return emptyList()
+        // One firewall invocation for the whole batch (ADR 0051): every frame's own `withOperation`
+        // joins this root instead of opening a registry of its own, so the batch shares one route
+        // index and one set of single-flight latches. Measured at three frames over one camera: 14
+        // engine resource requests before, against 6 for a single frame.
+        //
+        // `prepare` still takes `preparationMutex` per frame, which is correct and not redundant:
+        // this shares the firewall invocation, it does not make a batch concurrent. The frames run
+        // in order exactly as they did when this was `plans.map { prepare(it, accessMode) }`.
+        return basemapEngineHost.withSharedOperation(accessMode) {
+            plans.map { prepare(it, accessMode) }
+        }
     }
 
     /**

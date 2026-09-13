@@ -6,33 +6,49 @@ inside `prepare`. An N-frame batch over one style gets N registries."* This ADR 
 
 ## What the batch actually costs, measured rather than assumed
 
-ADR 0049 made this observable for the first time. One camera, prepared three times in a single
-`prepareBatch` against the test fixture, against the same camera prepared once:
+ADR 0049 made the engine side observable for the first time. One camera prepared three times in a
+single `prepareBatch` against the test fixture, against the same camera prepared once:
 
-| counter | one frame | a batch of three |
+| engine counter | one frame | a batch of three |
 |---|---|---|
 | `ENGINE_TILES_RENDERED` | 4 | **12** |
 | `ENGINE_RESOURCE_REQUESTS` | 6 | **14** |
-| `ENGINE_STORE_MISSES` | 6 | **14** |
-| `ENGINE_RESOURCE_WIRE_BYTES` | 397 | **1029** |
 | `ENGINE_TILE_DRAW_NANOS` | 4 833 709 | **15 046 291** |
 
-Two things fall out of that table, and the second one is not what this ADR was planned to be.
+**Those numbers do not move under this ADR, and expecting them to was a mistake worth recording.**
+They count what the engine *asks for*. A shared registry changes what RenG *supplies*: a second
+frame's identical request joins the first frame's latch and is answered from it, and the engine
+still receives its bytes and still counts its request. The engine measures demand; this ADR is about
+supply, and the instrument for supply is the consumer's own adapter.
 
-**The expensive cross-frame work really is already shared.** Three frames cost 14 requests, not 18:
-the style compilation and its manifest derivation are bound to the style's content digest on the
-host, whose lifetime already spans frames, so the six-request first frame becomes four per frame
-after it. Sharing a registry cannot save what is already saved.
+Counting `Transport.execute` calls instead, over the same three-frame batch:
 
-**What is not shared is per-tile, and it is most of the cost.** Every frame re-rasterises every tile
-it can see — twelve renders for four distinct tiles — and re-asks for the resources behind them. Of
-the 15 ms of engine draw time in that batch, about 10 ms is work the first frame had already done.
+| | consumer exchanges | distinct urls |
+|---|---|---|
+| one frame | 7 | 7 |
+| batch of three, one registry per frame | **17** | 7 |
+| batch of three, one registry for the batch | **9** | 7 |
+
+Seven distinct resources, asked for seventeen times and now nine. The shape matters more than the
+ratio: before, each extra frame cost about five more exchanges; after, about one.
+
+The residual nine is worth naming rather than rounding off. Each of the four tiles and both sprite
+members is fetched exactly once for the whole batch. The style is fetched three times — once per
+frame — because a style is acquired on the resource driver's own path rather than through the
+firewall registry, and the fixture's style carries no `freshUntilEpochMillis`, so every frame
+revalidates it. That is a property of a fixture with no freshness metadata, not a defect this ADR
+leaves behind; a production style that declares its freshness is served from the resident cache.
+
+## What this ADR cannot reach
+
+`ENGINE_TILES_RENDERED` stays at twelve for four distinct tiles, and about 10 ms of that batch's
+15 ms of engine draw is work the first frame had already done. Every frame re-rasterises every tile
+it can see, because rasterisation is an engine call this registry never sees.
+
+That is the larger half and it is the next ADR's subject. It also subsumes part of this one — a frame
+that never rasterises a tile never asks for that tile's resources either.
 
 ## So this ADR is the smaller half, deliberately, and says so
-
-A rendered-tile memo across the batch is the larger half and is the next ADR's subject. It also
-subsumes part of this one: a frame that never rasterises a tile never asks for that tile's
-resources, so the eight duplicate requests above mostly disappear with the renders.
 
 This ADR is still worth taking on its own, for what the memo cannot reach. A memo matches whole
 tiles; a registry matches *resources*. Two frames over a moving camera share few whole tiles and

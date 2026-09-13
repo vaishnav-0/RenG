@@ -134,6 +134,35 @@ class RendererBasemapTileTest {
      * only the first half would pass on a build that drew no ground at all.
      */
     @Test
+    fun aBatchAsksTheConsumerForEachResourceOnceRatherThanOncePerFrame() = runTest {
+        val transport = TileTransport()
+        val renderer = styleRenderer(transport)
+
+        renderer.prepareBatch(
+            listOf(basemapPlan(frameIndex = 0L), basemapPlan(frameIndex = 1L), basemapPlan(frameIndex = 2L)),
+        )
+
+        val requested = transport.requestedUrls()
+        // ADR 0051. One registry per frame cost 17 exchanges for these same seven resources -- about
+        // five more for every frame added. One registry for the batch costs nine, about one more per
+        // frame, and the seven distinct urls are unchanged: nothing new is fetched, the repeats are
+        // gone.
+        assertEquals(7, requested.toSet().size, "the batch must fetch no resource it did not need")
+        assertEquals(9, requested.size, "each extra frame must not re-fetch what the batch already has")
+
+        // The nine is four tiles and two sprite members exactly once each, plus the style three
+        // times. A style is acquired on the resource driver's own path rather than through the
+        // firewall registry, and this fixture's style declares no freshUntilEpochMillis, so every
+        // frame revalidates it -- a property of the fixture, asserted here so that a change to it is
+        // read as a change and not as this ADR regressing.
+        assertEquals(
+            3,
+            requested.count { it == STYLE_URL },
+            "a style with no declared freshness is revalidated once per frame",
+        )
+    }
+
+    @Test
     fun aRasterisingPreparationReportsTheEnginesCountersAndACloseForgetsThem() = runTest {
         val renderer = styleRenderer(TileTransport())
         assertEquals(emptyMap(), renderer.queryMetrics().counters, "nothing has happened yet")
