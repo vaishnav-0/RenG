@@ -181,13 +181,24 @@ public class StoredRawResource(
 
     override fun equals(other: Any?): Boolean =
         other is StoredRawResource &&
-            storedBytes.contentEquals(other.storedBytes) &&
+            // Digest, then metadata, then bytes -- the same comparison, in the order that usually
+            // avoids reaching the last one (ADR 0061). Two resources whose bytes differ at all differ
+            // in their digest, so every unequal comparison now returns without walking megabytes.
+            //
+            // The byte walk is KEPT rather than replaced: this is a public type a consumer
+            // constructs, and its digest is whatever they passed. Trusting it alone would make
+            // equality exactly as sound as its least careful supplier.
             contentDigest == other.contentDigest &&
-            metadata == other.metadata
+            metadata == other.metadata &&
+            storedBytes.contentEquals(other.storedBytes)
 
     override fun hashCode(): Int {
-        var result = storedBytes.contentHashCode()
-        result = 31 * result + contentDigest.hashCode()
+        // Hashed from the digest rather than the bytes it summarises (ADR 0061), and that is not the
+        // trust `equals` refuses above. Equal resources still hash equally, because `equals` requires
+        // their digests to match; a lying digest can only make two UNEQUAL resources collide, which
+        // costs a bucket comparison that then calls `equals` and gets the right answer. A collision
+        // is a performance event, never a correctness one.
+        var result = contentDigest.hashCode()
         result = 31 * result + metadata.hashCode()
         return result
     }

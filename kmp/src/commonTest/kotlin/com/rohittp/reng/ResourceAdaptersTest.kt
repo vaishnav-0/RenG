@@ -74,6 +74,27 @@ class ResourceAdaptersTest {
     }
 
     @Test
+    fun equalityKeepsItsByteWalkWhileHashingTrustsTheDigest() {
+        // ADR 0061's asymmetry, which is the whole of that decision. These two carry the same digest
+        // and the same metadata but different bytes -- a lying digest, which only a consumer can
+        // produce, since RenG derives one from the bytes.
+        val metadata = StoredRawResourceMetadata(storedAtEpochMillis = 1L)
+        val first = StoredRawResource(byteArrayOf(1, 2, 3), "d".repeat(64), metadata)
+        val second = StoredRawResource(byteArrayOf(9, 9, 9), "d".repeat(64), metadata)
+
+        // `equals` must still walk the bytes: trusting the digest alone would make equality exactly
+        // as sound as its least careful supplier, and these are not the same resource.
+        assertNotEquals(first, second)
+
+        // `hashCode` may trust what `equals` proves. Equal resources still hash equally because
+        // `equals` requires matching digests; all a lying digest can do is collide two UNEQUAL
+        // resources, which costs a bucket comparison that then calls `equals` and gets it right.
+        // A collision is a performance event, never a correctness one -- and this equality is what
+        // shows the hash no longer walks the array.
+        assertEquals(first.hashCode(), second.hashCode())
+    }
+
+    @Test
     fun adapterDtosUseStructuralEqualityAndShapeOnlyText() {
         val requestMetadata = TransportRequestMetadata(
             ifNoneMatch = "validator-secret",
