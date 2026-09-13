@@ -10,6 +10,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.sync.Mutex
@@ -134,6 +135,38 @@ class RendererBasemapTileTest {
      * Separating them is what lets a frame draw ground it did not rasterise, and a test that checked
      * only the first half would pass on a build that drew no ground at all.
      */
+    @Test
+    fun aPreparationsPriorityReachesTheEngineRatherThanStoppingAtTheParameter() = runTest {
+        val renderer = styleRenderer(TileTransport()) as RenGRenderer
+        assertNull(renderer.lastForwardedRenderPriority, "nothing rendered yet")
+
+        renderer.prepare(basemapPlan(frameIndex = 0L), priority = RenGRenderPriority.URGENT).close()
+
+        // ADR 0053. The engine consumes a priority into its own gate and reports it nowhere, so this
+        // is the only point where "the consumer's choice reached the engine call" is observable at
+        // all -- and an argument quietly dropped anywhere along the thread-through would default to
+        // NORMAL for every frame, forever, with every other test still green.
+        assertEquals(RenGRenderPriority.URGENT, renderer.lastForwardedRenderPriority)
+
+        // And the default is still the lane every release before this one used.
+        renderer.prepare(basemapPlan(frameIndex = 1L)).close()
+        assertEquals(RenGRenderPriority.NORMAL, renderer.lastForwardedRenderPriority)
+    }
+
+    @Test
+    fun aBatchsPriorityAppliesToEveryFrameInIt() = runTest {
+        val renderer = styleRenderer(TileTransport()) as RenGRenderer
+
+        renderer.prepareBatch(
+            listOf(basemapPlan(frameIndex = 0L), shiftedBasemapPlan(frameIndex = 1L)),
+            priority = RenGRenderPriority.URGENT,
+        ).forEach { it.close() }
+
+        // The second frame rasterises tiles of its own (ADR 0052 leaves it two), so this reads the
+        // priority of a render the batch's *last* frame caused, not a leftover from its first.
+        assertEquals(RenGRenderPriority.URGENT, renderer.lastForwardedRenderPriority)
+    }
+
     @Test
     fun aBatchRasterisesEachDistinctTileOnceHoweverManyFramesShowIt() = runTest {
         val renderer = styleRenderer(TileTransport()) as RenGRenderer

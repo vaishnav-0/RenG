@@ -1019,6 +1019,16 @@ internal class RenGRenderer(
     private var batchRenderedTiles: MutableMap<ResourceKey, RenderedBasemapTile>? = null
 
     /**
+     * The engine gate lane the most recent tile render was forwarded under (ADR 0053).
+     *
+     * A narrow window onto the host's own observation rather than exposing the host itself: the
+     * engine reports a priority nowhere, so this is the only point at which the thread-through from
+     * `prepare`'s parameter to the engine call can be checked at all.
+     */
+    internal val lastForwardedRenderPriority: RenGRenderPriority?
+        get() = basemapEngineHost.lastForwardedRenderPriority
+
+    /**
      * The compiled basemap style of the **most recently prepared frame**, or `null` when that frame drew
      * neither the basemap nor its labels (or when no preparation has succeeded yet). Since E-labels task
      * 8b a `drawBasemap = false, drawLabels = true` frame holds its style here too: labels come from the
@@ -1044,7 +1054,11 @@ internal class RenGRenderer(
 
     // ---- Preparation --------------------------------------------------------------------------
 
-    override suspend fun prepare(plan: FramePlan, accessMode: ResourceAccessMode): PreparedFrame {
+    override suspend fun prepare(
+        plan: FramePlan,
+        accessMode: ResourceAccessMode,
+        priority: RenGRenderPriority,
+    ): PreparedFrame {
         if (!preparationMutex.tryLock()) {
             throw renGFailure(RenGErrorCode.PREPARATION_IN_PROGRESS, PipelineStage.FRAME_PREPARATION)
         }
@@ -1169,6 +1183,7 @@ internal class RenGRenderer(
                 canonicalTiles = groundCanonicalTiles,
                 labelTiles = labelCanonicalTiles,
                 accessMode = accessMode,
+                priority = priority,
                 leaseSink = leases,
             )
             val decodedByKey = acquired.decodedImagesByKey
@@ -1746,7 +1761,11 @@ internal class RenGRenderer(
         )
     }
 
-    override suspend fun prepareBatch(plans: List<FramePlan>, accessMode: ResourceAccessMode): List<PreparedFrame> {
+    override suspend fun prepareBatch(
+        plans: List<FramePlan>,
+        accessMode: ResourceAccessMode,
+        priority: RenGRenderPriority,
+    ): List<PreparedFrame> {
         if (plans.size > configuration.maximumPreparationBatchSize) {
             throw RenGException(
                 code = RenGErrorCode.RESOURCE_LIMIT_EXCEEDED,
@@ -1776,7 +1795,7 @@ internal class RenGRenderer(
             // may not be rendering any more.
             batchRenderedTiles = mutableMapOf()
             try {
-                plans.map { prepare(it, accessMode) }
+                plans.map { prepare(it, accessMode, priority) }
             } finally {
                 batchRenderedTiles = null
             }
@@ -1829,6 +1848,8 @@ internal class RenGRenderer(
         canonicalTiles: List<CanonicalBasemapTile>,
         labelTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
+        /** The engine gate lane this frame's tiles are rendered in (ADR 0053). */
+        priority: RenGRenderPriority,
         /**
          * Collects the lease of every generation this acquisition installs or re-observes, so the frame
          * this preparation is building can release them on `close()`. Owned by [prepare], which is also
@@ -1893,7 +1914,8 @@ internal class RenGRenderer(
                         completedStyleManifest(styleReference)
                     }
                     if (manifest != null && canonicalTiles.isNotEmpty()) {
-                        basemapTiles = renderBasemapTiles(manifest, style, canonicalTiles, accessMode)
+                        basemapTiles =
+                            renderBasemapTiles(manifest, style, canonicalTiles, accessMode, priority)
                         basemapStyleDigest = style.digest
                         // Inside the invocation, on the routes `tileTimeRoutes` already preregistered
                         // for every `raster-dem` source (the 3x3 neighbourhood, which the ring is a
@@ -2030,6 +2052,7 @@ internal class RenGRenderer(
         style: PreparedStyle,
         canonicalTiles: List<CanonicalBasemapTile>,
         accessMode: ResourceAccessMode,
+        priority: RenGRenderPriority,
     ): List<RenderedBasemapTile> {
         // Only the tiles whose rendered texture is not already resident are sent to the engine.
         //
@@ -2105,7 +2128,11 @@ internal class RenGRenderer(
         // tiles this frame actually rasterises rather than every tile it draws, which is where that
         // budget belongs now that a resident tile is never asked for (ADR 0046).
         val freshlyRendered = basemapEngineHost.prepareTiles(style, missing).use { prepared ->
-            basemapEngineHost.renderTiles(prepared, asRawPixels = rawTilesFit(prepared.tiles.size))
+            basemapEngineHost.renderTiles(
+                prepared,
+                asRawPixels = rawTilesFit(prepared.tiles.size),
+                priority = priority,
+            )
         }
         if (memo != null) freshlyRendered.forEach { memo[it.key] = it }
         return if (alreadyRendered.isEmpty()) freshlyRendered else alreadyRendered + freshlyRendered

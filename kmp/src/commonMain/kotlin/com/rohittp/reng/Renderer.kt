@@ -98,14 +98,31 @@ public class RendererConfiguration(
 }
 
 public sealed interface Renderer : AutoCloseable {
+    /**
+     * [priority] chooses the engine's own resource-gate lane for this frame's basemap tiles (ADR
+     * 0053). It orders nothing inside RenG, which still refuses a second concurrent preparation
+     * rather than queueing it, and it reaches only the basemap: a style, a sticker and a model GLB
+     * are acquired on RenG's driver path, where there is no lane to put them in.
+     *
+     * Declared last, and that is an ABI decision: every parameter before it is positional in shipped
+     * consumer code.
+     */
     public suspend fun prepare(
         plan: FramePlan,
         accessMode: ResourceAccessMode = ResourceAccessMode.NORMAL,
+        priority: RenGRenderPriority = RenGRenderPriority.NORMAL,
     ): PreparedFrame
 
+    /**
+     * [priority] applies to every frame in [plans] alike. A batch is where a consumer most often
+     * knows which frame it needs first, and the way to say so is two calls — the urgent frame, then
+     * the rest — rather than a per-plan priority that would make one batch mean several engine
+     * lanes at once.
+     */
     public suspend fun prepareBatch(
         plans: List<FramePlan>,
         accessMode: ResourceAccessMode = ResourceAccessMode.NORMAL,
+        priority: RenGRenderPriority = RenGRenderPriority.NORMAL,
     ): List<PreparedFrame>
 
     public suspend fun cancelPreparations(): Unit

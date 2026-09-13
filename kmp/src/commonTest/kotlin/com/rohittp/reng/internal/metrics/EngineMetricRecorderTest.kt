@@ -1,7 +1,9 @@
 package com.rohittp.reng.internal.metrics
 
 import com.rohittp.reng.RenGMetricName
+import com.rohittp.reng.RenGRenderPriority
 import com.rohittp.rentile.MetricName
+import com.rohittp.rentile.RenderPriority as EngineRenderPriority
 import com.rohittp.rentile.RentileMetric
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -65,6 +67,23 @@ class EngineMetricRecorderTest {
         assertEquals(1L, taken[RenGMetricName.ENGINE_TILES_RENDERED])
         assertEquals(2L, recorder.snapshot()[RenGMetricName.ENGINE_TILES_RENDERED])
         assertNotEquals(taken, recorder.snapshot())
+    }
+
+    @Test
+    fun everyRenderPriorityTranslatesOntoADistinctEngineLane() {
+        // ADR 0053. Unlike a metric name there is no "unrecognised" priority to answer with, so the
+        // translation's `else` falls to the engine's normal lane -- which means a name silently
+        // losing its mapping would degrade to NORMAL rather than fail. This is the case that notices.
+        assertEquals(EngineRenderPriority.URGENT, RenGRenderPriority.URGENT.toEnginePriority())
+        assertEquals(EngineRenderPriority.NORMAL, RenGRenderPriority.NORMAL.toEnginePriority())
+
+        val lanes = RenGRenderPriority.entries.map { it.toEnginePriority() }
+        assertEquals(lanes.size, lanes.toSet().size, "two RenG priorities must not share one lane")
+        assertEquals(
+            EngineRenderPriority.entries.size,
+            RenGRenderPriority.entries.size,
+            "RenG's priorities are the engine's, one for one",
+        )
     }
 
     @Test

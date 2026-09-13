@@ -2,7 +2,9 @@ package com.rohittp.reng.internal.metrics
 
 import com.rohittp.reng.MetricReport
 import com.rohittp.reng.RenGMetricName
+import com.rohittp.reng.RenGRenderPriority
 import com.rohittp.rentile.MetricName
+import com.rohittp.rentile.RenderPriority as EngineRenderPriority
 import com.rohittp.rentile.MetricsSink
 import com.rohittp.rentile.RentileMetric
 import kotlinx.coroutines.sync.Mutex
@@ -81,4 +83,20 @@ internal fun MetricName.toRenGName(): RenGMetricName = when (this) {
     MetricName.BACKGROUND_REVALIDATION_REPLACED -> RenGMetricName.ENGINE_REVALIDATIONS_REPLACED
     MetricName.BACKGROUND_REVALIDATION_FAILED -> RenGMetricName.ENGINE_REVALIDATIONS_FAILED
     else -> RenGMetricName.ENGINE_METRICS_UNRECOGNISED
+}
+
+/**
+ * RenG's render priority in the engine's own vocabulary (ADR 0053).
+ *
+ * The `else` is deliberate for the reason [MetricName.toRenGName]'s is: RenG ships compiled klibs and
+ * a consumer's dependency resolution can raise the engine above the version RenG compiled against,
+ * where an exhaustive `when` throws. There is no honest "unrecognised" priority to answer with, so a
+ * value RenG cannot name renders at the engine's normal lane — which is what every release before
+ * this one did, for every frame.
+ */
+@Suppress("REDUNDANT_ELSE_IN_WHEN")
+internal fun RenGRenderPriority.toEnginePriority(): EngineRenderPriority = when (this) {
+    RenGRenderPriority.URGENT -> EngineRenderPriority.URGENT
+    RenGRenderPriority.NORMAL -> EngineRenderPriority.NORMAL
+    else -> EngineRenderPriority.NORMAL
 }

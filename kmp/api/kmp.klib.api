@@ -179,6 +179,17 @@ final enum class com.rohittp.reng/RenGMetricName : kotlin/Enum<com.rohittp.reng/
     final fun values(): kotlin/Array<com.rohittp.reng/RenGMetricName> // com.rohittp.reng/RenGMetricName.values|values#static(){}[0]
 }
 
+final enum class com.rohittp.reng/RenGRenderPriority : kotlin/Enum<com.rohittp.reng/RenGRenderPriority> { // com.rohittp.reng/RenGRenderPriority|null[0]
+    enum entry NORMAL // com.rohittp.reng/RenGRenderPriority.NORMAL|null[0]
+    enum entry URGENT // com.rohittp.reng/RenGRenderPriority.URGENT|null[0]
+
+    final val entries // com.rohittp.reng/RenGRenderPriority.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<com.rohittp.reng/RenGRenderPriority> // com.rohittp.reng/RenGRenderPriority.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): com.rohittp.reng/RenGRenderPriority // com.rohittp.reng/RenGRenderPriority.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<com.rohittp.reng/RenGRenderPriority> // com.rohittp.reng/RenGRenderPriority.values|values#static(){}[0]
+}
+
 final enum class com.rohittp.reng/ResourceAccessMode : kotlin/Enum<com.rohittp.reng/ResourceAccessMode> { // com.rohittp.reng/ResourceAccessMode|null[0]
     enum entry CACHE_ONLY // com.rohittp.reng/ResourceAccessMode.CACHE_ONLY|null[0]
     enum entry NORMAL // com.rohittp.reng/ResourceAccessMode.NORMAL|null[0]
@@ -310,8 +321,8 @@ sealed interface com.rohittp.reng/Renderer : kotlin/AutoCloseable { // com.rohit
     abstract fun queryMetrics(): com.rohittp.reng/MetricReport // com.rohittp.reng/Renderer.queryMetrics|queryMetrics(){}[0]
     abstract fun queryResources(com.rohittp.reng/ResourceSelector = ...): com.rohittp.reng/ResourceReport // com.rohittp.reng/Renderer.queryResources|queryResources(com.rohittp.reng.ResourceSelector){}[0]
     abstract suspend fun cancelPreparations() // com.rohittp.reng/Renderer.cancelPreparations|cancelPreparations(){}[0]
-    abstract suspend fun prepare(com.rohittp.reng/FramePlan, com.rohittp.reng/ResourceAccessMode = ...): com.rohittp.reng/PreparedFrame // com.rohittp.reng/Renderer.prepare|prepare(com.rohittp.reng.FramePlan;com.rohittp.reng.ResourceAccessMode){}[0]
-    abstract suspend fun prepareBatch(kotlin.collections/List<com.rohittp.reng/FramePlan>, com.rohittp.reng/ResourceAccessMode = ...): kotlin.collections/List<com.rohittp.reng/PreparedFrame> // com.rohittp.reng/Renderer.prepareBatch|prepareBatch(kotlin.collections.List<com.rohittp.reng.FramePlan>;com.rohittp.reng.ResourceAccessMode){}[0]
+    abstract suspend fun prepare(com.rohittp.reng/FramePlan, com.rohittp.reng/ResourceAccessMode = ..., com.rohittp.reng/RenGRenderPriority = ...): com.rohittp.reng/PreparedFrame // com.rohittp.reng/Renderer.prepare|prepare(com.rohittp.reng.FramePlan;com.rohittp.reng.ResourceAccessMode;com.rohittp.reng.RenGRenderPriority){}[0]
+    abstract suspend fun prepareBatch(kotlin.collections/List<com.rohittp.reng/FramePlan>, com.rohittp.reng/ResourceAccessMode = ..., com.rohittp.reng/RenGRenderPriority = ...): kotlin.collections/List<com.rohittp.reng/PreparedFrame> // com.rohittp.reng/Renderer.prepareBatch|prepareBatch(kotlin.collections.List<com.rohittp.reng.FramePlan>;com.rohittp.reng.ResourceAccessMode;com.rohittp.reng.RenGRenderPriority){}[0]
 }
 
 sealed interface com.rohittp.reng/ResourceSelector { // com.rohittp.reng/ResourceSelector|null[0]

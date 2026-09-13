@@ -166,7 +166,14 @@ class RendererProtocolTest {
         renderTarget: RenderTarget,
     ) {
         val prepared: PreparedFrame = renderer.prepare(plan)
+        // Both defaults still resolve with the plan alone, which is the half of ADR 0053's ABI
+        // decision that actually binds: the parameter is source-compatible even though it is not
+        // binary-compatible.
+        val preparedUrgently: PreparedFrame =
+            renderer.prepare(plan, ResourceAccessMode.NORMAL, RenGRenderPriority.URGENT)
         val preparedBatch: List<PreparedFrame> = renderer.prepareBatch(listOf(plan))
+        val preparedBatchUrgently: List<PreparedFrame> =
+            renderer.prepareBatch(listOf(plan), ResourceAccessMode.NORMAL, RenGRenderPriority.URGENT)
         val cancellation: Unit = renderer.cancelPreparations()
         val historyClear: Unit = renderer.clearFrameHistory()
         val report: ResourceReport = renderer.queryResources()
@@ -186,7 +193,9 @@ class RendererProtocolTest {
 
         consume(
             prepared,
+            preparedUrgently,
             preparedBatch,
+            preparedBatchUrgently,
             cancellation,
             historyClear,
             metrics,

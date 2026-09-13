@@ -30,7 +30,10 @@ import com.rohittp.reng.internal.planning.CanonicalBasemapTile
 import com.rohittp.reng.internal.resource.RentilePrivateKeyResolver
 import com.rohittp.reng.internal.resource.ResourceRouteKey
 import com.rohittp.reng.ResourceAccessMode as RenGResourceAccessMode
+import com.rohittp.reng.RenGRenderPriority
 import com.rohittp.reng.internal.metrics.EngineMetricRecorder
+import com.rohittp.reng.internal.metrics.toEnginePriority
+import com.rohittp.rentile.RenderPriority as EngineRenderPriority
 import com.rohittp.rentile.BasemapRasterizer
 import com.rohittp.rentile.CredentialProvider
 import com.rohittp.rentile.GlyphTemplateMismatchException
@@ -554,9 +557,37 @@ internal class BasemapEngineHost(
      * Both forms carry the engine's own `contentKey`, so tile identity does not depend on which was
      * taken.
      */
+    /**
+     * The priority the most recent [renderTiles] forwarded to the engine, or `null` before the first.
+     *
+     * An observation rather than state this class acts on — the same shape as
+     * [OperationRegistry.observedTileJsonDocuments] and for the same reason. A priority is a hint the
+     * engine consumes internally and reports nowhere, so without this the whole thread-through from
+     * `prepare`'s parameter to the engine call is unobservable, and a dropped argument would default
+     * silently to NORMAL forever (ADR 0053).
+     *
+     * Written by [forwarding], which is the function that produces the argument, so the record and
+     * the argument cannot come apart: a render branch that dropped its `priority =` would stop
+     * calling [forwarding] at all and this would stay null. Recording it on entry instead would
+     * report a priority the engine never received.
+     */
+    var lastForwardedRenderPriority: RenGRenderPriority? = null
+        private set
+
+    /**
+     * Translates [priority] for the engine and records that it was forwarded, in that order and in
+     * one place, so [lastForwardedRenderPriority] is written by the same expression that supplies
+     * the argument rather than beside it (ADR 0053).
+     */
+    private fun forwarding(priority: RenGRenderPriority): EngineRenderPriority {
+        lastForwardedRenderPriority = priority
+        return priority.toEnginePriority()
+    }
+
     suspend fun renderTiles(
         prepared: PreparedBasemapTiles,
         asRawPixels: Boolean,
+        priority: RenGRenderPriority = RenGRenderPriority.NORMAL,
     ): List<RenderedBasemapTile> {
         requireOpen()
         val styleDigest = prepared.style.digest
@@ -581,7 +612,7 @@ internal class BasemapEngineHost(
         }
 
         return if (asRawPixels) {
-            val batch = engineCall { engine.renderRaw(prepared.batch) }
+            val batch = engineCall { engine.renderRaw(prepared.batch, priority = forwarding(priority)) }
             batch.tiles.map { rendered ->
                 carry(
                     rendered.id,
@@ -590,7 +621,7 @@ internal class BasemapEngineHost(
                 )
             }
         } else {
-            val batch = engineCall { engine.render(prepared.batch) }
+            val batch = engineCall { engine.render(prepared.batch, priority = forwarding(priority)) }
             batch.tiles.map { rendered ->
                 carry(rendered.id, rendered.contentKey, BasemapTilePixels.Encoded(rendered.pngBytes))
             }

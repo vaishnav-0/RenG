@@ -1,6 +1,28 @@
 package com.rohittp.reng
 
 /**
+ * How urgently a preparation's basemap tiles should be rendered (ADR 0053).
+ *
+ * The lane this chooses is the **engine's**, not RenG's: the basemap engine maps this onto its own
+ * internal resource gate, which is already ordering every fetch a preparation causes. RenG queues
+ * nothing of its own — `prepare` still refuses a second concurrent caller rather than queueing it.
+ *
+ * The `RenG` prefix is here on the ground [RenGMetricName] sets out: the engine has a type of the
+ * same bare name, both are in scope where the two are translated, and a reader must be able to tell
+ * whose vocabulary they are holding.
+ */
+public enum class RenGRenderPriority {
+    /**
+     * Ahead of normal work in the engine's gate. For the one frame a consumer knows the user is
+     * about to look at — the frame under a scrub head, not the batch queued behind it.
+     */
+    URGENT,
+
+    /** The lane every RenG release before ADR 0053 used, and still the default. */
+    NORMAL,
+}
+
+/**
  * RenG's own name for a counter the basemap engine keeps (ADR 0049).
  *
  * Deliberately **not** a typealias for the engine's own enum: the repository policy forbids an
