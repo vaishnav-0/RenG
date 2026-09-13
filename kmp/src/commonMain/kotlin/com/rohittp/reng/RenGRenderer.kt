@@ -1005,6 +1005,20 @@ internal class RenGRenderer(
     private var outstandingRawTileBytes: Long = 0L
 
     /**
+     * Every tile this `prepareBatch` has already rasterised, or `null` outside one (ADR 0052).
+     *
+     * ADR 0046's residency filter cannot see inside a batch, because nothing in a batch is drawn and
+     * so no texture becomes resident until the consumer draws: without this, every frame
+     * re-rasterises every tile the frame before it just rendered. Measured at three frames over one
+     * camera: twelve renders for four distinct tiles.
+     *
+     * Batch-scoped and nothing wider. A renderer-lifetime memo would be an unbounded store of raw
+     * pixels beside the two budgets that already govern them, and outside a batch there is a draw
+     * between frames, which is what makes the residency filter sufficient there.
+     */
+    private var batchRenderedTiles: MutableMap<ResourceKey, RenderedBasemapTile>? = null
+
+    /**
      * The compiled basemap style of the **most recently prepared frame**, or `null` when that frame drew
      * neither the basemap nor its labels (or when no preparation has succeeded yet). Since E-labels task
      * 8b a `drawBasemap = false, drawLabels = true` frame holds its style here too: labels come from the
@@ -1757,7 +1771,15 @@ internal class RenGRenderer(
         // this shares the firewall invocation, it does not make a batch concurrent. The frames run
         // in order exactly as they did when this was `plans.map { prepare(it, accessMode) }`.
         return basemapEngineHost.withSharedOperation(accessMode) {
-            plans.map { prepare(it, accessMode) }
+            // Opened here and cleared however the batch ends (ADR 0052), so a batch that throws
+            // part-way leaves no rendered pixels behind for the next one to reuse under a style it
+            // may not be rendering any more.
+            batchRenderedTiles = mutableMapOf()
+            try {
+                plans.map { prepare(it, accessMode) }
+            } finally {
+                batchRenderedTiles = null
+            }
         }
     }
 
@@ -2057,18 +2079,36 @@ internal class RenGRenderer(
             ),
         )
 
-        val missing = canonicalTiles.filter { tile ->
-            glObjectRegistry.resident(basemapEngineHost.renderedTileKey(style, tile)) == null
+        // Two places an answer to "does the engine need to render this again" can already live: a
+        // resident GL texture (ADR 0046), and this batch's own memo (ADR 0052). The second exists
+        // because the first cannot see inside a batch, where nothing has been drawn yet.
+        //
+        // A memo hit is carried into THIS frame's own tile list rather than left with the frame that
+        // rendered it. A batch says nothing about the order its frames are drawn in, or whether they
+        // are all drawn, so a frame that pointed at a sibling's texture would answer
+        // RESOURCE_UNAVAILABLE for a tile the batch definitely rendered. Sharing the immutable
+        // RenderedBasemapTile keeps every frame self-sufficient and still holds one copy of the
+        // pixels: RenGPreparedFrame snapshots the list it is given, never the arrays inside it.
+        val memo = batchRenderedTiles
+        val alreadyRendered = ArrayList<RenderedBasemapTile>()
+        val missing = ArrayList<CanonicalBasemapTile>(canonicalTiles.size)
+        for (tile in canonicalTiles) {
+            val key = basemapEngineHost.renderedTileKey(style, tile)
+            if (glObjectRegistry.resident(key) != null) continue
+            val remembered = memo?.get(key)
+            if (remembered != null) alreadyRendered += remembered else missing += tile
         }
-        if (missing.isEmpty()) return emptyList()
+        if (missing.isEmpty()) return alreadyRendered
         // The batch owns engine-side resources and is closed as soon as the pixels are in hand: nothing
         // downstream of here reads it, because rendering is where a PreparedBatch's whole purpose ends.
         // `missing`, not `canonicalTiles`, on both halves: ADR 0044's raw budget is charged for the
         // tiles this frame actually rasterises rather than every tile it draws, which is where that
         // budget belongs now that a resident tile is never asked for (ADR 0046).
-        return basemapEngineHost.prepareTiles(style, missing).use { prepared ->
+        val freshlyRendered = basemapEngineHost.prepareTiles(style, missing).use { prepared ->
             basemapEngineHost.renderTiles(prepared, asRawPixels = rawTilesFit(prepared.tiles.size))
         }
+        if (memo != null) freshlyRendered.forEach { memo[it.key] = it }
+        return if (alreadyRendered.isEmpty()) freshlyRendered else alreadyRendered + freshlyRendered
     }
 
     /**

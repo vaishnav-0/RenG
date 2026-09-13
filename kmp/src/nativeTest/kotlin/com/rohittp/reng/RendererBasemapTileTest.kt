@@ -10,6 +10,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -133,6 +134,118 @@ class RendererBasemapTileTest {
      * Separating them is what lets a frame draw ground it did not rasterise, and a test that checked
      * only the first half would pass on a build that drew no ground at all.
      */
+    @Test
+    fun aBatchRasterisesEachDistinctTileOnceHoweverManyFramesShowIt() = runTest {
+        val renderer = styleRenderer(TileTransport()) as RenGRenderer
+
+        val frames = renderer.prepareBatch(
+            listOf(basemapPlan(frameIndex = 0L), basemapPlan(frameIndex = 1L), basemapPlan(frameIndex = 2L)),
+        )
+
+        // ADR 0052. Twelve renders for four distinct tiles before: ADR 0046's residency filter cannot
+        // see inside a batch, because nothing in a batch has been drawn.
+        assertEquals(
+            4L,
+            renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED],
+            "three frames over one camera must rasterise four tiles, not twelve",
+        )
+
+        // And every frame still carries all four, rather than pointing at the frame that rendered
+        // them -- which is what makes the draw order below free.
+        frames.forEach { frame ->
+            assertEquals(4, (frame as RenGPreparedFrame).basemapTiles.size, "every frame carries its own ground")
+        }
+        // The same pixels, not copies: the batch holds one tile, three frames reference it.
+        val first = (frames[0] as RenGPreparedFrame).basemapTiles.associateBy { it.key }
+        (frames[2] as RenGPreparedFrame).basemapTiles.forEach { tile ->
+            assertSame(first.getValue(tile.key), tile, "a memo hit must share the tile, not copy it")
+        }
+        frames.forEach { it.close() }
+    }
+
+    @Test
+    fun aBatchsFramesDrawInAnyOrderAndTheFirstDrawnUploadsTheSharedTile() = runTest {
+        val renderer = styleRenderer(TileTransport()) as RenGRenderer
+        val target = renderer.mintRenderTarget(FramebufferName(0u))
+
+        val frames = renderer.prepareBatch(
+            listOf(basemapPlan(frameIndex = 0L), basemapPlan(frameIndex = 1L)),
+        )
+
+        // Deliberately out of order, and the first frame is closed without ever being drawn. A design
+        // where a later frame pointed at the tile an earlier one rendered would answer
+        // RESOURCE_UNAVAILABLE here for a tile the batch definitely rendered (ADR 0052).
+        frames[0].close()
+        renderer.draw(frames[1], target)
+        frames[1].close()
+
+        // Still four: drawing must not have sent anything back to the engine.
+        assertEquals(4L, renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED])
+    }
+
+    @Test
+    fun aFrameThatPartlyOverlapsTheOneBeforeItRendersOnlyItsNewTiles() = runTest {
+        val renderer = styleRenderer(TileTransport()) as RenGRenderer
+
+        // Two cameras one tile apart at LOD 4, so the second frame shares half its tiles with the
+        // first and brings half of its own. This is the realistic batch -- a moving camera -- and it
+        // is the only shape that reaches the mixed return, where a frame carries both remembered and
+        // freshly rendered tiles.
+        val frames = renderer.prepareBatch(
+            listOf(basemapPlan(frameIndex = 0L), shiftedBasemapPlan(frameIndex = 1L)),
+        )
+
+        assertEquals(
+            6L,
+            renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED],
+            "four tiles for the first frame and only the two new ones for the second",
+        )
+        assertEquals(
+            4,
+            (frames[1] as RenGPreparedFrame).basemapTiles.size,
+            "the overlapping frame must carry all four of its tiles, remembered ones included",
+        )
+        frames.forEach { it.close() }
+    }
+
+    @Test
+    fun aBatchsMemoDoesNotSurviveIntoTheNextPreparation() = runTest {
+        val renderer = styleRenderer(TileTransport()) as RenGRenderer
+
+        renderer.prepareBatch(
+            listOf(basemapPlan(frameIndex = 0L), basemapPlan(frameIndex = 1L)),
+        ).forEach { it.close() }
+        assertEquals(4L, renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED])
+
+        // Nothing was drawn, so no texture is resident and ADR 0046's filter has nothing to say. A
+        // memo left standing past its batch would answer instead -- and would be an unbounded store
+        // of raw pixels beside the two budgets that are supposed to govern them (ADR 0052).
+        renderer.prepare(basemapPlan(frameIndex = 2L)).close()
+
+        assertEquals(
+            8L,
+            renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED],
+            "a preparation after the batch must not reuse the batch's rendered pixels",
+        )
+    }
+
+    @Test
+    fun aSinglePreparationKeepsNoMemoBetweenFrames() = runTest {
+        val renderer = styleRenderer(TileTransport()) as RenGRenderer
+
+        // Outside a batch there is a draw between one frame and the next, which is what makes ADR
+        // 0046's residency filter sufficient -- so a prepare that is never drawn rasterises again,
+        // and the memo must not be quietly doing renderer-lifetime work it is not budgeted for.
+        renderer.prepare(basemapPlan(frameIndex = 0L)).close()
+        renderer.prepare(basemapPlan(frameIndex = 1L)).close()
+
+        assertEquals(
+            8L,
+            renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED],
+            "two undrawn preparations outside a batch each rasterise their own tiles",
+        )
+    }
+
     @Test
     fun aBatchAsksTheConsumerForEachResourceOnceRatherThanOncePerFrame() = runTest {
         val transport = TileTransport()
@@ -687,6 +800,23 @@ internal val DEM_HILLSHADE_STYLE: String =
  * frame resolve the style from residency instead of re-fetching it, which is the one condition under
  * which the pure core emits no `CompileBasemapStyle`.
  */
+/**
+ * [styleCamera] moved one LOD-4 tile east: `unwrappedLongitude` -135 places the camera on the x = 2.0
+ * tile boundary, and -112.5 places it on x = 3.0, so the two frames share their y range and half
+ * their x range.
+ */
+private fun shiftedBasemapPlan(frameIndex: Long): FramePlan = FramePlan(
+    frameIndex = frameIndex,
+    camera = Camera(
+        latitude = -55.0,
+        unwrappedLongitude = -112.5,
+        zoom = 4.0,
+        bearing = 0.0,
+        pitch = 0.0,
+    ),
+    drawBasemap = true,
+)
+
 internal class TileTransport(
     private val styleJson: String = STYLE_WITH_SPRITE_JSON,
     private val styleFreshUntilEpochMillis: Long? = null,
