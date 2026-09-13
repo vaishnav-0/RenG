@@ -3,7 +3,7 @@ package com.rohittp.reng.internal.firewall
 import com.rohittp.reng.RenGException
 import com.rohittp.reng.internal.basemap.BasemapStyleManifest
 import com.rohittp.reng.internal.identity.CanonicalBytes
-import com.rohittp.reng.internal.identity.PureKotlinSha256
+import com.rohittp.reng.internal.identity.AcceleratedSha256
 import com.rohittp.reng.internal.identity.Sha256Function
 import com.rohittp.reng.internal.planning.CanonicalBasemapTile
 import com.rohittp.reng.internal.terrain.DemEncoding
@@ -71,7 +71,7 @@ import com.rohittp.rentile.ValidatedDemTile
  */
 internal class TerrainAcquisition(
     private val host: BasemapEngineHost,
-    private val sha256: Sha256Function = PureKotlinSha256,
+    private val sha256: Sha256Function = AcceleratedSha256,
 ) {
 
     /**

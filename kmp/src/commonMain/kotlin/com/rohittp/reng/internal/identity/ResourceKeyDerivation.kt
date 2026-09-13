@@ -18,7 +18,7 @@ internal data class DerivedResourceKey(
 )
 
 internal class ResourceKeyDeriver(
-    private val sha256: Sha256Function = PureKotlinSha256,
+    private val sha256: Sha256Function = AcceleratedSha256,
 ) {
     internal fun external(
         resourceClass: ResourceClass,

@@ -19,7 +19,7 @@ import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
 import com.rohittp.reng.internal.freshCopy
 import com.rohittp.reng.internal.identity.CanonicalBytes
-import com.rohittp.reng.internal.identity.PureKotlinSha256
+import com.rohittp.reng.internal.identity.AcceleratedSha256
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.identity.Sha256Function
 import com.rohittp.reng.internal.image.PngDecodeResult
@@ -107,7 +107,7 @@ internal class OperationRegistry(
     private val transport: Transport,
     private val store: Store,
     private val privateKeyResolver: RentilePrivateKeyResolver,
-    private val sha256: Sha256Function = PureKotlinSha256,
+    private val sha256: Sha256Function = AcceleratedSha256,
 ) {
     private val resourceKeyDeriver = ResourceKeyDeriver(sha256)
 

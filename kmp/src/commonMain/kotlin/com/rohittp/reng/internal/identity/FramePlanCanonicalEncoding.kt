@@ -56,7 +56,7 @@ internal class EncodedFramePlan(
 }
 
 internal class FramePlanCanonicalEncoder(
-    private val sha256: Sha256Function = PureKotlinSha256,
+    private val sha256: Sha256Function = AcceleratedSha256,
 ) {
     internal fun encode(plan: FramePlan): EncodedFramePlan {
         val stickers = plan.stickersForCore()

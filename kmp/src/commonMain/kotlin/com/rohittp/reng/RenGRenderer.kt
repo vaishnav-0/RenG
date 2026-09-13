@@ -104,7 +104,7 @@ import com.rohittp.reng.internal.gl.uploadTexture
 import com.rohittp.reng.internal.identity.CanonicalIdentityRegistry
 import com.rohittp.reng.internal.identity.EncodedFramePlan
 import com.rohittp.reng.internal.identity.FramePlanCanonicalEncoder
-import com.rohittp.reng.internal.identity.PureKotlinSha256
+import com.rohittp.reng.internal.identity.AcceleratedSha256
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.image.DecodedImage
 import com.rohittp.reng.internal.image.PngDecodeResult
@@ -890,7 +890,7 @@ internal class RenGRenderer(
      * not (basemap task 16). This is a pure, stateless function of `(locator, resourceClass)`, so one
      * shared instance is correct for every call this renderer makes across every frame preparation.
      */
-    private val rentilePrivateKeyResolver = ProductionRentilePrivateKeyResolver(PureKotlinSha256)
+    private val rentilePrivateKeyResolver = ProductionRentilePrivateKeyResolver(AcceleratedSha256)
 
     private var offscreenSurface: OffscreenSurface? = initialGlState.offscreenSurface
     private var compositePipeline: CompositePipeline? = initialGlState.compositePipeline

@@ -22,7 +22,7 @@ import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
 import com.rohittp.reng.internal.identity.CanonicalBytes
-import com.rohittp.reng.internal.identity.PureKotlinSha256
+import com.rohittp.reng.internal.identity.AcceleratedSha256
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.identity.Sha256Function
 import com.rohittp.reng.internal.planning.BasemapTileInstance
@@ -101,8 +101,8 @@ internal class BasemapEngineHost(
     store: Store,
     private val cache: ResidentCache,
     internal val tileOutputSizePixels: Int = RenderOptions.DEFAULT_OUTPUT_SIZE_PX,
-    private val sha256: Sha256Function = PureKotlinSha256,
-    private val privateKeyResolver: RentilePrivateKeyResolver = ProductionRentilePrivateKeyResolver(PureKotlinSha256),
+    private val sha256: Sha256Function = AcceleratedSha256,
+    private val privateKeyResolver: RentilePrivateKeyResolver = ProductionRentilePrivateKeyResolver(AcceleratedSha256),
     /**
      * Where the engine's counters go (ADR 0049). Defaulted to a fresh recorder nothing reads, so
      * every test constructing this host keeps working and no metric escapes into a shared one.
@@ -1243,7 +1243,7 @@ internal fun basemapTileKey(
     styleDigest: String,
     tile: CanonicalBasemapTile,
     outputSize: OutputPixelSize,
-    sha256: Sha256Function = PureKotlinSha256,
+    sha256: Sha256Function = AcceleratedSha256,
 ): ResourceKey = ResourceKeyDeriver(sha256).basemapTile(styleDigest, tile, outputSize).key
 
 /**
@@ -1257,7 +1257,7 @@ internal fun basemapTileKey(
     styleDigest: String,
     instance: BasemapTileInstance,
     outputSize: OutputPixelSize,
-    sha256: Sha256Function = PureKotlinSha256,
+    sha256: Sha256Function = AcceleratedSha256,
 ): ResourceKey = basemapTileKey(
     styleDigest = styleDigest,
     tile = CanonicalBasemapTile(

@@ -6,6 +6,19 @@ internal class CanonicalBytes(bytes: ByteArray) {
     internal val bytes: ByteArray
         get() = snapshot.copyOf()
 
+    /**
+     * The construction snapshot, read without a further copy by RenG-internal code only — the same
+     * accessor `StoredRawResource.byteSnapshot` documents, and for the same reason.
+     *
+     * This array is never handed to a caller, never mutated, and never retained past the reading
+     * call; [bytes] remains the only externally visible read and still returns a fresh copy.
+     *
+     * It exists because a platform digest runs at gigabytes a second (ADR 0058), and copying the
+     * input twice to reach it would have been most of the work.
+     */
+    internal val byteSnapshot: ByteArray
+        get() = snapshot
+
     internal val size: Int
         get() = snapshot.size
 
