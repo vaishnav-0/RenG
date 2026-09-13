@@ -45,6 +45,9 @@ class DiagnosticsAndFailuresTest {
                 "RESOURCE_DECODE_FAILED", "RESOURCE_PARSE_FAILED", "UNSUPPORTED_RESOURCE_FEATURE",
                 "SHADER_COMPILE_FAILED", "SHADER_LINK_FAILED", "GPU_OPERATION_FAILED",
                 "IDENTITY_COLLISION", "BASEMAP_RENDER_FAILED", "UNROUTABLE_LABEL_SOURCE",
+                // Appended, never inserted: this list is in declaration order, so a constant added
+                // anywhere but the end moves every ordinal after it (ADR 0056).
+                "RENDER_CONTEXT_THREAD_CHANGED",
             ),
             RenGErrorCode.entries.map { it.name },
         )
@@ -103,8 +106,8 @@ class DiagnosticsAndFailuresTest {
 
     @Test
     fun failureFactoryAcceptsEveryAllowedFailureTableShape() {
-        assertEquals(100, allowedFailureCases.size)
-        assertEquals(29, allowedFailureCases.count { !it.hasDiagnostic })
+        assertEquals(104, allowedFailureCases.size)
+        assertEquals(33, allowedFailureCases.count { !it.hasDiagnostic })
         assertEquals(71, allowedFailureCases.count { it.hasDiagnostic })
         assertEquals(RenGErrorCode.entries.toSet(), allowedFailureCases.map { it.code }.toSet())
 
@@ -813,6 +816,16 @@ class DiagnosticsAndFailuresTest {
                     PipelineStage.RESOURCE_FREE,
                     PipelineStage.RENDERER_CLOSE,
                 ).map { noDiagnostic(RenGErrorCode.DIFFERENT_CURRENT_RENDER_CONTEXT, it) },
+            )
+            // The same four stages, and that is the point: a thread change is the same family of
+            // failure one step earlier, since the thread only ever stands in for the context.
+            addAll(
+                listOf(
+                    PipelineStage.RENDER_TARGET,
+                    PipelineStage.DRAW,
+                    PipelineStage.RESOURCE_FREE,
+                    PipelineStage.RENDERER_CLOSE,
+                ).map { noDiagnostic(RenGErrorCode.RENDER_CONTEXT_THREAD_CHANGED, it) },
             )
             addAll(
                 listOf(PipelineStage.CONTEXT_ADOPTION, PipelineStage.CONFIGURATION).map {

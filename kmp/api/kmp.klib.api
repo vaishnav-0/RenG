@@ -128,6 +128,7 @@ final enum class com.rohittp.reng/RenGErrorCode : kotlin/Enum<com.rohittp.reng/R
     enum entry PREPARED_FRAME_CLOSED // com.rohittp.reng/RenGErrorCode.PREPARED_FRAME_CLOSED|null[0]
     enum entry RENDERER_CLOSED // com.rohittp.reng/RenGErrorCode.RENDERER_CLOSED|null[0]
     enum entry RENDER_CONTEXT_ADOPTION_REQUIRED // com.rohittp.reng/RenGErrorCode.RENDER_CONTEXT_ADOPTION_REQUIRED|null[0]
+    enum entry RENDER_CONTEXT_THREAD_CHANGED // com.rohittp.reng/RenGErrorCode.RENDER_CONTEXT_THREAD_CHANGED|null[0]
     enum entry RESOURCE_DECODE_FAILED // com.rohittp.reng/RenGErrorCode.RESOURCE_DECODE_FAILED|null[0]
     enum entry RESOURCE_LIMIT_EXCEEDED // com.rohittp.reng/RenGErrorCode.RESOURCE_LIMIT_EXCEEDED|null[0]
     enum entry RESOURCE_PARSE_FAILED // com.rohittp.reng/RenGErrorCode.RESOURCE_PARSE_FAILED|null[0]

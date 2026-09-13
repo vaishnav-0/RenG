@@ -35,6 +35,23 @@ public enum class RenGErrorCode {
     IDENTITY_COLLISION,
     BASEMAP_RENDER_FAILED,
     UNROUTABLE_LABEL_SOURCE,
+
+    /**
+     * This call arrived on a different thread than the one that created the renderer or last adopted
+     * its Render Context, and nothing declared the move (ADR 0056).
+     *
+     * A context current on one thread is not current on another, so this is either a migration the
+     * consumer performed without telling RenG — `adoptCurrentRenderContext()` on the new thread is
+     * how to declare it — or the ordinary mistake of calling a renderer from the wrong thread, which
+     * otherwise surfaces as a black frame or a driver crash rather than as a failure.
+     *
+     * Like every other precondition in ADR 0015's family, this leaves renderer state unchanged and
+     * the call can be retried from the right thread.
+     *
+     * **Declared last, and that is an ABI decision**: appending leaves every existing constant's
+     * ordinal where it is, the rule `ResourceClass.BASEMAP_GLYPH_RANGE` already follows.
+     */
+    RENDER_CONTEXT_THREAD_CHANGED,
 }
 
 public class RenGException internal constructor(

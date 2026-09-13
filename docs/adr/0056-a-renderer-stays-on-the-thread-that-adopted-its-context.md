@@ -30,9 +30,20 @@ admits exactly that. Outlawing it would break a consumer doing something permitt
 So the rule is tied to adoption instead: **a renderer may be used from one thread at a time, and the
 thread may change only across `adoptCurrentRenderContext()`.** That is not a new concept bolted on;
 it is the one ADR 0015 already has. Adoption is where "a new exact identity and context generation"
-is established, and after this ADR the calling thread is part of that identity. A consumer migrating
-a context does on the RenG side exactly what they already do on the GL side: make it current on the
-new thread, then tell RenG.
+is established, and after this ADR the calling thread is part of that identity.
+
+**What that costs a consumer who really does migrate a context, stated because it is not free.**
+Adoption is not available while a renderer is live — the lifecycle refuses it, because ADR 0015
+reaches adoption only through declared loss: *"Further GL work after loss requires the consumer to
+capture and explicitly adopt an already-current replacement context."* So a consumer moving a context
+to another thread must call `notifyGpuObjectsGone()` and then adopt, which throws away every GPU
+object RenG holds, even though moving a context loses none of them.
+
+That is a real cost and this ADR does not pretend otherwise. It is accepted because the alternative
+is worse in both directions: leaving the thread unchecked keeps the common bug undiagnosable, and
+making adoption legal while live would rewrite the lifecycle's central invariant to serve a rare
+case. A consumer who migrates contexts routinely should say so, and that would be a different ADR
+about the lifecycle rather than a loosening of this one.
 
 `createRenderer` records the first thread, because `createRenderer` already requires an
 already-current context and therefore already fixes the thread that context is current on.
@@ -40,8 +51,13 @@ already-current context and therefore already fixes the thread that context is c
 ## What it applies to, and what it does not
 
 Every entry point that issues GL or can delete a GL object: `draw`, `mintRenderTarget`,
-`freeResources`, `notifyGpuObjectsGone`, `adoptCurrentRenderContext` (which sets the new thread rather
-than checking the old), and `close`.
+`freeResources` and `close`. `adoptCurrentRenderContext` sets the new thread rather than checking the
+old one — that is what makes it the declaration.
+
+`notifyGpuObjectsGone` is **not** checked, which ADR 0015 settles rather than this one: it "is
+idempotent, issues no GL call, forgets live and queued handles". A call that touches no context
+cannot be on the wrong thread for one, and refusing it would take away the escape hatch the next
+paragraph relies on.
 
 Deliberately **not** `prepare`, `prepareBatch`, `cancelPreparations`, `queryResources`,
 `queryMetrics`, `clearFrameHistory` or `freeResources`' read-only sibling. `prepare` is `suspend` and
@@ -49,11 +65,12 @@ Deliberately **not** `prepare`, `prepareBatch`, `cancelPreparations`, `queryReso
 so requiring a thread of it would break the very property RenG went to trouble to preserve. Those
 entry points issue no GL call.
 
-`close` is the awkward one and is included anyway. ADR 0015 makes close context-free *after declared
-loss*, and a consumer closing from a finaliser or a shutdown hook may well be on another thread — but
-a close that still has live GL objects deletes them, which is precisely the operation ADR 0015 wrote
-its rule for. A consumer in that position already has the escape hatch ADR 0015 gave them:
-`notifyGpuObjectsGone()` first, then close from anywhere.
+`close` is guarded **only while GPU objects are live**. ADR 0015 says "after declared loss there is
+nothing to delete, so close is context-free", and a close that is context-free is thread-free for
+exactly the same reason: the thread was only ever standing in for the context. A close that still has
+live objects deletes them, which is the operation that rule was written for, so that one is refused
+from the wrong thread — and a consumer closing from a finaliser or a shutdown hook has the escape
+hatch ADR 0015 already gave them, `notifyGpuObjectsGone()` first.
 
 ## A typed failure, not an assertion
 
@@ -66,9 +83,14 @@ ADR 0015 is explicit that "either failure leaves renderer state unchanged" and t
 adopting on the right thread — and throwing `IllegalStateException` would make the one precondition a
 consumer is most likely to trip the only one they cannot catch by code.
 
-It reports `PipelineStage.CONTEXT_ADOPTION`, and names no thread: a thread identifier is not a
-resource, carries no meaning across a process boundary, and `Diagnostic` has no field that would
-honestly hold one.
+It is admissible at exactly the stages `DIFFERENT_CURRENT_RENDER_CONTEXT` is —
+`RENDER_TARGET`, `DRAW`, `RESOURCE_FREE`, `RENDERER_CLOSE` — which is not a coincidence but the same
+family of failure seen one step earlier: both say "the context you promised is not the one here", one
+by identity and one by the thread that identity was fixed on. `CONTEXT_ADOPTION` is absent because
+adoption is where the thread is *set*, never where it is refused.
+
+It names no thread. A thread identifier is not a resource, carries no meaning across a process
+boundary, and `Diagnostic` has no field that would honestly hold one.
 
 ## Cost
 

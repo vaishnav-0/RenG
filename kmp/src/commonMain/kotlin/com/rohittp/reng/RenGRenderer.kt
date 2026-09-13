@@ -37,6 +37,9 @@ import com.rohittp.reng.internal.gl.GlobeGroundPipeline
 import com.rohittp.reng.internal.gl.GlobeGroundPipelineResult
 import com.rohittp.reng.internal.gl.GpuTextureResidency
 import com.rohittp.reng.internal.gl.withCapturedGlState
+import com.rohittp.reng.internal.thread.CallingThread
+import com.rohittp.reng.internal.thread.currentCallingThread
+import com.rohittp.reng.internal.thread.isCurrentThread
 import com.rohittp.reng.internal.gl.GroundPipeline
 import com.rohittp.reng.internal.gl.GroundPipelineResult
 import com.rohittp.reng.internal.gl.IconBatch
@@ -1018,6 +1021,31 @@ internal class RenGRenderer(
      * between frames, which is what makes the residency filter sufficient there.
      */
     private var batchRenderedTiles: MutableMap<ResourceKey, RenderedBasemapTile>? = null
+
+    /**
+     * The thread this renderer was created on, or last adopted a context on (ADR 0056).
+     *
+     * A `var` because `adoptCurrentRenderContext` moves it: adoption is where "a new exact identity
+     * and context generation" is established (ADR 0015), and the calling thread is part of that
+     * identity.
+     */
+    private var contextThread: CallingThread = currentCallingThread()
+
+    /**
+     * Refuses a GL-touching call that arrived on a thread nothing declared (ADR 0056).
+     *
+     * RenG cannot observe which context is current — `RendererFactory` explains at length why not —
+     * but it can observe the thread, and a context current on one thread is not current on another.
+     * This is a necessary condition, never a sufficient one: passing it proves nothing about the
+     * context, and failing it proves the context cannot be right.
+     *
+     * Raised before any state change, so the call can be retried from the correct thread, or after
+     * `adoptCurrentRenderContext()` on the new one.
+     */
+    private fun requireContextThread(stage: PipelineStage) {
+        if (contextThread.isCurrentThread()) return
+        throw renGFailure(RenGErrorCode.RENDER_CONTEXT_THREAD_CHANGED, stage)
+    }
 
     /**
      * The engine gate lane the most recent tile render was forwarded under (ADR 0053).
@@ -2321,6 +2349,7 @@ internal class RenGRenderer(
     }
 
     override fun freeResources(selector: ResourceSelector): ResourceFreeResult {
+        requireContextThread(PipelineStage.RESOURCE_FREE)
         var result: ResourceFreeResult? = null
         val outcome = driver.run(RendererLifecycleOperation.FreeResources(selector)) { operation ->
             if (operation is RendererLifecycleOperation.FreeResources) {
@@ -2370,6 +2399,9 @@ internal class RenGRenderer(
     }
 
     override fun adoptCurrentRenderContext() {
+        // Sets rather than checks: this call is the declaration that the context now lives
+        // here, so it is the one entry point a thread change is allowed to arrive on.
+        contextThread = currentCallingThread()
         val outcome = driver.run(RendererLifecycleOperation.AdoptCurrentRenderContext) { null }
         when (outcome) {
             is RendererLifecycleOutcome.Failed -> throw outcome.failure.toException()
@@ -2404,6 +2436,7 @@ internal class RenGRenderer(
     }
 
     override fun mintRenderTarget(framebufferName: FramebufferName): RenderTarget {
+        requireContextThread(PipelineStage.RENDER_TARGET)
         val outcome = driver.run(RendererLifecycleOperation.MintRenderTarget(framebufferName)) { null }
         if (outcome is RendererLifecycleOutcome.Failed) throw outcome.failure.toException()
         return RenGRenderTarget(this, framebufferName, driver.snapshot.contextGeneration)
@@ -2412,6 +2445,7 @@ internal class RenGRenderer(
     // ---- Drawing ----------------------------------------------------------------------------------
 
     override fun draw(preparedFrame: PreparedFrame, renderTarget: RenderTarget) {
+        requireContextThread(PipelineStage.DRAW)
         val frameFact = when {
             preparedFrame !is RenGPreparedFrame || preparedFrame.owner !== this -> PreparedFrameFact.Foreign
             preparedFrame.closed -> PreparedFrameFact.OwnedClosed
@@ -3101,6 +3135,12 @@ internal class RenGRenderer(
     // ---- Close --------------------------------------------------------------------------------
 
     override fun close() {
+        // Guarded only while there is something to delete. ADR 0015: "After declared loss there is
+        // nothing to delete, so close is context-free" -- and a close that is context-free is
+        // thread-free for the same reason, since the thread only ever stood in for the context. A
+        // close with live objects still deletes them, which is the operation that rule was written
+        // for, so that one is guarded.
+        if (driver.snapshot.gpuLedger.hasLiveGpuObjects) requireContextThread(PipelineStage.RENDERER_CLOSE)
         val outcome = driver.run(RendererLifecycleOperation.CloseRenderer) { operation ->
             if (operation == RendererLifecycleOperation.CloseRenderer) {
                 offscreenSurface?.let { deleteOffscreenSurface(binding, it) }

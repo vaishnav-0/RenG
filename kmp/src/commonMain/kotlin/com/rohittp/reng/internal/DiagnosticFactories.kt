@@ -463,6 +463,18 @@ private fun failureRule(code: RenGErrorCode, stage: PipelineStage): FailureRule?
             PipelineStage.RENDERER_CLOSE,
         )
 
+        // The same four stages as DIFFERENT_CURRENT_RENDER_CONTEXT above, and for the same reason:
+        // both say "the context you promised is not the one here", one by identity and one by the
+        // thread that identity was fixed on (ADR 0056). CONTEXT_ADOPTION is absent because adoption
+        // is where the thread is set, never where it is refused.
+        RenGErrorCode.RENDER_CONTEXT_THREAD_CHANGED -> noDiagnosticAt(
+            stage,
+            PipelineStage.RENDER_TARGET,
+            PipelineStage.DRAW,
+            PipelineStage.RESOURCE_FREE,
+            PipelineStage.RENDERER_CLOSE,
+        )
+
         RenGErrorCode.UNSUPPORTED_RENDER_CONTEXT -> noDiagnosticAt(
             stage,
             PipelineStage.CONTEXT_ADOPTION,
