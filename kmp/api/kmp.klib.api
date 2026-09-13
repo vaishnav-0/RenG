@@ -41,6 +41,7 @@ final enum class com.rohittp.reng/AnchoringMode : kotlin/Enum<com.rohittp.reng/A
 final enum class com.rohittp.reng/DiagnosticCode : kotlin/Enum<com.rohittp.reng/DiagnosticCode> { // com.rohittp.reng/DiagnosticCode|null[0]
     enum entry BASEMAP_NOT_CONFIGURED // com.rohittp.reng/DiagnosticCode.BASEMAP_NOT_CONFIGURED|null[0]
     enum entry FAILURE_CONTEXT // com.rohittp.reng/DiagnosticCode.FAILURE_CONTEXT|null[0]
+    enum entry GROUND_PRESENTED_PROVISIONALLY // com.rohittp.reng/DiagnosticCode.GROUND_PRESENTED_PROVISIONALLY|null[0]
     enum entry LABEL_CONTENT_EXCLUDED // com.rohittp.reng/DiagnosticCode.LABEL_CONTENT_EXCLUDED|null[0]
     enum entry RESIDENT_GPU_TEXTURES_OVER_BUDGET // com.rohittp.reng/DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET|null[0]
     enum entry RESOURCE_RELOADED_AFTER_FREE // com.rohittp.reng/DiagnosticCode.RESOURCE_RELOADED_AFTER_FREE|null[0]
@@ -784,7 +785,7 @@ final class com.rohittp.reng/ResourceKey { // com.rohittp.reng/ResourceKey|null[
 }
 
 final class com.rohittp.reng/ResourceLimits { // com.rohittp.reng/ResourceLimits|null[0]
-    constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...) // com.rohittp.reng/ResourceLimits.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ...) // com.rohittp.reng/ResourceLimits.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int){}[0]
 
     final val maximumBasemapGeoJsonBytes // com.rohittp.reng/ResourceLimits.maximumBasemapGeoJsonBytes|{}maximumBasemapGeoJsonBytes[0]
         final fun <get-maximumBasemapGeoJsonBytes>(): kotlin/Long // com.rohittp.reng/ResourceLimits.maximumBasemapGeoJsonBytes.<get-maximumBasemapGeoJsonBytes>|<get-maximumBasemapGeoJsonBytes>(){}[0]
@@ -812,12 +813,15 @@ final class com.rohittp.reng/ResourceLimits { // com.rohittp.reng/ResourceLimits
         final fun <get-maximumResidentGpuTextureBytes>(): kotlin/Long // com.rohittp.reng/ResourceLimits.maximumResidentGpuTextureBytes.<get-maximumResidentGpuTextureBytes>|<get-maximumResidentGpuTextureBytes>(){}[0]
     final val maximumStickerImageBytes // com.rohittp.reng/ResourceLimits.maximumStickerImageBytes|{}maximumStickerImageBytes[0]
         final fun <get-maximumStickerImageBytes>(): kotlin/Long // com.rohittp.reng/ResourceLimits.maximumStickerImageBytes.<get-maximumStickerImageBytes>|<get-maximumStickerImageBytes>(){}[0]
+    final val maximumTilesRasterisedPerFrame // com.rohittp.reng/ResourceLimits.maximumTilesRasterisedPerFrame|{}maximumTilesRasterisedPerFrame[0]
+        final fun <get-maximumTilesRasterisedPerFrame>(): kotlin/Int // com.rohittp.reng/ResourceLimits.maximumTilesRasterisedPerFrame.<get-maximumTilesRasterisedPerFrame>|<get-maximumTilesRasterisedPerFrame>(){}[0]
 
     final fun component1(): kotlin/Long // com.rohittp.reng/ResourceLimits.component1|component1(){}[0]
     final fun component10(): kotlin/Long // com.rohittp.reng/ResourceLimits.component10|component10(){}[0]
     final fun component11(): kotlin/Long // com.rohittp.reng/ResourceLimits.component11|component11(){}[0]
     final fun component12(): kotlin/Long // com.rohittp.reng/ResourceLimits.component12|component12(){}[0]
     final fun component13(): kotlin/Long // com.rohittp.reng/ResourceLimits.component13|component13(){}[0]
+    final fun component14(): kotlin/Int // com.rohittp.reng/ResourceLimits.component14|component14(){}[0]
     final fun component2(): kotlin/Long // com.rohittp.reng/ResourceLimits.component2|component2(){}[0]
     final fun component3(): kotlin/Long // com.rohittp.reng/ResourceLimits.component3|component3(){}[0]
     final fun component4(): kotlin/Long // com.rohittp.reng/ResourceLimits.component4|component4(){}[0]
@@ -826,7 +830,7 @@ final class com.rohittp.reng/ResourceLimits { // com.rohittp.reng/ResourceLimits
     final fun component7(): kotlin/Long // com.rohittp.reng/ResourceLimits.component7|component7(){}[0]
     final fun component8(): kotlin/Long // com.rohittp.reng/ResourceLimits.component8|component8(){}[0]
     final fun component9(): kotlin/Long // com.rohittp.reng/ResourceLimits.component9|component9(){}[0]
-    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): com.rohittp.reng/ResourceLimits // com.rohittp.reng/ResourceLimits.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ...): com.rohittp.reng/ResourceLimits // com.rohittp.reng/ResourceLimits.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/ResourceLimits.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // com.rohittp.reng/ResourceLimits.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // com.rohittp.reng/ResourceLimits.toString|toString(){}[0]

@@ -92,6 +92,19 @@ internal fun basemapNotConfiguredDiagnostic(): Diagnostic =
  * theirs. It names no resource key: the condition is a property of the whole working set, and
  * blaming the last tile released would be arbitrary.
  */
+/**
+ * One per drawn frame that presented any provisional ground at all (ADR 0057) — never one per tile,
+ * for the reason [terrainCoverageIncompleteDiagnostic] gives for counting rather than listing.
+ */
+internal fun groundPresentedProvisionallyDiagnostic(tileCount: Int): Diagnostic =
+    Diagnostic(
+        code = DiagnosticCode.GROUND_PRESENTED_PROVISIONALLY,
+        severity = DiagnosticSeverity.WARNING,
+        stage = PipelineStage.DRAW,
+        limit = 0L,
+        actual = tileCount.toLong(),
+    )
+
 internal fun residentGpuTexturesOverBudgetDiagnostic(residentBytes: Long, budgetBytes: Long): Diagnostic =
     Diagnostic(
         code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,

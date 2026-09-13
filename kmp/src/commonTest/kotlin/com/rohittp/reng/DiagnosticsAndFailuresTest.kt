@@ -57,6 +57,8 @@ class DiagnosticsAndFailuresTest {
                 "RESOURCE_RELOADED_AFTER_FREE", "FAILURE_CONTEXT", "BASEMAP_NOT_CONFIGURED",
                 "RESIDENT_GPU_TEXTURES_OVER_BUDGET", "LABEL_CONTENT_EXCLUDED",
                 "TERRAIN_COVERAGE_INCOMPLETE", "TERRAIN_UNAVAILABLE",
+                // Appended, never inserted: declaration order is ordinal order (ADR 0057).
+                "GROUND_PRESENTED_PROVISIONALLY",
             ),
             DiagnosticCode.entries.map { it.name },
         )

@@ -106,6 +106,15 @@ internal class SceneGroundTile(
     val instance: BasemapTileInstance,
     val texture: Int,
     /**
+     * Which part of [texture] this tile occupies (ADR 0057).
+     *
+     * [GroundTileWindow.WHOLE] for a tile drawn from its own texture, which is every tile unless the
+     * consumer set a per-frame rasterisation budget and this one was drawn from an ancestor instead.
+     * Declared with a default so the many construction sites that draw exact tiles say nothing about
+     * it, and the one that does not says it explicitly.
+     */
+    val colourWindow: GroundTileWindow = GroundTileWindow.WHOLE,
+    /**
      * This tile's own padded DEM texture and the sub-rectangle of it this tile occupies, or `null`
      * when the frame declares no terrain or Rentile returned no DEM for this canonical tile.
      *
@@ -761,6 +770,7 @@ internal class SceneContent(
                             resolveBasemapTileQuad(tile.instance, camera),
                         ),
                         texture = tile.texture,
+                        colourWindow = tile.colourWindow,
                         elevation = tile.elevation?.let { demTile ->
                             MercatorGroundTileDem(
                                 dem = groundTileDemOf(demTile, tile.instance.lod),
@@ -806,6 +816,7 @@ internal class SceneContent(
                             ResolvedGlobeGroundTile(
                                 edges = edges,
                                 texture = tile.texture,
+                                colourWindow = tile.colourWindow,
                                 elevation = tileDem,
                             ),
                         )
@@ -814,6 +825,10 @@ internal class SceneContent(
                                 ResolvedGlobeGroundTile(
                                     edges = globeGroundPolarCapEdges(edges, north = true),
                                     texture = tile.texture,
+                                    // The cap carries the same window as the tile it hangs from: its
+                                    // collapsed v lands on the window's own edge, which is the tile's
+                                    // last row inside the ancestor rather than the ancestor's.
+                                    colourWindow = tile.colourWindow,
                                     uvV = NORTH_POLAR_CAP_UV_V,
                                     elevation = tileDem?.let { polarCapDem(it, north = true) },
                                 ),
@@ -824,6 +839,7 @@ internal class SceneContent(
                                 ResolvedGlobeGroundTile(
                                     edges = globeGroundPolarCapEdges(edges, north = false),
                                     texture = tile.texture,
+                                    colourWindow = tile.colourWindow,
                                     uvV = SOUTH_POLAR_CAP_UV_V,
                                     elevation = tileDem?.let { polarCapDem(it, north = false) },
                                 ),

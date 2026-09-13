@@ -168,6 +168,56 @@ class RendererBasemapTileTest {
     }
 
     @Test
+    fun aBudgetedFrameDrawsWhatItDidNotRasteriseFromAnAncestorAndSaysSo() = runTest {
+        val sink = RecordingProvisionalSink()
+        // Zoom out first so a coarse tile is resident and can serve as an ancestor, then zoom in
+        // under a budget of zero: every tile at the new LOD has somewhere to come from, and none of
+        // them is rasterised.
+        val renderer = styleRenderer(
+            transport = TileTransport(),
+            resourceLimits = ResourceLimits(maximumTilesRasterisedPerFrame = 0),
+            diagnosticSink = sink,
+        ) as RenGRenderer
+        val target = renderer.mintRenderTarget(FramebufferName(0u))
+
+        val coarse = renderer.prepare(coarseBasemapPlan(frameIndex = 0L))
+        renderer.draw(coarse, target)
+        coarse.close()
+        val rasterisedForTheCoarseFrame = renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED]
+
+        val fine = renderer.prepare(basemapPlan(frameIndex = 1L))
+        renderer.draw(fine, target)
+
+        // ADR 0057: the budget bounds the work a frame ADDS. Nothing new was rasterised, and the
+        // frame still drew -- a frame that cannot draw its ground is not an improvement on a slow one.
+        assertEquals(
+            rasterisedForTheCoarseFrame,
+            renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED],
+            "a budget of zero must rasterise nothing that has an ancestor",
+        )
+        val reported = sink.provisional.singleOrNull()
+        assertNotNull(reported, "a frame that presented an ancestor must say so: ${sink.provisional}")
+        assertTrue(reported.actual!! > 0L, "and must name how many tiles it did that for")
+        fine.close()
+    }
+
+    @Test
+    fun anUnbudgetedFrameSaysNothingAndRasterisesEverything() = runTest {
+        val sink = RecordingProvisionalSink()
+        // The default is no limit, and with no limit nothing about ADR 0057 happens at all -- which
+        // is the promise that lets it ship without changing anyone's frames.
+        val renderer = styleRenderer(TileTransport(), diagnosticSink = sink) as RenGRenderer
+        val target = renderer.mintRenderTarget(FramebufferName(0u))
+
+        val frame = renderer.prepare(basemapPlan(frameIndex = 0L))
+        renderer.draw(frame, target)
+
+        assertEquals(4L, renderer.queryMetrics()[RenGMetricName.ENGINE_TILES_RENDERED])
+        assertEquals(emptyList(), sink.provisional, "an unbudgeted frame presents nothing provisional")
+        frame.close()
+    }
+
+    @Test
     fun aBatchRasterisesEachDistinctTileOnceHoweverManyFramesShowIt() = runTest {
         val renderer = styleRenderer(TileTransport()) as RenGRenderer
 
@@ -849,6 +899,31 @@ private fun shiftedBasemapPlan(frameIndex: Long): FramePlan = FramePlan(
     ),
     drawBasemap = true,
 )
+
+/** A camera two LODs out from [styleCamera], so its tiles are ancestors of that camera's. */
+private fun coarseBasemapPlan(frameIndex: Long): FramePlan = FramePlan(
+    frameIndex = frameIndex,
+    camera = Camera(
+        latitude = -55.0,
+        unwrappedLongitude = -135.0,
+        zoom = 2.0,
+        bearing = 0.0,
+        pitch = 0.0,
+    ),
+    drawBasemap = true,
+)
+
+/** Keeps only the one code ADR 0057 adds, so an unrelated warning cannot satisfy these cases. */
+private class RecordingProvisionalSink : DiagnosticSink {
+    private val recorded = mutableListOf<Diagnostic>()
+
+    val provisional: List<Diagnostic>
+        get() = recorded.filter { it.code == DiagnosticCode.GROUND_PRESENTED_PROVISIONALLY }
+
+    override fun emit(diagnostic: Diagnostic) {
+        recorded += diagnostic
+    }
+}
 
 internal class TileTransport(
     private val styleJson: String = STYLE_WITH_SPRITE_JSON,

@@ -52,9 +52,19 @@ class GroundPipelineTest {
             "u must run west-to-east and v north-to-south, row zero at the tile's north edge: " +
                 GROUND_VERTEX_SOURCE,
         )
+        // The grid coordinate is still the texture coordinate, now through a window (ADR 0057). The
+        // identity window -- scale 1, offset 0 -- is what every exact tile is given, so this is the
+        // same mapping it always was and the shader has no branch and no second variant; a tile drawn
+        // from an ancestor is the only one whose window is anything else.
         assertTrue(
-            GROUND_VERTEX_SOURCE.contains("rengGroundUv = rengGroundGrid;"),
-            "the grid coordinate IS the texture coordinate: " + GROUND_VERTEX_SOURCE,
+            GROUND_VERTEX_SOURCE.contains(
+                "rengGroundUv = rengGroundGrid * rengGroundColourWindow.x + rengGroundColourWindow.yz;",
+            ),
+            "the grid coordinate IS the texture coordinate, windowed: " + GROUND_VERTEX_SOURCE,
+        )
+        assertTrue(
+            GROUND_VERTEX_SOURCE.contains("uniform vec3 rengGroundColourWindow;"),
+            "the window must be declared: " + GROUND_VERTEX_SOURCE,
         )
     }
 
@@ -86,6 +96,34 @@ class GroundPipelineTest {
             ).pipeline
         assertTrue(ground.key != sticker.key, "two internal pipelines must not share one program key")
         assertTrue(ground.program != sticker.program)
+    }
+
+    @Test fun everyTileIsGivenItsColourWindowIncludingTheIdentity() {
+        val binding = newBinding()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawGround(
+            binding,
+            pipeline,
+            listOf(
+                resolvedTile(texture = 1),
+                resolvedTile(texture = 2, window = GroundTileWindow(0.25f, 0.5f, 0.75f)),
+            ),
+            cellsPerTileSide = 4,
+        )
+
+        // Written for every tile, identity included (ADR 0057). A uniform left over from the previous
+        // tile is the one way this draws the wrong part of the right texture, and an implementation
+        // that only wrote the non-identity ones would leave the exact tile after a provisional one
+        // sampling the provisional one's window.
+        assertEquals(
+            listOf(
+                "uniform3f($COLOUR_WINDOW_LOCATION,1.0,0.0,0.0)",
+                "uniform3f($COLOUR_WINDOW_LOCATION,0.25,0.5,0.75)",
+            ),
+            binding.log.filter { it.startsWith("uniform3f($COLOUR_WINDOW_LOCATION,") },
+        )
     }
 
     @Test fun deletionRemovesEveryCachedGridAndTheProgram() {
@@ -531,10 +569,17 @@ class GroundPipelineTest {
         (createGroundPipeline(binding, ShaderDialect.GLES, GlProgramCache()) as GroundPipelineResult.Created)
             .pipeline
 
-    private fun resolvedTile(texture: Int = 1): ResolvedGroundTile =
-        ResolvedGroundTile(modelViewProjection = FloatArray(16), texture = texture)
+    private fun resolvedTile(
+        texture: Int = 1,
+        window: GroundTileWindow = GroundTileWindow.WHOLE,
+    ): ResolvedGroundTile = ResolvedGroundTile(
+        modelViewProjection = FloatArray(16),
+        texture = texture,
+        colourWindow = window,
+    )
 
     private fun newBinding(): RecordingGlBinding = RecordingGlBinding().withDeclaredNames(
+        GROUND_COLOUR_WINDOW_UNIFORM_NAME to COLOUR_WINDOW_LOCATION,
         GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME to MODEL_VIEW_PROJECTION_LOCATION,
         GROUND_TEXTURE_UNIFORM_NAME to TEXTURE_LOCATION,
         GROUND_MERCATOR_Y_UNIFORM_NAME to MERCATOR_Y_LOCATION,
@@ -549,6 +594,7 @@ class GroundPipelineTest {
 
     private companion object {
         const val MODEL_VIEW_PROJECTION_LOCATION: Int = 3
+        const val COLOUR_WINDOW_LOCATION: Int = 41
         const val TEXTURE_LOCATION: Int = 7
         const val MERCATOR_Y_LOCATION: Int = 11
         const val ELEVATION_SCALE_LOCATION: Int = 12

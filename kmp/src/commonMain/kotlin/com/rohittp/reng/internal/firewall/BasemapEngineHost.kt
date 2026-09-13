@@ -933,6 +933,14 @@ internal class BasemapEngineHost(
      * stays owned in exactly one place; a caller that guessed it would derive a key naming a tile the
      * engine never rendered.
      */
+    /**
+     * The same identity from a style **digest** rather than a compiled style, for a caller that has
+     * one and not the other — a draw resolving an ancestor tile (ADR 0057) holds the frame's
+     * `basemapStyleDigest` and never the `PreparedStyle` it came from.
+     */
+    fun renderedTileKey(styleDigest: String, tile: CanonicalBasemapTile): ResourceKey =
+        basemapTileKey(styleDigest, tile, tileOutputSize, sha256)
+
     fun renderedTileKey(styleDigest: String, instance: BasemapTileInstance): ResourceKey =
         basemapTileKey(styleDigest, instance, tileOutputSize, sha256)
 

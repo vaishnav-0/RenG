@@ -12,6 +12,7 @@ import com.rohittp.reng.internal.driver.PreparationDriver
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
+import com.rohittp.reng.internal.groundPresentedProvisionallyDiagnostic
 import com.rohittp.reng.internal.firewall.AcquiredDemTile
 import com.rohittp.reng.internal.firewall.AcquiredLabelCandidates
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
@@ -36,6 +37,9 @@ import com.rohittp.reng.internal.gl.GlProgramCache
 import com.rohittp.reng.internal.gl.GlobeGroundPipeline
 import com.rohittp.reng.internal.gl.GlobeGroundPipelineResult
 import com.rohittp.reng.internal.gl.GpuTextureResidency
+import com.rohittp.reng.internal.gl.GroundTileWindow
+import com.rohittp.reng.internal.gl.ancestorOf
+import com.rohittp.reng.internal.gl.windowWithin
 import com.rohittp.reng.internal.gl.withCapturedGlState
 import com.rohittp.reng.internal.thread.CallingThread
 import com.rohittp.reng.internal.thread.currentCallingThread
@@ -471,6 +475,17 @@ internal class RenGPreparedFrame(
      * already decided is how two authorities on one rule get created.
      */
     internal val drawLabels: Boolean,
+    /**
+     * The compiled style this frame's ground tiles were rendered from, or `null` when it rendered
+     * none.
+     *
+     * Carried for the reason `FrameAcquisition` gives for carrying it out of acquisition at all: the
+     * renderer's own `preparedBasemapStyle` describes the *most recently* prepared frame, which for a
+     * frame prepared earlier and drawn later is a different style entirely. A draw resolving an
+     * ancestor tile (ADR 0057) needs the digest of the style **this** frame used, because a tile key
+     * is a function of it and a key cannot be walked back to one.
+     */
+    internal val basemapStyleDigest: String?,
     stickers: List<PreparedSticker>,
     geometries: List<PreparedGeometry>,
     /**
@@ -1376,6 +1391,7 @@ internal class RenGRenderer(
                 projectionMode = plan.projectionMode,
                 drawBasemap = plan.drawBasemap,
                 drawLabels = plan.drawLabels,
+                basemapStyleDigest = acquired.basemapStyleDigest,
                 stickers = stickers,
                 geometries = geometries,
                 models = models,
@@ -1670,10 +1686,16 @@ internal class RenGRenderer(
             val key = keyByCanonicalTile.getOrPut(canonical) {
                 basemapEngineHost.renderedTileKey(styleDigest, instance)
             }
-            // Rendered this frame, or already on the GPU from an earlier one. Both are ways for the
-            // draw to have pixels; only naming neither is a defect.
-            check(key in renderedKeys || glObjectRegistry.resident(key) != null) {
-                "every selected tile instance must name a tile this frame rendered or one already resident"
+            // Rendered this frame, already on the GPU from an earlier one, or -- since ADR 0057 --
+            // coming from a resident ancestor because this frame's budget declined to rasterise it.
+            // All three are ways for the draw to have pixels; only naming none of them is a defect.
+            check(
+                key in renderedKeys ||
+                    glObjectRegistry.resident(key) != null ||
+                    residentAncestorOf(styleDigest, canonical) != null,
+            ) {
+                "every selected tile instance must name a tile this frame rendered, one already " +
+                    "resident, or a resident ancestor"
             }
             PreparedGroundInstance(instance = instance, resourceKey = key)
         }
@@ -2160,6 +2182,19 @@ internal class RenGRenderer(
             val remembered = memo?.get(key)
             if (remembered != null) alreadyRendered += remembered else missing += tile
         }
+        // ADR 0057's budget, applied here because here is where the rasterising happens. A tile left
+        // out is not dropped: `resolveGroundTiles` draws it from a resident ancestor, and the next
+        // `prepare()` selects it again -- it is still not resident -- and rasterises it under that
+        // frame's own budget. Refinement rides the consumer's own loop and needs no background work.
+        //
+        // Only tiles that HAVE a resident ancestor may be deferred. A frame that cannot draw its
+        // ground is not an improvement on a frame that is slow, so the budget bounds the work a
+        // frame adds and can never make it draw nothing.
+        val budget = configuration.resourceLimits.maximumTilesRasterisedPerFrame
+        if (missing.size > budget) {
+            val deferred = missing.drop(budget).filter { tile -> residentAncestorOf(style.digest, tile) != null }
+            if (deferred.isNotEmpty()) missing.removeAll(deferred.toSet())
+        }
         if (missing.isEmpty()) return alreadyRendered
         // The batch owns engine-side resources and is closed as soon as the pixels are in hand: nothing
         // downstream of here reads it, because rendering is where a PreparedBatch's whole purpose ends.
@@ -2175,6 +2210,28 @@ internal class RenGRenderer(
         }
         if (memo != null) freshlyRendered.forEach { memo[it.key] = it }
         return if (alreadyRendered.isEmpty()) freshlyRendered else alreadyRendered + freshlyRendered
+    }
+
+    /**
+     * The nearest ancestor of [tile] whose rendered texture is already resident, with the window
+     * [tile] occupies inside it — or `null` when no ancestor is resident (ADR 0057).
+     *
+     * Searched from the nearest upward, so a frame presents the sharpest ground it has rather than
+     * the first it finds. The search stops at the root: there is no tile above LOD 0.
+     *
+     * Nothing here fetches, renders or guesses. A tile with no resident ancestor is rasterised
+     * exactly as it always was.
+     */
+    private fun residentAncestorOf(
+        styleDigest: String,
+        tile: CanonicalBasemapTile,
+    ): Pair<ResourceKey, GroundTileWindow>? {
+        for (levels in 1..tile.lod) {
+            val ancestor = ancestorOf(tile, levels) ?: return null
+            val key = basemapEngineHost.renderedTileKey(styleDigest, ancestor)
+            if (glObjectRegistry.resident(key) != null) return key to windowWithin(tile, levels)
+        }
+        return null
     }
 
     /**
@@ -2517,7 +2574,16 @@ internal class RenGRenderer(
             withCapturedGlState(binding, profile) { captured ->
                 when (val resolved = resolveGroundTiles(frame, textureLeases, captured)) {
                     is GroundTilesResult.Failed -> resolved.failure
-                    is GroundTilesResult.Resolved -> drawResolvedFrame(
+                    is GroundTilesResult.Resolved -> {
+                    // ADR 0057's "and say so", emitted before the draw rather than after it so that
+                    // a frame which then fails has still told the consumer what it was about to
+                    // present. One per frame, never one per tile.
+                    if (resolved.provisionalTileCount > 0) {
+                        configuration.diagnosticSink.emit(
+                            groundPresentedProvisionallyDiagnostic(resolved.provisionalTileCount),
+                        )
+                    }
+                    drawResolvedFrame(
                         frame = frame,
                         framebufferName = framebufferName,
                         profile = profile,
@@ -2532,6 +2598,7 @@ internal class RenGRenderer(
                         textureLeases = textureLeases,
                         binding = captured,
                     )
+                }
                 }
             }
         } finally {
@@ -2878,7 +2945,11 @@ internal class RenGRenderer(
     }
 
     private sealed interface GroundTilesResult {
-        class Resolved(val tiles: List<SceneGroundTile>) : GroundTilesResult
+        class Resolved(
+            val tiles: List<SceneGroundTile>,
+            /** How many of [tiles] were drawn from an ancestor rather than their own texture (ADR 0057). */
+            val provisionalTileCount: Int = 0,
+        ) : GroundTilesResult
 
         class Failed(val failure: FailureDescriptor) : GroundTilesResult
     }
@@ -2929,6 +3000,7 @@ internal class RenGRenderer(
         if (groundInstances.isEmpty()) return GroundTilesResult.Resolved(emptyList())
 
         val renderedByKey = frame.basemapTiles.associateBy { it.key }
+        var provisionalTileCount = 0
         val texturesByKey = HashMap<ResourceKey, Int>(renderedByKey.size)
         val elevationByTile = resolveDemTextures(frame.terrain, groundLeases)
         val tiles = ArrayList<SceneGroundTile>(groundInstances.size)
@@ -2945,6 +3017,34 @@ internal class RenGRenderer(
                 continue
             }
             val reused = glObjectRegistry.leaseResident(key)
+            // ADR 0057: a tile this frame's budget declined to rasterise has no texture and no
+            // rendered bytes, so it is drawn from the nearest resident ancestor, magnified through
+            // the window it occupies there. Tried only when the two ordinary sources have failed,
+            // and never instead of the typed failure below: a tile with no ancestor either is still
+            // RESOURCE_UNAVAILABLE (ADR 0046).
+            val provisional = if (reused != null || renderedByKey.containsKey(key)) {
+                null
+            } else {
+                frame.basemapStyleDigest?.let { digest ->
+                    residentAncestorOf(digest, canonicalTileOf(groundInstance.instance))
+                }
+            }
+            if (provisional != null) {
+                val (ancestorKey, window) = provisional
+                val ancestor = glObjectRegistry.leaseResident(ancestorKey)
+                    ?: return GroundTilesResult.Failed(basemapTileEvictedFailure(key))
+                groundLeases += ancestor.lease
+                provisionalTileCount += 1
+                // Deliberately NOT recorded in `texturesByKey`: that memo is keyed by the tile's own
+                // identity, and two tiles sharing one ancestor need two different windows into it.
+                tiles += SceneGroundTile(
+                    instance = groundInstance.instance,
+                    texture = ancestor.handle.name,
+                    elevation = elevation,
+                    colourWindow = window,
+                )
+                continue
+            }
             val texture = if (reused != null) {
                 groundLeases += reused.lease
                 reused.handle.name
@@ -3005,7 +3105,7 @@ internal class RenGRenderer(
                 elevation = elevation,
             )
         }
-        return GroundTilesResult.Resolved(tiles)
+        return GroundTilesResult.Resolved(tiles, provisionalTileCount)
     }
 
     /**

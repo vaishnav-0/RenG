@@ -66,6 +66,7 @@ internal const val GLOBE_GROUND_VERTEX_SOURCE: String =
         "uniform vec4 rengGlobeGroundTileEdges;\n" +
         "uniform vec2 rengGlobeGroundTileUvV;\n" +
         "out vec2 rengGroundUv;\n" +
+        "uniform vec3 rengGroundColourWindow;\n" +
         "void main() {\n" +
         "    float longitude = mix(rengGlobeGroundTileEdges.x, rengGlobeGroundTileEdges.y, " +
         "rengGlobeGroundGrid.x);\n" +
@@ -78,8 +79,9 @@ internal const val GLOBE_GROUND_VERTEX_SOURCE: String =
         "    float cosineLatitude = 2.0 * tangentHalfAngle / denominator;\n" +
         "    vec3 direction = vec3(cosineLatitude * cos(longitude), cosineLatitude * sin(longitude), " +
         "sineLatitude);\n" +
-        "    rengGroundUv = vec2(rengGlobeGroundGrid.x, mix(rengGlobeGroundTileUvV.x, " +
+        "    vec2 rengGroundTileUv = vec2(rengGlobeGroundGrid.x, mix(rengGlobeGroundTileUvV.x, " +
         "rengGlobeGroundTileUvV.y, rengGlobeGroundGrid.y));\n" +
+        "    rengGroundUv = rengGroundTileUv * rengGroundColourWindow.x + rengGroundColourWindow.yz;\n" +
         "    gl_Position = rengGlobeGroundUnitSphereToClip * vec4(direction, 1.0);\n" +
         "}\n"
 
@@ -152,6 +154,7 @@ private fun terrainGlobeGroundVertexSource(shading: Boolean): String =
         GROUND_ELEVATION_SOURCE +
         (if (shading) GROUND_NORMAL_SOURCE else "") +
         "out vec2 rengGroundUv;\n" +
+        "uniform vec3 rengGroundColourWindow;\n" +
         (if (shading) "out vec3 rengGroundNormalEnu;\n" else "") +
         "void main() {\n" +
         "    float longitude = mix(rengGlobeGroundTileEdges.x, rengGlobeGroundTileEdges.y, " +
@@ -167,8 +170,9 @@ private fun terrainGlobeGroundVertexSource(shading: Boolean): String =
         "sineLatitude);\n" +
         "    float radial = 1.0 + rengGroundElevationMetres(rengGlobeGroundGrid) * " +
         "rengGlobeGroundRadialPerMetre;\n" +
-        "    rengGroundUv = vec2(rengGlobeGroundGrid.x, mix(rengGlobeGroundTileUvV.x, " +
+        "    vec2 rengGroundTileUv = vec2(rengGlobeGroundGrid.x, mix(rengGlobeGroundTileUvV.x, " +
         "rengGlobeGroundTileUvV.y, rengGlobeGroundGrid.y));\n" +
+        "    rengGroundUv = rengGroundTileUv * rengGroundColourWindow.x + rengGroundColourWindow.yz;\n" +
         (
             if (shading) {
                 "    rengGroundNormalEnu = rengGroundEnuNormal(rengGlobeGroundGrid, cosineLatitude);\n"
@@ -214,6 +218,13 @@ internal class TerrainGlobeGroundProgram(
     val key: ResourceKey,
     val program: Int,
     val unitSphereToClipUniformLocation: Int,
+    /**
+     * Which part of the bound texture a tile samples (ADR 0057): scale, then u and v offsets.
+     *
+     * The identity window is what an exact tile gets, so this is written for every tile and the
+     * shader carries no branch and no second variant.
+     */
+    val colourWindowUniformLocation: Int,
     val tileEdgesUniformLocation: Int,
     val tileUvVUniformLocation: Int,
     val textureUniformLocation: Int,
@@ -243,6 +254,13 @@ internal class GlobeGroundPipeline(
     val key: ResourceKey,
     val program: Int,
     val unitSphereToClipUniformLocation: Int,
+    /**
+     * Which part of the bound texture a tile samples (ADR 0057): scale, then u and v offsets.
+     *
+     * The identity window is what an exact tile gets, so this is written for every tile and the
+     * shader carries no branch and no second variant.
+     */
+    val colourWindowUniformLocation: Int,
     val tileEdgesUniformLocation: Int,
     val tileUvVUniformLocation: Int,
     val textureUniformLocation: Int,
@@ -329,6 +347,10 @@ internal fun createGlobeGroundPipeline(
                 GLOBE_GROUND_TILE_UV_V_UNIFORM_NAME,
             ),
             textureUniformLocation = binding.getUniformLocation(program, GROUND_TEXTURE_UNIFORM_NAME),
+            colourWindowUniformLocation = binding.getUniformLocation(
+                program,
+                GROUND_COLOUR_WINDOW_UNIFORM_NAME,
+            ),
             terrain = TerrainGlobeGroundProgram(
                 key = terrainKey,
                 program = terrainProgram,
@@ -347,6 +369,10 @@ internal fun createGlobeGroundPipeline(
                 textureUniformLocation = binding.getUniformLocation(
                     terrainProgram,
                     GROUND_TEXTURE_UNIFORM_NAME,
+                ),
+                colourWindowUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GROUND_COLOUR_WINDOW_UNIFORM_NAME,
                 ),
                 radialPerMetreUniformLocation = binding.getUniformLocation(
                     terrainProgram,
@@ -553,6 +579,14 @@ private fun mercatorXLongitudeRadians(mercatorX: Double): Double =
 internal class ResolvedGlobeGroundTile(
     val edges: FloatArray,
     val texture: Int,
+    /**
+     * Which part of [texture] this tile samples; the whole of it unless the tile is provisional
+     * (ADR 0057).
+     *
+     * Applied to the uv the shader has already built, **after** [uvV]'s polar-cap collapse, so a cap
+     * wedge lands on this window's own edge rather than the whole texture's.
+     */
+    val colourWindow: GroundTileWindow = GroundTileWindow.WHOLE,
     /**
      * This tile's DEM and the window it reads, or `null` when the frame has no terrain or Rentile
      * returned no DEM for this tile (ADR 0041: that tile draws flat rather than failing the frame).
@@ -792,6 +826,23 @@ internal fun drawGlobeGround(
         }
         if (uvVLocation >= 0) {
             binding.uniform2f(uvVLocation, tile.uvV[0], tile.uvV[1])
+        }
+        val windowLocation = if (wantsDisplacement) {
+            pipeline.terrain.colourWindowUniformLocation
+        } else {
+            pipeline.colourWindowUniformLocation
+        }
+        if (windowLocation >= 0) {
+            // Applied to the uv this shader has already built, which is what makes the polar caps
+            // safe without a second thought: the cap constants collapse v onto 0 and 1, and 0 and 1
+            // map through this window onto the window's OWN edges rather than the whole texture's
+            // (ADR 0057). Written for every tile, identity included.
+            binding.uniform3f(
+                windowLocation,
+                tile.colourWindow.scale,
+                tile.colourWindow.offsetU,
+                tile.colourWindow.offsetV,
+            )
         }
         if (tileElevation != null) {
             bindGroundElevationTile(binding, pipeline.terrain.elevation, tileElevation)

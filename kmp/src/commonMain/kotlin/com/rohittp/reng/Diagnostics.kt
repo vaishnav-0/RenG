@@ -40,6 +40,16 @@ public enum class DiagnosticCode {
     LABEL_CONTENT_EXCLUDED,
     TERRAIN_COVERAGE_INCOMPLETE,
     TERRAIN_UNAVAILABLE,
+
+    /**
+     * Some of this frame's ground was drawn from a resident ancestor tile rather than its own,
+     * because the consumer's `maximumTilesRasterisedPerFrame` declined to rasterise it (ADR 0057).
+     *
+     * A frame that presented an ancestor is not the same artefact as one that did not, and a consumer
+     * compositing a still or capturing a video frame needs to know which they have. Appended last, so
+     * no existing constant's ordinal moves.
+     */
+    GROUND_PRESENTED_PROVISIONALLY,
 }
 
 @ConsistentCopyVisibility
@@ -162,6 +172,28 @@ public data class Diagnostic internal constructor(
                 // of a complete coverage is unconstructible rather than merely wrong.
                 require(limit == 0L && actual!! > 0L) {
                     "terrain-coverage diagnostics carry a positive count of tiles that drew flat"
+                }
+            }
+
+            DiagnosticCode.GROUND_PRESENTED_PROVISIONALLY -> {
+                // ADR 0057. A warning, and for TERRAIN_COVERAGE_INCOMPLETE's reason: the frame
+                // prepared and it drew, and some of its ground is coarser than the LOD it chose --
+                // a wrong picture rather than a missing one, which is exactly what a consumer
+                // capturing a still needs told.
+                require(severity == DiagnosticSeverity.WARNING) {
+                    "provisional-ground diagnostics are warnings"
+                }
+                require(stage == PipelineStage.DRAW) {
+                    "provisional ground is decided during the draw that resolves it"
+                }
+                require(fieldName == null && resourceClass == null && resourceKey == null && statusCode == null) {
+                    "provisional-ground diagnostics name no single tile"
+                }
+                // The same structural shape TERRAIN_COVERAGE_INCOMPLETE uses: a count against a
+                // limit of zero, so a report that nothing was provisional is unconstructible rather
+                // than merely pointless.
+                require(limit == 0L && actual!! > 0L) {
+                    "provisional-ground diagnostics carry a positive count of tiles drawn from an ancestor"
                 }
             }
 

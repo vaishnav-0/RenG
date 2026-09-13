@@ -74,11 +74,17 @@ executes on every tile and the shader has no branch and no second variant.
 Consumer geometry shaders see nothing: ADR 0008 hands them `aPosition` and a matrix, and the ground's
 own uv is not part of that contract.
 
-## The invariant that goes, and what replaces it
+## Two invariants go, and what replaces them
 
 `resolveGroundTiles`' `require` — "prepare() already proved every ground instance names a rendered
 tile" — stops being true, and it must not be softened into silence. It becomes: **every ground
-instance names either a rendered tile or a resident ancestor of one**, and the case that satisfies
-neither is still the typed `RESOURCE_UNAVAILABLE` failure ADR 0046 made it, for the same reason —
-a texture evicted between preparation and draw is a frame this renderer cannot honour, and crashing
-a consumer for a cache decision they never made remains wrong.
+instance names a rendered tile, a resident texture, or a resident ancestor of one**, and the case
+that satisfies none of the three is still the typed `RESOURCE_UNAVAILABLE` failure ADR 0046 made it,
+for the same reason — a texture evicted between preparation and draw is a frame this renderer cannot
+honour, and crashing a consumer for a cache decision they never made remains wrong.
+
+There is a **second** check saying the same thing one phase earlier, in `groundInstances` at
+preparation time, and it was easy to miss because the two are worded differently and live four
+hundred lines apart. It admits the same third way. Both are widened by exactly one clause, and
+neither is relaxed: a tile with no rendered bytes, no resident texture and no resident ancestor is
+still a defect at prepare and still a typed failure at draw.

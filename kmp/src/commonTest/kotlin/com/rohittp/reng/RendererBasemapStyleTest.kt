@@ -189,9 +189,11 @@ internal fun styleRenderer(
     store: Store = RecordingStyleStore(),
     basemapStyle: ResourceLocator? = ResourceLocator(STYLE_URL),
     resourceLimits: ResourceLimits = ResourceLimits(),
+    diagnosticSink: DiagnosticSink = DiagnosticSink { },
 ): Renderer = createRenderer(
     RendererConfiguration(
         outputPixelSize = OutputPixelSize(64, 64),
+        diagnosticSink = diagnosticSink,
         transport = transport,
         store = store,
         basemapStyle = basemapStyle,

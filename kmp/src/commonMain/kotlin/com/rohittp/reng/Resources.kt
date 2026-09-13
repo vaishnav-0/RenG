@@ -169,6 +169,29 @@ public data class ResourceLimits(
      * Declared last, for the ABI reason [maximumInFlightRawBasemapTileBytes] already gives.
      */
     public val maximumResidentCpuResourceBytes: Long = 128L * 1024L * 1024L,
+    /**
+     * How many basemap tiles one `prepare()` may rasterise before it starts drawing the rest from
+     * resident ancestors instead (ADR 0057).
+     *
+     * **Defaults to no limit, and with no limit nothing changes**: every frame rasterises every tile
+     * it selected, exactly as every release before this one. The trade this offers — a frame sooner,
+     * at a lower resolution, for a few frames — is a decision about a particular application's feel,
+     * and RenG is not in a position to make it for anyone.
+     *
+     * A tile with no resident ancestor is rasterised whatever this says. The budget bounds the work a
+     * frame **adds**; it can never make a frame draw nothing.
+     *
+     * Refinement needs no background work and no notification: a tile this frame skipped is still not
+     * resident, so the next `prepare()` selects it again and rasterises it under that frame's own
+     * budget. A consumer running an animation loop gets coarse ground immediately and sharper ground
+     * over the next few frames; a consumer preparing one still should leave this unset and wait.
+     *
+     * `Int.MAX_VALUE` means unlimited and is the default. Zero is admissible and means "rasterise
+     * nothing that has an ancestor", which is the most aggressive form of the same trade.
+     *
+     * Declared last, for the ABI reason [maximumInFlightRawBasemapTileBytes] already gives.
+     */
+    public val maximumTilesRasterisedPerFrame: Int = Int.MAX_VALUE,
 ) {
     init {
         val minimum = 1L
@@ -216,6 +239,12 @@ public data class ResourceLimits(
         // is coherent -- every resource is evicted the moment its last frame closes.
         require(maximumResidentCpuResourceBytes in 0L..maximum) {
             "maximumResidentCpuResourceBytes must be within the supported range"
+        }
+        // Zero is admissible for the same reason the two byte budgets above admit it: it is a
+        // coherent choice ("rasterise nothing that has an ancestor"), not the degenerate absence of
+        // a budget.
+        require(maximumTilesRasterisedPerFrame >= 0) {
+            "maximumTilesRasterisedPerFrame must not be negative"
         }
     }
 }

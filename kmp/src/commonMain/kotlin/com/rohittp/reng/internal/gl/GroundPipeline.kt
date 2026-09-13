@@ -33,9 +33,10 @@ internal const val GROUND_VERTEX_SOURCE: String =
         "layout(location = 0) in vec2 rengGroundGrid;\n" +
         "uniform mat4 rengGroundModelViewProjection;\n" +
         "out vec2 rengGroundUv;\n" +
+        "uniform vec3 rengGroundColourWindow;\n" +
         "void main() {\n" +
         "    vec2 position = vec2(rengGroundGrid.x - 0.5, 0.5 - rengGroundGrid.y);\n" +
-        "    rengGroundUv = rengGroundGrid;\n" +
+        "    rengGroundUv = rengGroundGrid * rengGroundColourWindow.x + rengGroundColourWindow.yz;\n" +
         "    gl_Position = rengGroundModelViewProjection * vec4(position, 0.0, 1.0);\n" +
         "}\n"
 
@@ -96,6 +97,8 @@ internal val GROUND_SHADED_FRAGMENT_SOURCE: String =
 
 internal val GROUND_SHADER_PAIR: ShaderPair =
     ShaderPair(vertexSource = GROUND_VERTEX_SOURCE, fragmentSource = GROUND_FRAGMENT_SOURCE)
+
+internal const val GROUND_COLOUR_WINDOW_UNIFORM_NAME: String = "rengGroundColourWindow"
 
 internal const val GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME: String = "rengGroundModelViewProjection"
 internal const val GROUND_TEXTURE_UNIFORM_NAME: String = "rengGroundTexture"
@@ -166,13 +169,14 @@ private fun terrainGroundVertexSource(shading: Boolean): String =
         GROUND_ELEVATION_SOURCE +
         (if (shading) GROUND_NORMAL_SOURCE else "") +
         "out vec2 rengGroundUv;\n" +
+        "uniform vec3 rengGroundColourWindow;\n" +
         (if (shading) "out vec3 rengGroundNormalEnu;\n" else "") +
         "void main() {\n" +
         "    float mercatorY = mix(rengGroundMercatorY.x, rengGroundMercatorY.y, rengGroundGrid.y);\n" +
         "    float up = rengGroundElevationMetres(rengGroundGrid) * rengGroundElevationScale *\n" +
         "        cosh(3.141592653589793 * (1.0 - 2.0 * mercatorY));\n" +
         "    vec2 position = vec2(rengGroundGrid.x - 0.5, 0.5 - rengGroundGrid.y);\n" +
-        "    rengGroundUv = rengGroundGrid;\n" +
+        "    rengGroundUv = rengGroundGrid * rengGroundColourWindow.x + rengGroundColourWindow.yz;\n" +
         (
             if (shading) {
                 "    rengGroundNormalEnu = rengGroundEnuNormal(rengGroundGrid, 1.0 /\n" +
@@ -223,6 +227,13 @@ internal class TerrainGroundProgram(
     val key: ResourceKey,
     val program: Int,
     val modelViewProjectionUniformLocation: Int,
+    /**
+     * Which part of the bound texture a tile samples (ADR 0057): scale, then u and v offsets.
+     *
+     * The identity window is what an exact tile gets, so this is written for every tile and the
+     * shader carries no branch and no second variant.
+     */
+    val colourWindowUniformLocation: Int,
     val textureUniformLocation: Int,
     val mercatorYUniformLocation: Int,
     val elevationScaleUniformLocation: Int,
@@ -254,6 +265,13 @@ internal class GroundPipeline(
     val key: ResourceKey,
     val program: Int,
     val modelViewProjectionUniformLocation: Int,
+    /**
+     * Which part of the bound texture a tile samples (ADR 0057): scale, then u and v offsets.
+     *
+     * The identity window is what an exact tile gets, so this is written for every tile and the
+     * shader carries no branch and no second variant.
+     */
+    val colourWindowUniformLocation: Int,
     val textureUniformLocation: Int,
     /**
      * The displacing program this pipeline draws a tile with a DEM through — see
@@ -336,6 +354,10 @@ internal fun createGroundPipeline(
                 program,
                 GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME,
             ),
+            colourWindowUniformLocation = binding.getUniformLocation(
+                program,
+                GROUND_COLOUR_WINDOW_UNIFORM_NAME,
+            ),
             textureUniformLocation = binding.getUniformLocation(program, GROUND_TEXTURE_UNIFORM_NAME),
             terrain = TerrainGroundProgram(
                 key = terrainKey,
@@ -343,6 +365,10 @@ internal fun createGroundPipeline(
                 modelViewProjectionUniformLocation = binding.getUniformLocation(
                     terrainProgram,
                     GROUND_MODEL_VIEW_PROJECTION_UNIFORM_NAME,
+                ),
+                colourWindowUniformLocation = binding.getUniformLocation(
+                    terrainProgram,
+                    GROUND_COLOUR_WINDOW_UNIFORM_NAME,
                 ),
                 textureUniformLocation = binding.getUniformLocation(
                     terrainProgram,
@@ -387,6 +413,8 @@ internal class ResolvedGroundTile(
     val modelViewProjection: FloatArray,
     val texture: Int,
     val elevation: MercatorGroundTileDem? = null,
+    /** Which part of [texture] to sample; the whole of it unless this tile is provisional (ADR 0057). */
+    val colourWindow: GroundTileWindow = GroundTileWindow.WHOLE,
 )
 
 /**
@@ -554,6 +582,21 @@ internal fun drawGround(
         }
         if (matrixLocation >= 0) {
             binding.uniformMatrix4fv(matrixLocation, 1, false, tile.modelViewProjection)
+        }
+        val windowLocation = if (wantsDisplacement) {
+            pipeline.terrain.colourWindowUniformLocation
+        } else {
+            pipeline.colourWindowUniformLocation
+        }
+        if (windowLocation >= 0) {
+            // Written for every tile, identity included (ADR 0057): a uniform left over from the
+            // previous tile is the one way this can draw the wrong part of the right texture.
+            binding.uniform3f(
+                windowLocation,
+                tile.colourWindow.scale,
+                tile.colourWindow.offsetU,
+                tile.colourWindow.offsetV,
+            )
         }
         if (tileElevation != null) {
             if (pipeline.terrain.mercatorYUniformLocation >= 0) {
