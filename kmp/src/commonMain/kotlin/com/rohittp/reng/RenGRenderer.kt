@@ -515,6 +515,14 @@ internal class RenGPreparedFrame(
      */
     groundInstances: List<PreparedGroundInstance> = emptyList(),
     /**
+     * The LOD `observeMercatorLod` chose for this frame, which is **not** the same thing as the LOD
+     * of any particular ground tile since ADR 0065: the ground is banded, and a band's level is an
+     * offset from this one. Terrain reads this rather than a tile's, because a [GroundSurface] is
+     * built at a single level by construction and the frame's own is the only level with a claim to
+     * be it -- the centre band always carries offset zero.
+     */
+    internal val groundSelectedLod: Int? = null,
+    /**
      * This frame's terrain, or `null` when its style declared none, when RenG and the engine did not
      * name the same source, or when the acquisition failed — the last two being ADR 0041's two
      * degradations, which have already been reported by the time a frame exists and leave the ground
@@ -1255,6 +1263,7 @@ internal class RenGRenderer(
                 hasLabelCandidates = acquired.labelCandidates?.batch?.candidates?.isNotEmpty() == true,
                 groundInstances = groundInstances,
                 terrain = terrain,
+                groundSelectedLod = planned.spatialPlan.lodObservation.selectedLod,
             )
 
             val stickers = plan.stickers.zip(stickerImageReferences) { sticker, reference ->
@@ -1319,7 +1328,7 @@ internal class RenGRenderer(
                         resolvedCamera = planned.spatialPlan.camera,
                         surface = groundSurface,
                         terrain = terrain,
-                        selectedLod = groundInstances.firstOrNull()?.instance?.lod,
+                        selectedLod = planned.spatialPlan.lodObservation.selectedLod,
                     ),
                 )
             }
@@ -1397,6 +1406,7 @@ internal class RenGRenderer(
                 models = models,
                 basemapTiles = acquired.basemapTiles,
                 groundInstances = groundInstances,
+                groundSelectedLod = planned.spatialPlan.lodObservation.selectedLod,
                 terrain = terrain,
                 groundSurface = groundSurface,
                 labels = labels,
@@ -1567,9 +1577,11 @@ internal class RenGRenderer(
         hasLabelCandidates: Boolean,
         groundInstances: List<PreparedGroundInstance>,
         terrain: PreparedTerrain?,
+        groundSelectedLod: Int?,
     ): GroundSurface? {
         if (terrain == null) return null
-        val selectedLod = groundInstances.firstOrNull()?.instance?.lod ?: return null
+        if (groundInstances.isEmpty()) return null
+        val selectedLod = groundSelectedLod ?: return null
         val ridesTheGround = hasLabelCandidates ||
             plan.geometries.any { it.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
             plan.stickers.any { it.placement.altitudeMode == AltitudeMode.GROUND_RELATIVE } ||
@@ -2789,7 +2801,8 @@ internal class RenGRenderer(
      */
     private fun sceneTerrain(frame: RenGPreparedFrame): SceneTerrain? {
         val terrain = frame.terrain ?: return null
-        val selectedLod = frame.groundInstances.firstOrNull()?.instance?.lod ?: return null
+        if (frame.groundInstances.isEmpty()) return null
+        val selectedLod = frame.groundSelectedLod ?: return null
         return SceneTerrain(
             decode = demDecodeCoefficients(terrain.encoding),
             interiorSizePx = terrain.tileSizePx,

@@ -47,10 +47,13 @@ internal fun planMercatorSpatial(
     if ((plan.drawBasemap || plan.drawLabels) && basemapStyleConfigured) {
         footprint = clippedPhysicalPixelFootprint(camera)
         when (
-            val selection = selectBasemapTiles(
-                footprint = footprint,
-                lod = lodObservation.selectedLod,
-                maximumInstances = maximumBasemapTileInstances,
+            // ADR 0065: one LOD per band rather than one for the frame. `footprint` above stays
+            // the whole frame's -- it is what `FrameSpatialPlan` carries and what the label handover
+            // reasons about -- while the tiles come from the banded decomposition of the same rays.
+            val selection = selectBandedBasemapTiles(
+                camera = camera,
+                selectedLod = lodObservation.selectedLod,
+                maximumBasemapTileInstances = maximumBasemapTileInstances,
             )
         ) {
             is TileSelectionOutcome.OverBudget -> return basemapTileBudgetFailure(selection)
