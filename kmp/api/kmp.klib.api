@@ -531,6 +531,9 @@ final class com.rohittp.reng/Camera { // com.rohittp.reng/Camera|null[0]
     final fun toString(): kotlin/String // com.rohittp.reng/Camera.toString|toString(){}[0]
 
     final object Companion { // com.rohittp.reng/Camera.Companion|null[0]
+        final val MAXIMUM_GROUND_FILLING_PITCH_DEGREES // com.rohittp.reng/Camera.Companion.MAXIMUM_GROUND_FILLING_PITCH_DEGREES|{}MAXIMUM_GROUND_FILLING_PITCH_DEGREES[0]
+            final fun <get-MAXIMUM_GROUND_FILLING_PITCH_DEGREES>(): kotlin/Double // com.rohittp.reng/Camera.Companion.MAXIMUM_GROUND_FILLING_PITCH_DEGREES.<get-MAXIMUM_GROUND_FILLING_PITCH_DEGREES>|<get-MAXIMUM_GROUND_FILLING_PITCH_DEGREES>(){}[0]
+
         final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Camera> // com.rohittp.reng/Camera.Companion.serializer|serializer(){}[0]
     }
 }

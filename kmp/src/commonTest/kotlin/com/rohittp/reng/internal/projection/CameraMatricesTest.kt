@@ -356,6 +356,20 @@ class CameraMatricesTest {
         assertTrue(sawRejection)
     }
 
+    /**
+     * ADR 0067. The published ceiling and the bound it is derived from have to agree at the frame
+     * level, not merely arithmetically: at the ceiling every row still carries ground, and just above
+     * it some row does not. Asserted through the public constant, so a consumer clamping a gesture to
+     * it is clamping to something this renderer has actually measured.
+     */
+    @Test
+    fun theCeilingIsTheSteepestPitchWithGroundUnderEveryRow() {
+        assertEquals(66.75, Camera.MAXIMUM_GROUND_FILLING_PITCH_DEGREES, absoluteTolerance = 1e-12)
+
+        assertEquals(0, rowsBeyondTheGroundAngle(Camera.MAXIMUM_GROUND_FILLING_PITCH_DEGREES))
+        assertTrue(rowsBeyondTheGroundAngle(Camera.MAXIMUM_GROUND_FILLING_PITCH_DEGREES + 0.1) > 0)
+    }
+
     private fun rowsBeyondTheGroundAngle(pitch: Double): Int {
         val resolved = resolve(
             camera = camera(pitch = pitch),
