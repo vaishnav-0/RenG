@@ -28,6 +28,7 @@ import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.maximumBytesFor
 import com.rohittp.reng.internal.resource.RentilePrivateKey
 import com.rohittp.reng.internal.resource.RentilePrivateKeyResolver
+import com.rohittp.reng.backdropForCore
 import com.rohittp.reng.modelsForCore
 import com.rohittp.reng.stickersForCore
 
@@ -237,6 +238,10 @@ internal class FramePlanningCore(
         for (sticker in plan.stickersForCore()) {
             external(sticker.image, ResourceClass.STICKER_IMAGE)
         }
+        // ADR 0068. Its own class rather than STICKER_IMAGE: RenGRenderer pairs that class's
+        // references with plan.stickers by index, and a backdrop among them is an off-by-one in
+        // every sticker's texture.
+        plan.backdropForCore()?.let { backdrop -> external(backdrop.image, ResourceClass.BACKDROP_IMAGE) }
         for (model in plan.modelsForCore()) {
             external(model.glb, ResourceClass.MODEL_GLB)
             model.texture?.let { texture -> external(texture, ResourceClass.MODEL_TEXTURE) }
@@ -270,6 +275,7 @@ private val ResourceClass.isStaticDirect: Boolean
     get() = when (this) {
         ResourceClass.BASEMAP_STYLE,
         ResourceClass.STICKER_IMAGE,
+        ResourceClass.BACKDROP_IMAGE,
         ResourceClass.MODEL_GLB,
         ResourceClass.MODEL_TEXTURE,
         -> true

@@ -13,7 +13,7 @@ import kotlin.test.assertNotEquals
 
 class FrameStructuralDiffTest {
     @Test
-    fun nullBaselineChangesAllEightSegmentsInTagOrder() {
+    fun nullBaselineChangesEverySegmentInTagOrder() {
         val current = FramePlanCanonicalEncoder().encode(minimalPlan(0))
 
         assertEquals(
@@ -95,6 +95,7 @@ class FrameStructuralDiffTest {
             FramePlanSegment.MODELS,
             FramePlanSegment.GEOMETRIES,
             FramePlanSegment.DRAW_LABELS,
+            FramePlanSegment.BACKDROP,
         )
 
         val CONSTANT_SHA256: Sha256Function = Sha256Function {

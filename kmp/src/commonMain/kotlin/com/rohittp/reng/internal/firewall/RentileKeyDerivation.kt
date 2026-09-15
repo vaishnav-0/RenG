@@ -109,6 +109,7 @@ internal fun engineKeyedResourceClassOf(resourceClass: ResourceClass): RentileRe
         ResourceClass.BASEMAP_GLYPH_RANGE -> RentileResourceClass.GLYPH_RANGE
         ResourceClass.BASEMAP_STYLE,
         ResourceClass.STICKER_IMAGE,
+        ResourceClass.BACKDROP_IMAGE,
         ResourceClass.MODEL_GLB,
         ResourceClass.MODEL_TEXTURE,
         -> null

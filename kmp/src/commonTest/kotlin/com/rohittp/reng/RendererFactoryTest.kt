@@ -362,8 +362,8 @@ class RendererFactoryTest {
         assertEquals(
             INTERNAL_PIPELINE_PROGRAMS,
             created,
-            "setup compiles the composite, sticker, ground, displaced ground, label and icon " +
-                "programs: ${binding.log}",
+            "setup compiles the composite, sticker, backdrop, ground, displaced ground, label " +
+                "and icon programs: ${binding.log}",
         )
 
         renderer.close()
@@ -1472,4 +1472,4 @@ private fun bin(write: BinWriter.() -> Unit): ByteArray = BinWriter().apply(writ
  * The globe ground's two are not here: that pipeline is compiled on the first globe frame that
  * carries ground, and this renderer draws none.
  */
-private const val INTERNAL_PIPELINE_PROGRAMS: Int = 6
+private const val INTERNAL_PIPELINE_PROGRAMS: Int = 7

@@ -641,6 +641,7 @@ internal enum class ResourceClassGate {
 internal fun ordinaryResourceClassGates(resourceClass: ResourceClass): List<ResourceClassGate>? =
     when (resourceClass) {
         ResourceClass.STICKER_IMAGE -> listOf(ResourceClassGate.DECODE_PNG)
+        ResourceClass.BACKDROP_IMAGE -> listOf(ResourceClassGate.DECODE_PNG)
         ResourceClass.MODEL_TEXTURE -> listOf(ResourceClassGate.DECODE_PNG)
         ResourceClass.MODEL_GLB -> listOf(
             ResourceClassGate.PARSE_GLB,

@@ -467,6 +467,8 @@ internal class SceneContent(
     private val labelPipeline: LabelPipeline? = null,
     private val iconPipeline: IconPipeline? = null,
     private val globeGroundPipeline: GlobeGroundPipeline? = null,
+    private val backdropPipeline: BackdropPipeline? = null,
+    private val backdrop: ResolvedBackdrop? = null,
 ) : GlFrameContent {
 
     /**
@@ -503,6 +505,15 @@ internal class SceneContent(
         ?.takeIf { scene.groundTiles.isNotEmpty() && !it.isEmpty }
 
     override fun draw(binding: GlBinding) {
+        // ADR 0068, and it is deliberately the first thing here -- ahead of the emptiness check
+        // below as well as ahead of the ground. A frame carrying nothing but a backdrop is a frame
+        // that draws its backdrop; returning early on an empty *scene* would make the one case a
+        // consumer is most likely to try first, a backdrop with `drawBasemap = false`, silently
+        // paint nothing.
+        if (backdropPipeline != null && backdrop != null) {
+            drawBackdrop(binding, backdropPipeline, backdrop)
+        }
+
         if (scene.groundTiles.isEmpty() &&
             scene.geometries.isEmpty() &&
             scene.models.isEmpty() &&

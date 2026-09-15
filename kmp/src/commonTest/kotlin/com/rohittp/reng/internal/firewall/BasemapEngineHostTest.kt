@@ -850,7 +850,7 @@ class BasemapEngineHostTest {
         // `RenGRawResourceKey(stableId = key.stableId, ...)`). Two keys for one logical resource would be
         // two reads and two writes where RenG's contract permits one exchange, so the partition below is a
         // contract, not an implementation detail: the engine keys exactly the eight classes it fetches
-        // itself, and RenG keys exactly the four it fetches itself.
+        // itself, and RenG keys exactly the five it fetches itself.
         //
         // What this pins is the table. What makes the spaces genuinely disjoint *today* is that no
         // production path hands an engine-keyed class to the driver at all: `FramePlanningCore`'s static
@@ -866,6 +866,7 @@ class BasemapEngineHostTest {
             setOf(
                 ResourceClass.BASEMAP_STYLE,
                 ResourceClass.STICKER_IMAGE,
+                ResourceClass.BACKDROP_IMAGE,
                 ResourceClass.MODEL_GLB,
                 ResourceClass.MODEL_TEXTURE,
             ),

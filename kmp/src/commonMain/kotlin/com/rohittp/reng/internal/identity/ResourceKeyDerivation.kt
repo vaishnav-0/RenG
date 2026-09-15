@@ -384,6 +384,7 @@ private val ResourceClass.wireValue: Int
         ResourceClass.MODEL_GLB -> 10
         ResourceClass.MODEL_TEXTURE -> 11
         ResourceClass.BASEMAP_GLYPH_RANGE -> 12
+        ResourceClass.BACKDROP_IMAGE -> 13
     }
 
 private const val GEOMETRY_SHADER_PROFILE_WIRE_VALUE: Int = 1

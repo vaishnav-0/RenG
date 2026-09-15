@@ -46,5 +46,6 @@ internal object FrameStructuralDiffer {
         FramePlanSegment.MODELS,
         FramePlanSegment.GEOMETRIES,
         FramePlanSegment.DRAW_LABELS,
+        FramePlanSegment.BACKDROP,
     )
 }

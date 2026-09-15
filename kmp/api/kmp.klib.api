@@ -205,6 +205,7 @@ final enum class com.rohittp.reng/ResourceAccessMode : kotlin/Enum<com.rohittp.r
 }
 
 final enum class com.rohittp.reng/ResourceClass : kotlin/Enum<com.rohittp.reng/ResourceClass> { // com.rohittp.reng/ResourceClass|null[0]
+    enum entry BACKDROP_IMAGE // com.rohittp.reng/ResourceClass.BACKDROP_IMAGE|null[0]
     enum entry BASEMAP_DEM_TILE // com.rohittp.reng/ResourceClass.BASEMAP_DEM_TILE|null[0]
     enum entry BASEMAP_GEO_JSON // com.rohittp.reng/ResourceClass.BASEMAP_GEO_JSON|null[0]
     enum entry BASEMAP_GLYPH_RANGE // com.rohittp.reng/ResourceClass.BASEMAP_GLYPH_RANGE|null[0]
@@ -512,6 +513,26 @@ final class com.rohittp.reng/AnimationTrack { // com.rohittp.reng/AnimationTrack
     }
 }
 
+final class com.rohittp.reng/Backdrop { // com.rohittp.reng/Backdrop|null[0]
+    constructor <init>(com.rohittp.reng/ResourceLocator, kotlin/Double = ...) // com.rohittp.reng/Backdrop.<init>|<init>(com.rohittp.reng.ResourceLocator;kotlin.Double){}[0]
+
+    final val image // com.rohittp.reng/Backdrop.image|{}image[0]
+        final fun <get-image>(): com.rohittp.reng/ResourceLocator // com.rohittp.reng/Backdrop.image.<get-image>|<get-image>(){}[0]
+    final val tileSizeLogicalPixels // com.rohittp.reng/Backdrop.tileSizeLogicalPixels|{}tileSizeLogicalPixels[0]
+        final fun <get-tileSizeLogicalPixels>(): kotlin/Double // com.rohittp.reng/Backdrop.tileSizeLogicalPixels.<get-tileSizeLogicalPixels>|<get-tileSizeLogicalPixels>(){}[0]
+
+    final fun component1(): com.rohittp.reng/ResourceLocator // com.rohittp.reng/Backdrop.component1|component1(){}[0]
+    final fun component2(): kotlin/Double // com.rohittp.reng/Backdrop.component2|component2(){}[0]
+    final fun copy(com.rohittp.reng/ResourceLocator = ..., kotlin/Double = ...): com.rohittp.reng/Backdrop // com.rohittp.reng/Backdrop.copy|copy(com.rohittp.reng.ResourceLocator;kotlin.Double){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Backdrop.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // com.rohittp.reng/Backdrop.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // com.rohittp.reng/Backdrop.toString|toString(){}[0]
+
+    final object Companion { // com.rohittp.reng/Backdrop.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Backdrop> // com.rohittp.reng/Backdrop.Companion.serializer|serializer(){}[0]
+    }
+}
+
 final class com.rohittp.reng/Camera { // com.rohittp.reng/Camera|null[0]
     constructor <init>(kotlin/Double, kotlin/Double, kotlin/Double, kotlin/Double, kotlin/Double) // com.rohittp.reng/Camera.<init>|<init>(kotlin.Double;kotlin.Double;kotlin.Double;kotlin.Double;kotlin.Double){}[0]
 
@@ -573,8 +594,10 @@ final class com.rohittp.reng/Diagnostic { // com.rohittp.reng/Diagnostic|null[0]
 }
 
 final class com.rohittp.reng/FramePlan { // com.rohittp.reng/FramePlan|null[0]
-    constructor <init>(kotlin/Long, com.rohittp.reng/Camera, com.rohittp.reng/ProjectionMode = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin.collections/List<com.rohittp.reng/Sticker> = ..., kotlin.collections/List<com.rohittp.reng/Model> = ..., kotlin.collections/List<com.rohittp.reng/Geometry> = ...) // com.rohittp.reng/FramePlan.<init>|<init>(kotlin.Long;com.rohittp.reng.Camera;com.rohittp.reng.ProjectionMode;kotlin.Boolean;kotlin.Boolean;kotlin.collections.List<com.rohittp.reng.Sticker>;kotlin.collections.List<com.rohittp.reng.Model>;kotlin.collections.List<com.rohittp.reng.Geometry>){}[0]
+    constructor <init>(kotlin/Long, com.rohittp.reng/Camera, com.rohittp.reng/ProjectionMode = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin.collections/List<com.rohittp.reng/Sticker> = ..., kotlin.collections/List<com.rohittp.reng/Model> = ..., kotlin.collections/List<com.rohittp.reng/Geometry> = ..., com.rohittp.reng/Backdrop? = ...) // com.rohittp.reng/FramePlan.<init>|<init>(kotlin.Long;com.rohittp.reng.Camera;com.rohittp.reng.ProjectionMode;kotlin.Boolean;kotlin.Boolean;kotlin.collections.List<com.rohittp.reng.Sticker>;kotlin.collections.List<com.rohittp.reng.Model>;kotlin.collections.List<com.rohittp.reng.Geometry>;com.rohittp.reng.Backdrop?){}[0]
 
+    final val backdrop // com.rohittp.reng/FramePlan.backdrop|{}backdrop[0]
+        final fun <get-backdrop>(): com.rohittp.reng/Backdrop? // com.rohittp.reng/FramePlan.backdrop.<get-backdrop>|<get-backdrop>(){}[0]
     final val camera // com.rohittp.reng/FramePlan.camera|{}camera[0]
         final fun <get-camera>(): com.rohittp.reng/Camera // com.rohittp.reng/FramePlan.camera.<get-camera>|<get-camera>(){}[0]
     final val drawBasemap // com.rohittp.reng/FramePlan.drawBasemap|{}drawBasemap[0]

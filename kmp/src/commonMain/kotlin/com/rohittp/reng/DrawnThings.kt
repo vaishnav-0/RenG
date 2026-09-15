@@ -8,6 +8,35 @@ import com.rohittp.reng.internal.gl.RESERVED_SHADER_NAMES
 import com.rohittp.reng.internal.requireFiniteFloat
 import com.rohittp.reng.internal.requireUnicodeScalars
 
+/**
+ * One repeating image a frame paints behind everything else it draws (ADR 0068).
+ *
+ * **It needs no horizon.** The backdrop is drawn first and full frame, so wherever the ground draws
+ * it covers the backdrop, and wherever the ground does not -- above the horizon of a steeply pitched
+ * camera, or anywhere at all in a frame drawn with `drawBasemap = false` -- the backdrop is what
+ * remains. Nothing here computes where that boundary is, because nothing has to.
+ *
+ * **It is not a sky.** There is no gradient and no atmosphere; it does not rotate with bearing and
+ * does not change with pitch, and the ground meets it at a hard line with no fade.
+ *
+ * [tileSizeLogicalPixels] is how far the pattern repeats on screen, in logical pixels, rather than a
+ * multiple of [image]'s own dimensions: choosing a pattern should not require knowing how many
+ * pixels it happens to be encoded at.
+ */
+@kotlinx.serialization.Serializable(with = BackdropSerializer::class)
+public data class Backdrop(
+    public val image: ResourceLocator,
+    public val tileSizeLogicalPixels: Double = DEFAULT_BACKDROP_TILE_SIZE_LOGICAL_PIXELS,
+) {
+    init {
+        val validated = canonicalDouble(tileSizeLogicalPixels, "tileSizeLogicalPixels")
+        require(validated > 0.0) { "tileSizeLogicalPixels must be positive" }
+    }
+}
+
+/** A 256 logical pixel repeat, which is one canonical tile side and a sane default for a pattern. */
+private const val DEFAULT_BACKDROP_TILE_SIZE_LOGICAL_PIXELS: Double = 256.0
+
 @kotlinx.serialization.Serializable(with = StickerSerializer::class)
 public data class Sticker(
     public val placement: Placement,

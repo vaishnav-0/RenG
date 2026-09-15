@@ -20,6 +20,20 @@ public class FramePlan(
     stickers: List<Sticker> = emptyList(),
     models: List<Model> = emptyList(),
     geometries: List<Geometry> = emptyList(),
+    /**
+     * What this frame paints behind everything else it draws, or `null` for none (ADR 0068).
+     *
+     * **`null` is not a degraded backdrop, it is the absence of the pass**, and it is what every
+     * frame written before this field existed means. The surface keeps being cleared to transparent
+     * black, so a consumer compositing RenG's output over its own background does not start
+     * receiving opaque pixels because it upgraded.
+     *
+     * **Declared last, and that is an ABI decision** -- the same one `ResourceLimits` records for its
+     * own trailing fields. Every parameter before it is positional in shipped consumer code, so
+     * appending leaves all of it compiling where inserting would silently re-bind every positional
+     * construction.
+     */
+    backdrop: Backdrop? = null,
 ) {
     public val frameIndex: Long
     public val camera: Camera
@@ -44,6 +58,7 @@ public class FramePlan(
         get() = freshListCopy(modelSnapshot)
     public val geometries: List<Geometry>
         get() = freshListCopy(geometrySnapshot)
+    public val backdrop: Backdrop?
 
     init {
         require(frameIndex >= 0L) { "frameIndex must be non-negative" }
@@ -61,6 +76,7 @@ public class FramePlan(
         this.stickerSnapshot = stickerCopy
         this.modelSnapshot = modelCopy
         this.geometrySnapshot = geometryCopy
+        this.backdrop = backdrop
     }
 
     override fun equals(other: Any?): Boolean =
@@ -72,7 +88,8 @@ public class FramePlan(
             drawLabels == other.drawLabels &&
             stickerSnapshot == other.stickerSnapshot &&
             modelSnapshot == other.modelSnapshot &&
-            geometrySnapshot == other.geometrySnapshot
+            geometrySnapshot == other.geometrySnapshot &&
+            backdrop == other.backdrop
 
     override fun hashCode(): Int {
         var result = frameIndex.hashCode()
@@ -83,6 +100,7 @@ public class FramePlan(
         result = 31 * result + stickerSnapshot.hashCode()
         result = 31 * result + modelSnapshot.hashCode()
         result = 31 * result + geometrySnapshot.hashCode()
+        result = 31 * result + backdrop.hashCode()
         return result
     }
 }
@@ -92,3 +110,5 @@ internal fun FramePlan.stickersForCore(): List<Sticker> = stickers
 internal fun FramePlan.modelsForCore(): List<Model> = models
 
 internal fun FramePlan.geometriesForCore(): List<Geometry> = geometries
+
+internal fun FramePlan.backdropForCore(): Backdrop? = backdrop

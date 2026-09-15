@@ -61,6 +61,19 @@ public enum class ResourceClass {
      * silently renumber.
      */
     BASEMAP_GLYPH_RANGE,
+
+    /**
+     * One repeating image a frame paints behind everything it draws (ADR 0068). Appended after
+     * [BASEMAP_GLYPH_RANGE] for the reason that constant's own note gives -- no existing ordinal,
+     * wire value or report-order entry moves, and both of the latter are explicit tables a
+     * reordering would silently renumber.
+     *
+     * It carries a sticker image's byte ceiling, accept value and `DECODE_PNG` gate, because it is
+     * the same kind of bytes. What it deliberately does not share is `STICKER_IMAGE`'s *list*:
+     * `RenGRenderer` pairs that class's references with `FramePlan.stickers` by index, and a
+     * backdrop among them is an off-by-one in every sticker's texture.
+     */
+    BACKDROP_IMAGE,
 }
 
 public enum class ResourceKind {

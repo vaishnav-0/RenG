@@ -150,6 +150,32 @@ internal object PlacementSerializer : KSerializer<Placement> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Backdrop
+// ---------------------------------------------------------------------------------------------
+
+@Serializable
+@SerialName("Backdrop")
+private class BackdropSurrogate(
+    @SerialName("image") val image: ResourceLocator,
+    @SerialName("tileSizeLogicalPixels") val tileSizeLogicalPixels: Double,
+)
+
+internal object BackdropSerializer : KSerializer<Backdrop> {
+    private val delegate = BackdropSurrogate.serializer()
+    override val descriptor: SerialDescriptor = delegate.descriptor
+    override fun serialize(encoder: Encoder, value: Backdrop) {
+        encoder.encodeSerializableValue(
+            delegate,
+            BackdropSurrogate(value.image, value.tileSizeLogicalPixels),
+        )
+    }
+    override fun deserialize(decoder: Decoder): Backdrop {
+        val it = decoder.decodeSerializableValue(delegate)
+        return Backdrop(it.image, it.tileSizeLogicalPixels)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Sticker
 // ---------------------------------------------------------------------------------------------
 
@@ -448,6 +474,7 @@ private class FramePlanSurrogate(
     @SerialName("stickers") val stickers: List<Sticker> = emptyList(),
     @SerialName("models") val models: List<Model> = emptyList(),
     @SerialName("geometries") val geometries: List<Geometry> = emptyList(),
+    @SerialName("backdrop") val backdrop: Backdrop? = null,
 )
 
 internal object FramePlanSerializer : KSerializer<FramePlan> {
@@ -458,7 +485,7 @@ internal object FramePlanSerializer : KSerializer<FramePlan> {
             delegate,
             FramePlanSurrogate(
                 value.frameIndex, value.camera, value.projectionMode, value.drawBasemap,
-                value.drawLabels, value.stickers, value.models, value.geometries,
+                value.drawLabels, value.stickers, value.models, value.geometries, value.backdrop,
             ),
         )
     }
@@ -466,7 +493,7 @@ internal object FramePlanSerializer : KSerializer<FramePlan> {
         val it = decoder.decodeSerializableValue(delegate)
         return FramePlan(
             it.frameIndex, it.camera, it.projectionMode, it.drawBasemap, it.drawLabels,
-            it.stickers, it.models, it.geometries,
+            it.stickers, it.models, it.geometries, it.backdrop,
         )
     }
 }

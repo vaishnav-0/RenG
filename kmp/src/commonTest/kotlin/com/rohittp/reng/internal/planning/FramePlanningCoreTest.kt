@@ -876,6 +876,7 @@ class FramePlanningCoreTest {
         val staticDirect = setOf(
             ResourceClass.BASEMAP_STYLE,
             ResourceClass.STICKER_IMAGE,
+            ResourceClass.BACKDROP_IMAGE,
             ResourceClass.MODEL_GLB,
             ResourceClass.MODEL_TEXTURE,
         )

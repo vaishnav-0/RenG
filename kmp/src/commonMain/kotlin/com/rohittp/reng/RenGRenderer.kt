@@ -67,6 +67,10 @@ import com.rohittp.reng.internal.gl.SceneModel
 import com.rohittp.reng.internal.gl.SceneSticker
 import com.rohittp.reng.internal.gl.SceneTerrain
 import com.rohittp.reng.internal.gl.SceneTileDem
+import com.rohittp.reng.internal.gl.BACKDROP_SAMPLER_STATE
+import com.rohittp.reng.internal.gl.BackdropPipeline
+import com.rohittp.reng.internal.gl.BackdropPipelineResult
+import com.rohittp.reng.internal.gl.resolvedBackdropFor
 import com.rohittp.reng.internal.gl.StickerPipeline
 import com.rohittp.reng.internal.gl.StickerPipelineResult
 import com.rohittp.reng.internal.gl.TextureContent
@@ -82,6 +86,7 @@ import com.rohittp.reng.internal.gl.createIconPipeline
 import com.rohittp.reng.internal.gl.createLabelPipeline
 import com.rohittp.reng.internal.gl.createModelPipeline
 import com.rohittp.reng.internal.gl.createOffscreenSurface
+import com.rohittp.reng.internal.gl.createBackdropPipeline
 import com.rohittp.reng.internal.gl.createStickerPipeline
 import com.rohittp.reng.internal.gl.defaultSamplerStateFor
 import com.rohittp.reng.internal.gl.deleteCompositePipeline
@@ -93,6 +98,7 @@ import com.rohittp.reng.internal.gl.deleteIconPipeline
 import com.rohittp.reng.internal.gl.deleteLabelPipeline
 import com.rohittp.reng.internal.gl.deleteModelPipeline
 import com.rohittp.reng.internal.gl.deleteOffscreenSurface
+import com.rohittp.reng.internal.gl.deleteBackdropPipeline
 import com.rohittp.reng.internal.gl.deleteStickerPipeline
 import com.rohittp.reng.internal.gl.demDecodeCoefficients
 import com.rohittp.reng.internal.gl.drawFrame
@@ -181,6 +187,20 @@ internal class PreparedSticker(
     internal val placement: Placement,
     internal val resourceKey: ResourceKey,
     internal val image: DecodedImage,
+)
+
+/**
+ * One frame's backdrop, fetched and decoded at `prepare()` time on the same terms a sticker's image
+ * is, and carrying the repeat its plan asked for (ADR 0068).
+ *
+ * It keeps the [ResourceKey] for the same reason [PreparedSticker] does: `performDraw`'s texture
+ * cache is keyed on it, so an unchanged backdrop is uploaded once rather than every frame. Its
+ * sampler is not a sticker's, though -- see `BACKDROP_SAMPLER_STATE`.
+ */
+internal class PreparedBackdrop(
+    internal val resourceKey: ResourceKey,
+    internal val image: DecodedImage,
+    internal val tileSizeLogicalPixels: Double,
 )
 
 /**
@@ -522,6 +542,8 @@ internal class RenGPreparedFrame(
      * be it -- the centre band always carries offset zero.
      */
     internal val groundSelectedLod: Int? = null,
+    /** What this frame paints behind everything else, or `null` for none (ADR 0068). */
+    internal val backdrop: PreparedBackdrop? = null,
     /**
      * This frame's terrain, or `null` when its style declared none, when RenG and the engine did not
      * name the same source, or when the acquisition failed — the last two being ADR 0041's two
@@ -734,6 +756,7 @@ internal class InternalGlState(
     val offscreenSurface: OffscreenSurface,
     val compositePipeline: CompositePipeline,
     val stickerPipeline: StickerPipeline,
+    val backdropPipeline: BackdropPipeline,
     val groundPipeline: GroundPipeline,
     val labelPipeline: LabelPipeline,
     val iconPipeline: IconPipeline,
@@ -770,6 +793,7 @@ internal fun createInternalGlState(
     val surfaceResult = createOffscreenSurface(binding, profile, surfaceKey, surfaceDescriptor)
     val compositeResult = createCompositePipeline(binding, profile.dialect, programs, deriver)
     val stickerResult = createStickerPipeline(binding, profile.dialect, programs, deriver)
+    val backdropResult = createBackdropPipeline(binding, profile.dialect, programs, deriver)
     val groundResult = createGroundPipeline(
         binding,
         profile.dialect,
@@ -783,21 +807,23 @@ internal fun createInternalGlState(
     val surface = (surfaceResult as? OffscreenSurfaceResult.Created)?.surface
     val composite = (compositeResult as? CompositePipelineResult.Created)?.pipeline
     val sticker = (stickerResult as? StickerPipelineResult.Created)?.pipeline
+    val backdrop = (backdropResult as? BackdropPipelineResult.Created)?.pipeline
     val ground = (groundResult as? GroundPipelineResult.Created)?.pipeline
     val label = (labelResult as? LabelPipelineResult.Created)?.pipeline
     val icon = (iconResult as? IconPipelineResult.Created)?.pipeline
 
-    if (surface != null && composite != null && sticker != null && ground != null &&
-        label != null && icon != null
+    if (surface != null && composite != null && sticker != null && backdrop != null &&
+        ground != null && label != null && icon != null
     ) {
         return InternalGlStateResult.Created(
-            InternalGlState(surface, composite, sticker, ground, label, icon),
+            InternalGlState(surface, composite, sticker, backdrop, ground, label, icon),
         )
     }
 
     surface?.let { deleteOffscreenSurface(binding, it) }
     composite?.let { deleteCompositePipeline(binding, programs, it) }
     sticker?.let { deleteStickerPipeline(binding, programs, it) }
+    backdrop?.let { deleteBackdropPipeline(binding, programs, it) }
     ground?.let { deleteGroundPipeline(binding, programs, it) }
     label?.let { deleteLabelPipeline(binding, programs, it) }
     icon?.let { deleteIconPipeline(binding, programs, it) }
@@ -805,6 +831,7 @@ internal fun createInternalGlState(
     val failure = (surfaceResult as? OffscreenSurfaceResult.Failed)?.failure
         ?: (compositeResult as? CompositePipelineResult.Failed)?.failure
         ?: (stickerResult as? StickerPipelineResult.Failed)?.failure
+        ?: (backdropResult as? BackdropPipelineResult.Failed)?.failure
         ?: (groundResult as? GroundPipelineResult.Failed)?.failure
         ?: (labelResult as? LabelPipelineResult.Failed)?.failure
         ?: (iconResult as? IconPipelineResult.Failed)?.failure
@@ -918,6 +945,7 @@ internal class RenGRenderer(
     private var offscreenSurface: OffscreenSurface? = initialGlState.offscreenSurface
     private var compositePipeline: CompositePipeline? = initialGlState.compositePipeline
     private var stickerPipeline: StickerPipeline? = initialGlState.stickerPipeline
+    private var backdropPipeline: BackdropPipeline? = initialGlState.backdropPipeline
     private var groundPipeline: GroundPipeline? = initialGlState.groundPipeline
 
     /**
@@ -1196,7 +1224,17 @@ internal class RenGRenderer(
                 .filterIsInstance<StaticResourceReference.External>()
                 .singleOrNull { it.resourceClass == ResourceClass.BASEMAP_STYLE }
 
+            // ADR 0068. At most one, and its own class, so it cannot be confused with the sticker
+            // images that are paired back up by position above.
+            val backdropReference = planned.staticResourceTraversal
+                .filterIsInstance<StaticResourceReference.External>()
+                .singleOrNull { it.resourceClass == ResourceClass.BACKDROP_IMAGE }
+            check((backdropReference == null) == (plan.backdrop == null)) {
+                "a backdrop traverses exactly when the plan carries one"
+            }
+
             val imageReferences = stickerImageReferences +
+                listOfNotNull(backdropReference) +
                 modelTextureReferences.filterNotNull() +
                 geometryTextureReferencesByGeometry.flatten().map { it.second }
             // Post-world-copy-dedup by construction: `canonicalResources` is what BasemapTileSelector
@@ -1265,6 +1303,17 @@ internal class RenGRenderer(
                 terrain = terrain,
                 groundSelectedLod = planned.spatialPlan.lodObservation.selectedLod,
             )
+
+            val preparedBackdrop = plan.backdrop?.let { backdrop ->
+                val reference = requireNotNull(backdropReference)
+                PreparedBackdrop(
+                    resourceKey = reference.resourceKey,
+                    image = requireNotNull(decodedByKey[reference.resourceKey]) {
+                        "a successful acquisition must decode a traversed backdrop image"
+                    },
+                    tileSizeLogicalPixels = backdrop.tileSizeLogicalPixels,
+                )
+            }
 
             val stickers = plan.stickers.zip(stickerImageReferences) { sticker, reference ->
                 PreparedSticker(
@@ -1407,6 +1456,7 @@ internal class RenGRenderer(
                 basemapTiles = acquired.basemapTiles,
                 groundInstances = groundInstances,
                 groundSelectedLod = planned.spatialPlan.lodObservation.selectedLod,
+                backdrop = preparedBackdrop,
                 terrain = terrain,
                 groundSurface = groundSurface,
                 labels = labels,
@@ -2463,6 +2513,7 @@ internal class RenGRenderer(
         offscreenSurface = null
         compositePipeline = null
         stickerPipeline = null
+        backdropPipeline = null
         groundPipeline = null
         labelPipeline = null
         iconPipeline = null
@@ -2495,6 +2546,7 @@ internal class RenGRenderer(
                         offscreenSurface = recreated.state.offscreenSurface
                         compositePipeline = recreated.state.compositePipeline
                         stickerPipeline = recreated.state.stickerPipeline
+                        backdropPipeline = recreated.state.backdropPipeline
                         groundPipeline = recreated.state.groundPipeline
                         labelPipeline = recreated.state.labelPipeline
                         iconPipeline = recreated.state.iconPipeline
@@ -2561,6 +2613,7 @@ internal class RenGRenderer(
         val surface = requireNotNull(offscreenSurface) { "drawing requires an offscreen surface" }
         val composite = requireNotNull(compositePipeline) { "drawing requires the composite pipeline" }
         val sticker = requireNotNull(stickerPipeline) { "drawing requires the sticker pipeline" }
+        val backdrop = requireNotNull(backdropPipeline) { "drawing requires the backdrop pipeline" }
         val ground = requireNotNull(groundPipeline) { "drawing requires the ground pipeline" }
         val label = requireNotNull(labelPipeline) { "drawing requires the label pipeline" }
         val icon = requireNotNull(iconPipeline) { "drawing requires the icon pipeline" }
@@ -2596,6 +2649,7 @@ internal class RenGRenderer(
                         )
                     }
                     drawResolvedFrame(
+                        backdropPipeline = backdrop,
                         frame = frame,
                         framebufferName = framebufferName,
                         profile = profile,
@@ -2675,6 +2729,7 @@ internal class RenGRenderer(
         ground: GroundPipeline,
         label: LabelPipeline,
         icon: IconPipeline,
+        backdropPipeline: BackdropPipeline,
         resolvedCamera: ResolvedFrameCamera,
         sceneGroundTiles: List<SceneGroundTile>,
         textureLeases: MutableList<TextureLease>,
@@ -2764,6 +2819,20 @@ internal class RenGRenderer(
             null
         }
 
+        // ADR 0068. Uploaded through the same texture cache every other consumer image uses, so an
+        // unchanged backdrop costs one upload for the life of the renderer, but with its own
+        // wrapping sampler -- it is the only texture RenG repeats.
+        val resolvedBackdrop = frame.backdrop?.let { prepared ->
+            val texture = cachedTexture(prepared.resourceKey) {
+                uploadTexture(binding, prepared.image, TextureContent.IMAGE, BACKDROP_SAMPLER_STATE)
+            }
+            resolvedBackdropFor(
+                texture = texture,
+                outputPixelSize = resolvedCamera.outputPixelSize,
+                tileSizeLogicalPixels = prepared.tileSizeLogicalPixels,
+            )
+        }
+
         val content = SceneContent(
             camera = resolvedCamera,
             scene = scene,
@@ -2773,6 +2842,8 @@ internal class RenGRenderer(
             labelPipeline = label,
             iconPipeline = icon,
             globeGroundPipeline = globeGround,
+            backdropPipeline = backdropPipeline,
+            backdrop = resolvedBackdrop,
         )
 
         return drawFrame(
@@ -2795,9 +2866,10 @@ internal class RenGRenderer(
      * reconciles it with the globe's curvature claim, because a frame draws its whole ground at one
      * granularity or a sliver of background shows between two tiles that disagree.
      *
-     * The LOD is read off the first ground instance rather than from the plan: both tile selectors
-     * emit one LOD per frame, which is the premise the whole one-granularity rule rests on, and a
-     * frame with no ground instances returns `null` above before reaching here.
+     * The LOD is the frame's own rather than any tile's (ADR 0066). It used to be read off the first
+     * ground instance, on the premise that both tile selectors emit one LOD per frame; ADR 0065 ended
+     * that for Mercator, and `first()` became the coarsest band at the top of the frame. A frame with
+     * no ground instances still returns `null` above before reaching here.
      */
     private fun sceneTerrain(frame: RenGPreparedFrame): SceneTerrain? {
         val terrain = frame.terrain ?: return null
@@ -3269,6 +3341,7 @@ internal class RenGRenderer(
                 offscreenSurface?.let { deleteOffscreenSurface(binding, it) }
                 compositePipeline?.let { deleteCompositePipeline(binding, programs, it) }
                 stickerPipeline?.let { deleteStickerPipeline(binding, programs, it) }
+                backdropPipeline?.let { deleteBackdropPipeline(binding, programs, it) }
                 groundPipeline?.let { deleteGroundPipeline(binding, programs, it) }
                 // Deleted here on `geometryPipelines`' terms rather than the registry's: the pipeline
                 // owns its program and every cached grid's vertex array and buffers directly, none of
@@ -3297,6 +3370,7 @@ internal class RenGRenderer(
                 offscreenSurface = null
                 compositePipeline = null
                 stickerPipeline = null
+                backdropPipeline = null
                 groundPipeline = null
                 labelPipeline = null
                 iconPipeline = null

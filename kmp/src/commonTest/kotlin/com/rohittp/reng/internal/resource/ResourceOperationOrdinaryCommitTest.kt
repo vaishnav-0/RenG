@@ -1000,6 +1000,7 @@ private val UNGATED_CLASSES: Set<ResourceClass> = setOf(
 
 private val ORDINARY_CLASS_GATES: Map<ResourceClass, List<ResourceClassGate>> = mapOf(
     ResourceClass.STICKER_IMAGE to listOf(ResourceClassGate.DECODE_PNG),
+    ResourceClass.BACKDROP_IMAGE to listOf(ResourceClassGate.DECODE_PNG),
     ResourceClass.MODEL_GLB to listOf(
         ResourceClassGate.PARSE_GLB,
         ResourceClassGate.VALIDATE_GLB_FEATURES,

@@ -58,6 +58,7 @@ class ResourcesTest {
                 ResourceClass.MODEL_GLB,
                 ResourceClass.MODEL_TEXTURE,
                 ResourceClass.BASEMAP_GLYPH_RANGE,
+                ResourceClass.BACKDROP_IMAGE,
             ),
             ResourceClass.entries,
         )
@@ -162,6 +163,9 @@ class ResourcesTest {
             // GLYPH_RANGE_ROUTE_CEILING_BYTES, sized above the engine's own 1 MiB maxGlyphRangeBytes so
             // that Rentile's refusal is the operative one. A twelfth public limit was declined.
             ResourceClass.BASEMAP_GLYPH_RANGE to Pair(4L * mib, "application/x-protobuf"),
+            // ADR 0068. A sticker image's ceiling and accept value, because it is the same kind of
+            // bytes; what it does not share is that class's positionally-paired traversal list.
+            ResourceClass.BACKDROP_IMAGE to Pair(32L * mib, "image/png"),
         )
 
         assertEquals(

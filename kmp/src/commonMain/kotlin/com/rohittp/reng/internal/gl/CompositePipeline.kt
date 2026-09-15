@@ -36,6 +36,9 @@ internal enum class InternalPipelineRole(internal val wireValue: Int) {
 
     /** The globe ground's displacing program, on [TERRAIN_GROUND]'s reasoning exactly. */
     TERRAIN_GLOBE_GROUND(9),
+
+    /** ADR 0068. Appended, so no existing role's wire value moves. */
+    BACKDROP(10),
 }
 
 /**
