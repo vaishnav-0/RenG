@@ -7,8 +7,11 @@ import com.rohittp.reng.RenGErrorCode
 import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.math.DoubleVector3
 import com.rohittp.reng.internal.planning.SpatialOutcome
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan
 import kotlin.math.sqrt
+import kotlin.math.tan
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -259,6 +262,110 @@ class CameraMatricesTest {
         assertSpatialFailure(invalidCopy, "camera.unwrappedLongitude")
     }
 
+    /**
+     * ADR 0064. Between the last row the horizon rejects and the first row that carries usable
+     * ground there is now a band the angle bound rejects instead, and the row indices here are the
+     * whole claim: without the bound row 287 is an ordinary `Hit` whose ground point is further
+     * from the anchor than the Mercator support box, which is how a steep frame used to reach tile
+     * selection as thousands of world copies.
+     */
+    @Test
+    fun aRayNearerTheHorizonThanTheMaximumGroundAngleIsRejectedRatherThanReturningAnEnormousHit() {
+        val pitched = resolve(
+            camera = camera(pitch = 80.0),
+            outputPixelSize = OutputPixelSize(width = 1, height = 1000),
+        )
+
+        assertEquals(GroundRayResult.HorizonOrSky, physicalPixelGroundRay(pitched, 0, 286))
+        assertEquals(GroundRayResult.BeyondHorizonAngle, physicalPixelGroundRay(pitched, 0, 287))
+        assertEquals(GroundRayResult.BeyondHorizonAngle, physicalPixelGroundRay(pitched, 0, 302))
+
+        val firstAdmissible = assertIs<GroundRayResult.Hit>(physicalPixelGroundRay(pitched, 0, 303))
+        assertEquals(15718.536094, firstAdmissible.t, absoluteTolerance = 1e-6)
+
+        // And the bound is generous where it matters: the deepest ray it still admits reaches almost
+        // 75 times the camera's own height above the ground. The far plane this ADR declines to adopt
+        // cut at 1.5 of those, which is the difference between losing 1.6% of the frame and half of it.
+        val cameraHeight = pitched.cameraDistanceLogicalPixels * pitched.cameraBack.z
+        assertTrue(firstAdmissible.t > 70.0 * cameraHeight)
+    }
+
+    /**
+     * ADR 0064 states the angle comparison is closed, and a synthetic basis is the only way to
+     * observe that: a real pixel centre never lands exactly on the bound, because `eta` is
+     * `1 - 2 * (row + 0.5) / height` and so is strictly inside `(-1, 1)`. This camera puts the single
+     * pixel's `v` at zero and makes `sinePitch` exactly the tangent the bound compares against, so
+     * both sides of the inequality are the same `Double` and only its sense decides the answer --
+     * the same construction, and the same purpose, as
+     * [exactHorizonQZeroAndNearBoundaryTOneUseClosedClassifications].
+     */
+    @Test
+    fun aRayExactlyAtTheMaximumGroundAngleIsAdmittedBecauseTheBoundIsClosed() {
+        val exactlyAtTheBound = syntheticCamera(
+            outputPixelSize = OutputPixelSize(width = 1, height = 1),
+            cameraUp = DoubleVector3(0.0, 0.0, tan(MAXIMUM_GROUND_ANGLE_DEGREES.degreesToRadians())),
+            cameraBack = DoubleVector3(0.0, 0.0, 1.0),
+            cameraDistanceLogicalPixels = 1.0,
+        )
+
+        val hit = assertIs<GroundRayResult.Hit>(physicalPixelGroundRay(exactlyAtTheBound, 0, 0))
+        assertEquals(1.0, hit.q)
+        assertEquals(1.0, hit.t)
+    }
+
+    /**
+     * ADR 0064. The bound bites at `MAXIMUM_GROUND_ANGLE_DEGREES` less the 22.5 degree vertical half
+     * field of view, because `theta = pitch + atan(v)` exactly and the top row's `v` is `1 /
+     * FOCAL_LENGTH_SCALE`. That identity is what keeps the bound invisible below the ceiling
+     * `Camera.MAXIMUM_GROUND_FILLING_PITCH_DEGREES` publishes rather than merely small.
+     */
+    @Test
+    fun theGroundAngleBoundFirstBitesAtTheMaximumAngleLessTheHalfFieldOfView() {
+        val firstBite = MAXIMUM_GROUND_ANGLE_DEGREES - HALF_VERTICAL_FIELD_OF_VIEW_DEGREES
+        assertEquals(66.75, firstBite, absoluteTolerance = 1e-12)
+
+        assertEquals(0, rowsBeyondTheGroundAngle(pitch = firstBite))
+        assertTrue(rowsBeyondTheGroundAngle(pitch = firstBite + 0.1) > 0)
+    }
+
+    /**
+     * `MercatorGroundFootprint.groundHit` hard-casts a corner ray to `Hit` on the strength of column
+     * zero having been one, so every rejection on this path must depend on the row alone. The angle
+     * bound is a function of `v`, which is a function of the row, and this is that invariant stated
+     * where a future bound written against `u` would break it.
+     */
+    @Test
+    fun theGroundAngleBoundDependsOnTheRowAloneSoEveryColumnInARowAgrees() {
+        val wide = resolve(
+            camera = camera(pitch = 67.4, bearing = 37.0),
+            outputPixelSize = OutputPixelSize(width = 64, height = 400),
+        )
+
+        var sawRejection = false
+        for (pixelY in 0 until wide.outputPixelSize.height) {
+            val reference = physicalPixelGroundRay(wide, 0, pixelY)
+            if (reference is GroundRayResult.BeyondHorizonAngle) sawRejection = true
+            for (pixelX in 1 until wide.outputPixelSize.width) {
+                val other = physicalPixelGroundRay(wide, pixelX, pixelY)
+                assertEquals(
+                    reference is GroundRayResult.BeyondHorizonAngle,
+                    other is GroundRayResult.BeyondHorizonAngle,
+                )
+            }
+        }
+        assertTrue(sawRejection)
+    }
+
+    private fun rowsBeyondTheGroundAngle(pitch: Double): Int {
+        val resolved = resolve(
+            camera = camera(pitch = pitch),
+            outputPixelSize = OutputPixelSize(width = 1, height = 1920),
+        )
+        return (0 until 1920).count {
+            physicalPixelGroundRay(resolved, 0, it) is GroundRayResult.BeyondHorizonAngle
+        }
+    }
+
     private fun resolve(
         camera: Camera,
         outputPixelSize: OutputPixelSize = OutputPixelSize(width = 1, height = 1),
@@ -274,6 +381,10 @@ class CameraMatricesTest {
         bearing: Double = 0.0,
         pitch: Double = 0.0,
     ): Camera = Camera(latitude, unwrappedLongitude, zoom, bearing, pitch)
+
+    /** The 22.5 degrees `FOCAL_LENGTH_SCALE` encodes, derived here rather than written as a literal. */
+    private val HALF_VERTICAL_FIELD_OF_VIEW_DEGREES: Double =
+        atan(1.0 / FOCAL_LENGTH_SCALE) * 180.0 / PI
 
     private fun syntheticCamera(
         outputPixelSize: OutputPixelSize,
