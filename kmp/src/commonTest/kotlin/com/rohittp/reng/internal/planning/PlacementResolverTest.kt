@@ -16,7 +16,6 @@ import com.rohittp.reng.internal.projection.ResolvedMercatorCamera
 import com.rohittp.reng.internal.projection.WORLD_CIRCUMFERENCE_METRES
 import com.rohittp.reng.internal.projection.projectMercator
 import com.rohittp.reng.internal.projection.resolveMercatorCamera
-import com.rohittp.reng.internal.projection.wgs84LocalFrame
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -24,6 +23,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -82,13 +82,9 @@ class PlacementResolverTest {
 
                     val expectedDirection = when (rotationMode) {
                         AnchoringMode.SCREEN -> rotationMatrix
-                        AnchoringMode.MAP -> {
-                            val cameraBasis = wgs84LocalFrame(
-                                GeographicPosition(cameraLatitude, cameraLongitude, 0.0),
-                            ).basisEastNorthUp
-                            val anchorBasis = wgs84LocalFrame(geographicAnchor).basisEastNorthUp
-                            viewBasis * cameraBasis.transpose() * anchorBasis * rotationMatrix
-                        }
+                        // Flat transport (ADR 0063): the two ENU bases this used to carry are the
+                        // identity on a map whose meridians are parallel vertical lines.
+                        AnchoringMode.MAP -> viewBasis * rotationMatrix
                     }
                     assertMatrixClose(expectedDirection, resolved.directionTransform)
 
@@ -129,7 +125,7 @@ class PlacementResolverTest {
     }
 
     @Test
-    fun mapRotationUsesExactViewCameraAnchorAndLocalBasisOrder() {
+    fun mapRotationUsesExactViewAndLocalBasisOrder() {
         val cameraLatitude = 31.0
         val cameraLongitude = -70.0
         val camera = resolvedCamera(
@@ -152,11 +148,15 @@ class PlacementResolverTest {
             ),
             camera,
         )
+        // **Two terms, not four** (ADR 0063). This case previously pinned
+        // `viewBasis * cameraEnu^T * anchorEnu * localRotation`, which transports the rotation across
+        // the sphere -- right on a globe, and wrong on a map whose meridians are parallel vertical
+        // lines. The two ENU bases are gone because on a plane their product is the identity, and
+        // carrying them rotated a thing by an angle the projection had already flattened away.
+        //
+        // The order of what remains is still pinned exactly, because it still matters: the view basis
+        // is applied to the local rotation, not the other way round.
         val expected = cameraViewBasis(camera) *
-            wgs84LocalFrame(
-                GeographicPosition(cameraLatitude, cameraLongitude, 0.0),
-            ).basisEastNorthUp.transpose() *
-            wgs84LocalFrame(anchor).basisEastNorthUp *
             DoubleMatrix3.rotationXyzDegrees(rotation.x, rotation.y, rotation.z)
 
         assertMatrixBitsEqual(expected, resolved.directionTransform)
@@ -225,15 +225,12 @@ class PlacementResolverTest {
             ),
             camera,
         )
-        val exactGroundAnchor = GeographicPosition(
-            latitude = cameraLatitude,
-            unwrappedLongitude = cameraLongitude,
-            altitudeMetres = 0.0,
-        )
-        val exactBasis = wgs84LocalFrame(exactGroundAnchor).basisEastNorthUp
+        // This case places the thing at the camera's own anchor, so the two bases it used to carry
+        // were the same basis: `B^T * B`, the identity in exact arithmetic but NOT bit-exactly, which
+        // is why this assertion had to tolerate the rounding those two multiplications introduced.
+        // Flat transport (ADR 0063) removes them, so the expectation is now exactly what the resolver
+        // computes and the bit-equality below is a stronger claim than it was.
         val expectedDirection = cameraViewBasis(camera) *
-            exactBasis.transpose() *
-            exactBasis *
             DoubleMatrix3.rotationXyzDegrees(rotation.x, rotation.y, rotation.z)
         val expectedScale = scale * camera.worldSizeLogicalPixels /
             (WORLD_CIRCUMFERENCE_METRES * cos(cameraLatitude * PI / 180.0))
@@ -286,6 +283,57 @@ class PlacementResolverTest {
         assertEquals(0.0, resolved.logicalPosition.z)
         assertEquals(maximumFloatAsDouble, resolved.logicalScale)
         assertEquals(Double.MAX_VALUE, resolved.screenCompositeZ)
+    }
+
+    /**
+     * ADR 0063. On a flat map north is straight up at every point, so a map-anchored rotation must
+     * resolve to the same orientation wherever the thing carrying it stands.
+     *
+     * The spherical transport this replaced failed exactly here: it rotated a thing by the angle
+     * between two ENU bases that Mercator has already flattened away, by an amount growing with
+     * distance from the camera's anchor — 34 degrees at 40 degrees of separation.
+     */
+    @Test
+    fun aMapAnchoredRotationDoesNotDependOnWhereOnTheMapItStands() {
+        val camera = resolvedCamera(latitude = 20.0, unwrappedLongitude = 0.0, zoom = 3.0)
+        val rotation = Vector3(0.0, 35.0, 0.0)
+
+        fun transformAt(longitude: Double) = resolve(
+            placement(
+                positionMode = AnchoringMode.MAP,
+                position = Vector3(20.0, longitude, 0.0),
+                rotationMode = AnchoringMode.MAP,
+                rotation = rotation,
+            ),
+            camera,
+        ).directionTransform
+
+        val atTheAnchor = transformAt(0.0)
+        // 40 degrees away is the bottom row of ADR 0063's table, where the old form drifted 34
+        // degrees and lost 37% of the drawn area.
+        assertEquals(atTheAnchor, transformAt(40.0))
+        assertEquals(atTheAnchor, transformAt(-40.0))
+        assertEquals(atTheAnchor, transformAt(10.0))
+    }
+
+    @Test
+    fun aMapAnchoredRotationStillFollowsTheCamera() {
+        // Position-independent is not the same as camera-independent: bearing and pitch must still
+        // reach it, or "flat" would have become "ignored".
+        val rotation = Vector3(0.0, 35.0, 0.0)
+        fun transformUnder(bearing: Double, pitch: Double) = resolve(
+            placement(
+                positionMode = AnchoringMode.MAP,
+                position = Vector3(20.0, 0.0, 0.0),
+                rotationMode = AnchoringMode.MAP,
+                rotation = rotation,
+            ),
+            resolvedCamera(latitude = 20.0, zoom = 3.0, bearing = bearing, pitch = pitch),
+        ).directionTransform
+
+        val level = transformUnder(bearing = 0.0, pitch = 0.0)
+        assertNotEquals(level, transformUnder(bearing = 30.0, pitch = 0.0))
+        assertNotEquals(level, transformUnder(bearing = 0.0, pitch = 30.0))
     }
 
     @Test
@@ -394,13 +442,14 @@ class PlacementResolverTest {
         positionMode: AnchoringMode = AnchoringMode.SCREEN,
         position: Vector3 = Vector3(0.0, 0.0, 0.0),
         rotationMode: AnchoringMode = AnchoringMode.SCREEN,
+        rotation: Vector3 = Vector3(0.0, 0.0, 0.0),
         scaleMode: AnchoringMode = AnchoringMode.SCREEN,
         scale: Double = 1.0,
     ): Placement = Placement(
         positionMode = positionMode,
         position = position,
         rotationMode = rotationMode,
-        rotation = Vector3(0.0, 0.0, 0.0),
+        rotation = rotation,
         scaleMode = scaleMode,
         scale = scale,
     )
