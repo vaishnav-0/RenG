@@ -4,11 +4,11 @@ package com.rohittp.reng.internal.gl
  * A [GlBinding] that saves a texture unit's prior bindings the first time a draw overwrites them,
  * and puts back exactly those (ADR 0055).
  *
- * This replaces walking a fixed fifteen units up front. The fixed walk cost 30 queries and 62 writes
- * on every frame regardless of content, while a measured frame touches two units; more importantly
- * it had a ceiling, and a pass binding a unit above that ceiling was unprotected in exactly the way
- * units 1..14 once were. Saving inside the call that does the overwriting has no ceiling to get
- * wrong: the unit is saved because it is being written, not because someone predicted it would be.
+ * This replaces walking a fixed fifteen units up front, which cost 30 queries and 62 writes every
+ * frame regardless of content where a measured frame touches two -- and, more importantly, had a
+ * ceiling, leaving a pass binding a unit above it unprotected exactly as units 1..14 once were.
+ * Saving inside the call that overwrites has no ceiling to get wrong: a unit is saved because it is
+ * being written, not because someone predicted it would be.
  *
  * Delegation is `by delegate` on purpose — the three methods that move a texture unit are overridden
  * and the other eighty-eight are forwarded by the compiler, so a method added to [GlBinding] later

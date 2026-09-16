@@ -24,14 +24,12 @@ public class FramePlan(
      * What this frame paints behind everything else it draws, or `null` for none (ADR 0068).
      *
      * **`null` is not a degraded backdrop, it is the absence of the pass**, and it is what every
-     * frame written before this field existed means. The surface keeps being cleared to transparent
+     * frame written before this field existed means: the surface keeps being cleared to transparent
      * black, so a consumer compositing RenG's output over its own background does not start
      * receiving opaque pixels because it upgraded.
      *
      * **Declared last, and that is an ABI decision** -- the same one `ResourceLimits` records for its
-     * own trailing fields. Every parameter before it is positional in shipped consumer code, so
-     * appending leaves all of it compiling where inserting would silently re-bind every positional
-     * construction.
+     * own trailing fields: every parameter before it is positional in shipped consumer code.
      */
     backdrop: Backdrop? = null,
 ) {

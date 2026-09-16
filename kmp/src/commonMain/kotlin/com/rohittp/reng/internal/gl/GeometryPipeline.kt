@@ -92,19 +92,14 @@ internal class GeometryPipeline(
     /**
      * Consumer uniform and sampler names resolved against [program], memoised on first use.
      *
-     * The six documented names above are resolved once at creation, because they are known then. A
-     * consumer's own names are not -- they arrive with each `Geometry` -- so [drawGeometry] asked the
-     * driver for every one of them on every draw. A geometry declaring forty-six uniforms is
-     * forty-six `glGetUniformLocation` calls per instance per frame, each a driver-side string
-     * lookup, for an answer that cannot change: a location is a property of the linked program, and
-     * this pipeline and that program are deleted together in [deleteGeometryPipeline], so the memo
-     * can never outlive what it describes.
+     * The six names above are known at creation and resolved there; a consumer's arrive with each
+     * `Geometry`, so [drawGeometry] used to ask the driver for every one on every draw -- forty-six
+     * `glGetUniformLocation` calls per instance per frame for a geometry declaring forty-six
+     * uniforms. A location is a property of the linked program, and the two are deleted together in
+     * [deleteGeometryPipeline], so the memo cannot outlive what it describes.
      *
-     * **A negative location is cached too, and deliberately.** `getUniformLocation` returns a
-     * negative for a name the program never declared, which is the documented "do not bind" signal
-     * at the top of this file. That answer is as permanent as a positive one, so re-asking for it
-     * every frame is the same waste with none of the benefit -- and a shader that legitimately
-     * declares fewer names than a material offers is ordinary rather than an error.
+     * A negative location is cached too: it is the documented "do not bind" signal at the top of
+     * this file, as permanent as a positive one, and ordinary rather than an error.
      */
     private val consumerLocations: MutableMap<String, Int> = HashMap()
 
@@ -116,16 +111,14 @@ internal class GeometryPipeline(
      * The CPU byte buffers [drawGeometry] packs this pipeline's grid into before uploading it, reused
      * across draws and grown by doubling.
      *
-     * Each draw used to allocate two fresh `ByteArray`s sized to that draw's grid. On a Mercator
-     * geometry that is eighty bytes and beneath notice; on the globe and drape paths, where a grid
-     * reaches [MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE] cells a side, it is on the order of a
-     * megabyte per geometry per frame, allocated and discarded immediately.
+     * Each draw used to allocate two fresh `ByteArray`s: eighty bytes on a Mercator geometry, but on
+     * the globe and drape paths, where a grid reaches [MAXIMUM_GLOBE_GROUND_CELLS_PER_TILE_SIDE]
+     * cells a side, about a megabyte per geometry per frame.
      *
-     * **They are only ever handed to [GlBinding.bufferData] with an explicit byte count**, which
-     * every platform actual passes straight to `glBufferData` while pinning the array from index
-     * zero -- so a scratch larger than this draw needs uploads exactly the prefix just packed, never
-     * the stale tail behind it. That is the whole safety argument for reusing them, and it is why
-     * neither is passed anywhere that would take its length from the array instead.
+     * Safe to reuse only because they reach [GlBinding.bufferData] with an explicit byte count,
+     * which every platform actual passes to `glBufferData` while pinning from index zero -- so an
+     * oversized scratch uploads the prefix just packed, never the stale tail. Neither is passed
+     * anywhere that would take its length from the array.
      */
     private var vertexScratch: ByteArray = ByteArray(0)
     private var indexScratch: ByteArray = ByteArray(0)

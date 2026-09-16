@@ -554,16 +554,6 @@ internal class BasemapEngineHost(
     }
 
     /**
-     * Draws [prepared]'s tiles. Performs no adapter call whatsoever: everything was acquired by
-     * [prepareTiles], which is the whole point of Rentile's prepare/render split.
-     *
-     * [asRawPixels] picks `renderRaw` over `render` -- the same drawing with the PNG encode skipped
-     * (ADR 0044). The choice belongs to the caller, which is the only place that knows how many raw
-     * bytes are already outstanding; this host renders what it is asked for and reads no budget.
-     * Both forms carry the engine's own `contentKey`, so tile identity does not depend on which was
-     * taken.
-     */
-    /**
      * The priority the most recent [renderTiles] forwarded to the engine, or `null` before the first.
      *
      * An observation rather than state this class acts on — the same shape as
@@ -590,6 +580,13 @@ internal class BasemapEngineHost(
         return priority.toEnginePriority()
     }
 
+    /**
+     * Draws [prepared]'s tiles. Makes no adapter call: [prepareTiles] acquired everything.
+     *
+     * [asRawPixels] picks `renderRaw` over `render`, the same drawing with the PNG encode skipped
+     * (ADR 0044). Only the caller knows how many raw bytes are outstanding, so the choice is its
+     * own. Both forms carry the engine's `contentKey`, so tile identity is unaffected.
+     */
     suspend fun renderTiles(
         prepared: PreparedBasemapTiles,
         asRawPixels: Boolean,
@@ -928,31 +925,29 @@ internal class BasemapEngineHost(
     private fun redactedLocatorHex(url: String): String =
         sha256.digest(CanonicalBytes(redactAuthenticationQuery(url).encodeToByteArray())).lowercaseHex
 
-    /** RenG's own identity for the rendered tile [tile] of [style] at this host's tile output size. */
+    /**
+     * RenG's own identity for the rendered tile [tile] of [style] at this host's tile output size.
+     *
+     * Asked of the host rather than derived by the caller so [tileOutputSize] -- an engine render
+     * option, not a renderer configuration value -- stays owned in one place; a caller that guessed
+     * it would name a tile the engine never rendered.
+     */
     fun renderedTileKey(style: PreparedStyle, tile: CanonicalBasemapTile): ResourceKey =
         rememberedTileKey(style.digest, tile)
 
     /**
-     * The same identity for one unwrapped draw [instance], which the world-copy-projecting overload of
-     * [basemapTileKey] reduces to its canonical tile. Asked of the host rather than derived by the
-     * caller so that [tileOutputSize] -- an engine render option, not a renderer configuration value --
-     * stays owned in exactly one place; a caller that guessed it would derive a key naming a tile the
-     * engine never rendered.
-     */
-    /**
-     * The same identity from a style **digest** rather than a compiled style, for a caller that has
-     * one and not the other — a draw resolving an ancestor tile (ADR 0057) holds the frame's
-     * `basemapStyleDigest` and never the `PreparedStyle` it came from.
+     * The same identity from a style **digest**, for a caller holding one and not a compiled style —
+     * a draw resolving an ancestor tile (ADR 0057) has the frame's `basemapStyleDigest` only.
      */
     fun renderedTileKey(styleDigest: String, tile: CanonicalBasemapTile): ResourceKey =
         rememberedTileKey(styleDigest, tile)
 
+    /** The same identity for one unwrapped draw [instance], reduced to its canonical tile. */
     fun renderedTileKey(styleDigest: String, instance: BasemapTileInstance): ResourceKey =
         rememberedTileKey(
             styleDigest,
-            // The world copy is projected away before the key is derived, exactly as the overload of
-            // [basemapTileKey] this used to call does, so every unwrapped instance of one canonical
-            // tile shares one entry here as well as one rendered resource.
+            // The world copy is projected away before the key is derived, so every unwrapped
+            // instance of one canonical tile shares one entry and one rendered resource.
             CanonicalBasemapTile(
                 lod = instance.lod,
                 tileY = instance.tileY,
@@ -964,18 +959,14 @@ internal class BasemapEngineHost(
      * [basemapTileKey] for `(styleDigest, tile)`, derived once and then remembered (ADR 0069).
      *
      * **The derivation is not cheap and it used to run twice per visible tile per frame**, before
-     * anything had been decided: `renderBasemapTiles` asks for every canonical tile's key
-     * unconditionally to test residency, `groundInstances` asks for the same keys again, and each ask
-     * built a fresh `ResourceKeyDeriver`, a canonical binary, a SHA-256 and a 64-character hex string.
-     * At the tile counts `CLAUDE.md` records -- 93 canonical tiles at 3840x2160 and pitch 0, 167 with
-     * a frame of LOD history -- a perfectly still camera with every tile already resident paid all of
-     * it on every frame forever.
+     * anything had been decided: `renderBasemapTiles` asks for every canonical tile's key to test
+     * residency, `groundInstances` asks for the same keys again, and each ask built a fresh
+     * `ResourceKeyDeriver`, a canonical binary, a SHA-256 and a 64-character hex string. At the
+     * counts `CLAUDE.md` records -- 93 canonical tiles at 3840x2160 and pitch 0, 167 with a frame of
+     * LOD history -- a still camera with every tile resident paid all of it every frame.
      *
-     * The answer is a pure function of `(styleDigest, tile)`: the other two inputs are [tileOutputSize]
-     * and [sha256], both fixed for this host's lifetime, which is the whole reason
-     * [renderedTileKey] is asked of the host rather than derived by callers.
-     *
-     * Bounded at [MAXIMUM_REMEMBERED_TILE_KEYS], oldest first, in the shape
+     * The answer is a pure function of `(styleDigest, tile)`: [tileOutputSize] and [sha256] are fixed
+     * for this host's lifetime. Bounded at [MAXIMUM_REMEMBERED_TILE_KEYS], oldest first, in the shape
      * `ClassGateRunner.remember` already established rather than a second one.
      */
     private fun rememberedTileKey(styleDigest: String, tile: CanonicalBasemapTile): ResourceKey {

@@ -26,14 +26,13 @@ public enum class RenGRenderPriority {
  * RenG's own name for a counter the basemap engine keeps (ADR 0049).
  *
  * Deliberately **not** a typealias for the engine's own enum: the repository policy forbids an
- * engine type in RenG's ABI, and a typealias would make every constant the engine renames a
- * breaking change for RenG's consumers, decided by a release RenG does not cut. The `ENGINE_` prefix
- * is not redundant either -- it reserves this vocabulary's other half for counters RenG keeps
- * itself, and says at every call site which side of the firewall a number came from.
+ * engine type in RenG's ABI, and a typealias would make every constant the engine renames a breaking
+ * change for RenG's consumers, decided by a release RenG does not cut. The `ENGINE_` prefix reserves
+ * this vocabulary's other half for counters RenG keeps itself, and says at every call site which
+ * side of the firewall a number came from.
  *
  * Every constant is a running total since the renderer was created. The `_NANOS` ones are sums, not
- * means: divide by the matching count -- [ENGINE_TILES_RENDERED] for [ENGINE_TILE_DRAW_NANOS] -- if
- * a mean is what you want.
+ * means: divide by the matching count -- [ENGINE_TILES_RENDERED] for [ENGINE_TILE_DRAW_NANOS].
  */
 public enum class RenGMetricName {
     /** Resources the engine asked RenG's firewall for, hit or miss. */

@@ -10,13 +10,11 @@ import com.rohittp.reng.internal.shader.scanShaderProfile
 
 /**
  * RenG's own backdrop shader (ADR 0068), written as GLES 3.00 and travelling through
- * [com.rohittp.reng.internal.shader.ShaderProfilePlan.sourceFor] exactly as a consumer's [ShaderPair]
- * does, on the same terms as the sticker pair beside it.
+ * [com.rohittp.reng.internal.shader.ShaderProfilePlan.sourceFor] as a consumer's [ShaderPair] does.
  *
- * **The quad is the frame**, in clip space, so there is no model-view-projection here at all -- the
- * backdrop is screen-space by definition and a matrix would only be an opportunity to place it
- * somewhere it must never be. `rengBackdropRepeat` carries how many times the pattern fits across the
- * output, and the sampler's `GL_REPEAT` does the tiling.
+ * **The quad is the frame**, in clip space, so there is no model-view-projection: a backdrop is
+ * screen-space by definition. `rengBackdropRepeat` carries how many times the pattern fits across
+ * the output, and the sampler's `GL_REPEAT` does the tiling.
  *
  * The `v` axis is flipped in the vertex stage so a pattern reads the same way up here as the same
  * image does on a sticker, whose quad already maps `v = 0` to its top edge.
@@ -153,14 +151,12 @@ internal class ResolvedBackdrop(
  * How many times the pattern repeats across and down [outputPixelSize], given the repeat distance the
  * plan asked for (ADR 0068).
  *
- * A separate function rather than three lines at the call site because it is the whole of what
- * `tileSizeLogicalPixels` *means*, and the difference between dividing and multiplying here is a
- * pattern at the right size and one at 1080 times it -- a distinction no shader test can see and no
- * GL call log records.
+ * Its own function rather than three lines at the call site because it is the whole of what
+ * `tileSizeLogicalPixels` *means*, and dividing where one should multiply is the difference between
+ * a pattern at the right size and one at 1080 times it -- which no shader test and no GL call log
+ * can see.
  *
- * RenG's output size is its logical pixel size: `cameraDistanceLogicalPixels` derives the camera
- * distance straight from `outputPixelSize.height`, so there is no scale factor to apply between the
- * two and none is applied.
+ * RenG's output size is its logical pixel size, so no scale factor applies between the two.
  */
 internal fun resolvedBackdropFor(
     texture: Int,

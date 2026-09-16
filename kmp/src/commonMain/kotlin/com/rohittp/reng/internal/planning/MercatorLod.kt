@@ -117,19 +117,14 @@ internal data class GroundLodBand(
 /**
  * The frame's ground, decomposed into bands that each carry their own LOD (ADR 0065).
  *
- * **The decomposition is one-dimensional, and that is the whole reason this is a row walk rather
- * than a quadtree descent.** On a plane with a level horizon a ray's angle from the downward axis is
- * `theta = pitch + atan(v)` exactly, and `v` is a function of the row, so every pixel in a row sees
- * the ground at the same angle and wants the same level of detail. MapLibre GL JS descends a
- * quadtree for the same rule because it must also serve a globe and terrain, where distance is
- * genuinely two-dimensional; ADR 0067 keeps both of those on one LOD per frame here, which is what
- * leaves this free to be a scan.
+ * A row walk rather than a quadtree descent because the decomposition is one-dimensional: on a
+ * plane `theta = pitch + atan(v)` exactly, so every pixel in a row sees the ground at one angle.
+ * MapLibre descends a quadtree because it must also serve a globe and terrain; ADR 0067 keeps both
+ * on one LOD per frame here.
  *
- * Bands come back in row order, which is coarse to fine: the offsets decrease monotonically from the
- * bottom of the frame toward the horizon. Two consequences ride on that ordering and neither is
- * incidental -- a short band always merges into the *finer* of its neighbours with no tie to break,
- * and the draw order that results puts the finer tile on top wherever two bands' tiles overlap at a
- * shared edge.
+ * Bands come back in row order, which is coarse to fine. A short band therefore always merges into
+ * the finer of its neighbours, and the draw order that results puts the finer tile on top where two
+ * bands' tiles share an edge.
  */
 internal fun groundLodBands(
     camera: ResolvedMercatorCamera,
@@ -171,16 +166,13 @@ internal fun groundLodBands(
  * `lod(row) = selectedLod + floor(1.5 * log2(cos(theta) / cos(pitch)) + 0.5)`, the equal-screen-area
  * rule of ADR 0065 with MapLibre's tuning exponent `b` at 1.
  *
- * The cosine is not computed from an angle: with `theta = pitch + atan(v)`,
- * `cos(theta) = q / sqrt(1 + v * v)`, and both `q` and `v` are already in hand, so a row costs one
- * square root and one logarithm.
+ * `cos(theta) = q / sqrt(1 + v * v)` with `q` and `v` already in hand, so a row costs one square
+ * root and one logarithm and never an angle.
  *
- * Written as an offset from [selectedLod] rather than as an absolute level, which is the deliberate
- * divergence from MapLibre recorded in ADR 0065: their centre tile coarsens with pitch, and anchoring
- * here keeps the centre of the frame exactly as sharp as [observeMercatorLod] chose to make it. The
- * clamp is the same `0..22` every other LOD on this path carries, and it is what keeps a camera a
- * fraction of a degree off the horizon -- where `cos(pitch)` vanishes and the ratio runs away -- from
- * asking for a level that does not exist.
+ * An offset from [selectedLod] rather than an absolute level -- ADR 0065's deliberate divergence
+ * from MapLibre, whose centre tile coarsens with pitch, where anchoring keeps the centre of the
+ * frame as sharp as [observeMercatorLod] chose. The `0..22` clamp stops a camera a fraction of a
+ * degree off the horizon, where `cos(pitch)` vanishes, asking for a level that does not exist.
  */
 private fun groundLodForRow(
     q: Double,
@@ -199,15 +191,13 @@ private fun groundLodForRow(
  * A band costs its own tile selection, and `selectBasemapTiles` admits every tile *intersecting* a
  * footprint, so each extra band pays for the tiles straddling one more shared edge (ADR 0065).
  *
- * Measured, that overhead is not hypothetical: at 20 degrees of pitch the unmerged rule peels a
- * 34-row band off the top of a 1080x1920 frame -- 1.8% of its height -- and the split costs two
- * tiles more than the coarser level saves. Requiring a band to be worth at least a sixteenth of the
- * frame removes that regression outright and is also the best of the thresholds measured at the
- * steep end.
+ * At 20 degrees of pitch the unmerged rule peels a 34-row band off the top of a 1080x1920 frame,
+ * 1.8% of its height, and the split costs two tiles more than the coarser level saves. Requiring a
+ * band to be worth a thirty-second of the frame removes that outright and is also the best of the
+ * thresholds measured at the steep end.
  *
- * A band merges forward, into the next band in row order, which is always the finer one -- so a
- * merged band is never blurrier than the rule asked for. A trailing band too short to stand merges
- * backward instead, adopting its predecessor's level for the same reason in the only direction left.
+ * A band merges forward, into the next in row order and so always the finer one, leaving a merged
+ * band never blurrier than the rule asked for. A trailing band merges backward for the same reason.
  */
 private fun mergeBandsTooShortToEarnTheirOwnSelection(
     bands: List<GroundLodBand>,
@@ -241,14 +231,12 @@ private fun mergeBandsTooShortToEarnTheirOwnSelection(
 /**
  * Every band's tiles, selected at that band's own level and unioned (ADR 0065).
  *
- * `selectBasemapTiles` is called once per band and is not modified: a band is a footprint and a
- * level, which is exactly what it already takes. Bands never share a level -- the offsets are
- * monotone in row -- so concatenating the selections cannot produce a duplicate instance, and the
- * row order the bands arrive in is the coarse-to-fine draw order ADR 0065 relies on.
+ * `selectBasemapTiles` is unmodified: a band is a footprint and a level, which is what it already
+ * takes. Bands never share a level -- the offsets are monotone in row -- so concatenating cannot
+ * duplicate an instance, and row order is the coarse-to-fine draw order ADR 0065 relies on.
  *
- * The budget is applied to the total rather than to each band, because a caller who asked for 512
- * instances asked for 512 in the frame. Each band is nonetheless offered the whole budget so that
- * no single band fails on a share of it that the frame as a whole would not have needed.
+ * The budget bounds the total, because a caller asking for 512 instances asked for 512 in the
+ * frame; each band is still offered the whole budget so none fails on a share of it.
  */
 internal fun selectBandedBasemapTiles(
     camera: ResolvedMercatorCamera,

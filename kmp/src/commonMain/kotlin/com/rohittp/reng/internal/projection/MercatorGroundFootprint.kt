@@ -47,17 +47,14 @@ internal fun clippedPhysicalPixelFootprint(
  * The same four-corner sampling [clippedPhysicalPixelFootprint] performs, over an explicit range of
  * rows rather than over every admissible one (ADR 0065).
  *
- * A per-tile level of detail decomposes the frame into horizontal bands, and each band needs the
- * ground quad of *its* rows -- so this is factored out rather than duplicated, and
- * [clippedPhysicalPixelFootprint] is now its whole-frame case. The caller owns the promise every
- * row in `[firstRow, lastRow]` carries ground, which is the same promise the whole-frame case has
- * always made: [groundHit] hard-casts, and on a plane a row's classification is a function of the
- * row alone, so column zero deciding for every column is what makes that sound.
+ * A per-tile level of detail decomposes the frame into bands, each needing the ground quad of *its*
+ * rows, so this is factored out and [clippedPhysicalPixelFootprint] is now its whole-frame case. The
+ * caller owns the promise that every row in `[firstRow, lastRow]` carries ground -- the same promise
+ * the whole-frame case always made, sound because [groundHit] hard-casts and on a plane a row's
+ * classification is a function of the row alone.
  *
- * Two adjacent ranges share exactly one edge, because `lastRow` of one and `firstRow` of the next
- * are adjacent rows and the quads are built from the same ray function. They therefore partition
- * the ground rather than overlapping it -- though the *tiles* each range admits still overlap
- * wherever one straddles the shared edge, which is ADR 0065's accepted cost.
+ * Two adjacent ranges share exactly one edge and therefore partition the ground, though the *tiles*
+ * each admits still overlap where one straddles that edge: ADR 0065's accepted cost.
  */
 internal fun footprintForAdmissibleRowRange(
     camera: ResolvedMercatorCamera,

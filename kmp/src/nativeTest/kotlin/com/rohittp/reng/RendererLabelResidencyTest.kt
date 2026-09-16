@@ -99,25 +99,6 @@ class RendererLabelResidencyTest {
     }
 
     /**
-     * The half where caches actually fail. A camera that moves onto a **disjoint** tile set must
-     * re-acquire, and this case is what a deleted invalidation fails: the case above passes with the
-     * key comparison replaced by `true`, and this one cannot.
-     *
-     * Three assertions of content, at three depths, because a wrong cache can be wrong at any of them:
-     * the quads' atlas coordinates ([cameraA]'s centre tile spells `V` and [cameraB]'s spells `Q`), the
-     * atlas identity, and the decoded atlas pixels themselves. Fetching the new tiles is not enough on
-     * its own -- a renderer that re-fetched and then handed back the *retained* batch anyway would
-     * satisfy that alone -- and the last of the three is what gates the decode memo, which is keyed by
-     * atlas content rather than by the handover key and would otherwise hand the moved frame the first
-     * frame's pixels under the moved frame's own key.
-     *
-     * **That the two atlases differ at all is something the fixture had to be built for**, and the
-     * naive assertion fails: Rentile packs every glyph of every Glyph Range it fetched rather than only
-     * the ones its candidates used, so two tile sets needing the same ranges pack a byte-identical
-     * atlas however different their letters are. That was measured here by asserting it and watching it
-     * fail -- see [residencyTileBytes], which gives [cameraB]'s tiles a fourth range of their own.
-     */
-    /**
      * ADR 0070 end to end, and the two halves are what make it a claim rather than an observation.
      *
      * A camera one tile east selects a **different** ground tile set -- that is the condition under
@@ -149,6 +130,25 @@ class RendererLabelResidencyTest {
         )
     }
 
+    /**
+     * The half where caches actually fail. A camera that moves onto a **disjoint** tile set must
+     * re-acquire, and this case is what a deleted invalidation fails: the case above passes with the
+     * key comparison replaced by `true`, and this one cannot.
+     *
+     * Three assertions of content, at three depths, because a wrong cache can be wrong at any of them:
+     * the quads' atlas coordinates ([cameraA]'s centre tile spells `V` and [cameraB]'s spells `Q`), the
+     * atlas identity, and the decoded atlas pixels themselves. Fetching the new tiles is not enough on
+     * its own -- a renderer that re-fetched and then handed back the *retained* batch anyway would
+     * satisfy that alone -- and the last of the three is what gates the decode memo, which is keyed by
+     * atlas content rather than by the handover key and would otherwise hand the moved frame the first
+     * frame's pixels under the moved frame's own key.
+     *
+     * **That the two atlases differ at all is something the fixture had to be built for**, and the
+     * naive assertion fails: Rentile packs every glyph of every Glyph Range it fetched rather than only
+     * the ones its candidates used, so two tile sets needing the same ranges pack a byte-identical
+     * atlas however different their letters are. That was measured here by asserting it and watching it
+     * fail -- see [residencyTileBytes], which gives [cameraB]'s tiles a fourth range of their own.
+     */
     @Test
     fun aCameraMoveOntoADifferentTileSetReAcquiresRatherThanServingTheRetainedBatch() = runTest {
         val transport = ResidencyTransport()
@@ -402,14 +402,6 @@ private fun cameraA(): Camera = Camera(
 )
 
 /**
- * The centre of tile `(z = 4, x = 12, y = 10)`, whose 3x3 block is **disjoint** from [cameraA]'s in both
- * axes -- `x in 11..13, y in 9..11` against `x in 2..4, y in 5..7`.
- *
- * Disjoint rather than adjacent on purpose: an overlapping move would let a partially correct
- * invalidation pass, because some of the second frame's tiles would legitimately be absent from the
- * second round of traffic. With no overlap, every one of the twenty-five is either fetched or not.
- */
-/**
  * [cameraA] moved [tiles] whole tiles east at zoom 4, where a tile spans `360 / 16` degrees. One tile
  * moves the three-by-three ground selection by a column while staying inside ADR 0070's margin; three
  * moves it clear of the margin entirely.
@@ -422,6 +414,14 @@ private fun cameraEastOfA(tiles: Int): Camera = Camera(
     pitch = 0.0,
 )
 
+/**
+ * The centre of tile `(z = 4, x = 12, y = 10)`, whose 3x3 block is **disjoint** from [cameraA]'s in both
+ * axes -- `x in 11..13, y in 9..11` against `x in 2..4, y in 5..7`.
+ *
+ * Disjoint rather than adjacent on purpose: an overlapping move would let a partially correct
+ * invalidation pass, because some of the second frame's tiles would legitimately be absent from the
+ * second round of traffic. With no overlap, every one of the twenty-five is either fetched or not.
+ */
 private fun cameraB(): Camera = Camera(
     latitude = -48.92249926375824,
     unwrappedLongitude = 101.25,

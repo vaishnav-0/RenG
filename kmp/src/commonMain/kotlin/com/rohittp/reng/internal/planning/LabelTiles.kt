@@ -1,21 +1,18 @@
 package com.rohittp.reng.internal.planning
 
 /**
- * The tiles a frame asks the engine to plan label candidates over, which are deliberately **not** the
- * tiles its ground draws.
+ * The tiles a frame asks the engine to plan label candidates over, deliberately **not** the tiles
+ * its ground draws (ADR 0070).
  *
- * `BasemapEngineHost.labelCandidateRequestKey` is rentile's, computed over the sorted de-duplicated
- * tile set, and `RenGRenderer.labelHandover` retains exactly one answer under it. So the whole label
- * acquisition -- every label tile, every Glyph Range, and a re-packed byte-identical atlas -- is paid
- * again the moment any single tile enters or leaves the set. Measured at 514-520 ms of a 605-610 ms
- * `prepare()`, about 85% of it.
+ * `BasemapEngineHost.labelCandidateRequestKey` is rentile's, over the sorted de-duplicated tile set,
+ * and `RenGRenderer.labelHandover` retains exactly one answer under it. So the whole acquisition --
+ * every label tile, every Glyph Range, a re-packed byte-identical atlas -- is paid again the moment
+ * any single tile enters or leaves. Measured at 514-520 ms of a 605-610 ms `prepare()`, about 85%.
  *
- * Handing that key the ground's exact per-frame selection guarantees a miss on every frame a camera
- * moves at all. `HANDOFF.md` records the conclusion drawn from that -- "a moving camera evicts any
- * bounded cache every frame" -- and it is correct about a *bounded cache*, which is why this file
- * grows no cache. It changes the question instead: **the set does not have to move with the camera.**
- *
- * Two rules, and between them a panning camera asks the same question for many frames running:
+ * Handing that key the ground's per-frame selection guarantees a miss on every frame a camera moves.
+ * `HANDOFF.md` is right that "a moving camera evicts any bounded cache every frame", which is why
+ * this file grows no cache and changes the question instead: **the set need not move with the
+ * camera.** Between the two rules a panning camera asks the same question for many frames running:
  *
  * - a set that still covers what this frame needs is returned **verbatim**, so the request key is
  *   bit-identical and the retained handover answers;
@@ -37,16 +34,13 @@ internal fun observeLabelTiles(
 /**
  * [tiles] plus the ring of tiles immediately around them, at each tile's own level.
  *
- * **The ring is a perimeter, not a ninefold.** `CLAUDE.md` already measures this exact shape for the
- * terrain neighbourhood -- "the ring costs a perimeter, `4*sqrt(T) + 4`, **not** ninefold: +33% at 167
- * tiles" -- because the overwhelming majority of a tile's eight neighbours are already in the set. It
- * is what the hysteresis above spends to buy its hits, and one tile is the smallest amount of it that
- * can be spent.
+ * **A perimeter, not a ninefold.** `CLAUDE.md` measures this same shape for the terrain
+ * neighbourhood -- "the ring costs a perimeter, `4*sqrt(T) + 4`, **not** ninefold: +33% at 167
+ * tiles" -- because most of a tile's eight neighbours are already in the set.
  *
- * `canonicalX` wraps around the world at each level, because a set straddling the antimeridian must
- * name the tiles actually on the other side of it rather than tiles that do not exist. `tileY` does
- * not wrap: there is no ground above the north edge or below the south one, so a row outside the
- * level's span is dropped.
+ * `canonicalX` wraps at each level, so a set straddling the antimeridian names the tiles actually
+ * there rather than tiles that do not exist. `tileY` does not: there is no ground past either pole,
+ * so a row outside the level's span is dropped.
  */
 internal fun ringExpandedLabelTiles(
     tiles: List<CanonicalBasemapTile>,
@@ -70,9 +64,8 @@ internal fun ringExpandedLabelTiles(
 /**
  * How many tiles of margin a rebuilt label set carries, and **one** is measured rather than assumed.
  *
- * A wider margin buys fewer rebuilds and pays for each of them quadratically, so the total work turns
- * around immediately. Over a 120-frame pan at a tenth of a tile a frame, pitch 45, counting
- * acquisitions and the tiles each one names:
+ * A wider margin buys fewer rebuilds and pays for each quadratically, so the total turns around
+ * immediately. Over a 120-frame pan at a tenth of a tile a frame, pitch 45:
  *
  * | margin | acquisitions | widest set | tiles fetched |
  * |---|---|---|---|
@@ -81,6 +74,6 @@ internal fun ringExpandedLabelTiles(
  * | two tiles | 9 | 151 | 1359 |
  * | three tiles | 7 | 240 | 1680 |
  *
- * One tile is the minimum and it is also the best of the three; there is nothing to tune here.
+ * One tile is the minimum and also the best of the three; there is nothing to tune here.
  */
 internal const val LABEL_TILE_RINGS: Int = 1

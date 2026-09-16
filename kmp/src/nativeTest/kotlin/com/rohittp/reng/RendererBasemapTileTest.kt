@@ -875,15 +875,6 @@ internal val DEM_HILLSHADE_STYLE: String =
         """{"id":"h","type":"hillshade","source":"d"}]}"""
 
 /**
- * Serves a style document, the sprite pair, and a valid PNG for everything else, recording every url in
- * call order through the same concurrency-safe recorder `RendererBasemapStyleTest` uses — Rentile
- * fetches concurrently on `Dispatchers.Default`, so an unguarded list loses entries.
- *
- * [styleFreshUntilEpochMillis] is declared on the **style response only**: it is what makes a later
- * frame resolve the style from residency instead of re-fetching it, which is the one condition under
- * which the pure core emits no `CompileBasemapStyle`.
- */
-/**
  * [styleCamera] moved one LOD-4 tile east: `unwrappedLongitude` -135 places the camera on the x = 2.0
  * tile boundary, and -112.5 places it on x = 3.0, so the two frames share their y range and half
  * their x range.
@@ -925,6 +916,15 @@ private class RecordingProvisionalSink : DiagnosticSink {
     }
 }
 
+/**
+ * Serves a style document, the sprite pair, and a valid PNG for everything else, recording every url in
+ * call order through the same concurrency-safe recorder `RendererBasemapStyleTest` uses — Rentile
+ * fetches concurrently on `Dispatchers.Default`, so an unguarded list loses entries.
+ *
+ * [styleFreshUntilEpochMillis] is declared on the **style response only**: it is what makes a later
+ * frame resolve the style from residency instead of re-fetching it, which is the one condition under
+ * which the pure core emits no `CompileBasemapStyle`.
+ */
 internal class TileTransport(
     private val styleJson: String = STYLE_WITH_SPRITE_JSON,
     private val styleFreshUntilEpochMillis: Long? = null,

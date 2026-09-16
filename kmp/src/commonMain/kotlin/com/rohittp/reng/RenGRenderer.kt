@@ -2192,45 +2192,10 @@ internal class RenGRenderer(
         accessMode: ResourceAccessMode,
         priority: RenGRenderPriority,
     ): List<RenderedBasemapTile> {
-        // Only the tiles whose rendered texture is not already resident are sent to the engine.
-        //
-        // This completes an intent the rest of this class already states rather than introducing a new
-        // one. `RenGPreparedFrame.basemapTiles` says a tile's bytes are decoded and uploaded at draw
-        // "because a tile whose GL texture is still resident from an earlier frame must cost neither",
-        // and `GlObjectRegistry` says an unleased budget-tracked texture survives losing its lease "so
-        // a pan back over the same tile costs nothing". Both were true of the decode and the upload and
-        // neither was true of the *rasterisation*: every frame asked the engine for every visible tile,
-        // rendered it to PNG, and then threw the PNG away at draw for any tile already on the GPU.
-        //
-        // Measured on an Apple M2 release build through a consumer harness, one camera prepared three
-        // times over a one-source production style: 703, 714, 740 ms, with 11 vector tiles re-fetched
-        // per prepare. On a Snapdragon 8 Gen 3 a frame cost 895-2256 ms of which 863-2105 ms was this
-        // call, against 17-151 ms to draw and read back the result — so a four-and-a-half second
-        // timeline played about four frames.
-        //
-        // The identity is asked of the host rather than derived here, because `tileOutputSize` is an
-        // engine render option and `renderedTileKey`'s own KDoc says a caller that guessed it would
-        // name a tile the engine never rendered.
-        //
-        // One assumption, stated because it is the first cross-phase read of the registry: this runs
-        // during preparation and the registry is otherwise touched only under a draw, so a consumer
-        // that draws one frame while preparing another would be racing a LinkedHashMap. Every RenG
-        // consumer today prepares and draws in sequence on the thread owning the GL context, which is
-        // what `prepare() has no render context` already implies about how these phases interleave.
-        // Routes for EVERY visible tile, never only the missing ones, and this is the one place the
-        // residency filter must not reach.
-        //
-        // `tileTimeRoutes` walks `tiles x manifest.sources`, and a `raster-dem` source expands each
-        // tile through `demNeighbourhoodOrSelf` — so this frame's whole DEM neighbourhood is derived
-        // from the same list. A resident *colour* texture says nothing about whether the DEM beneath
-        // it is acquired: the two are tracked separately, colour in `GlObjectRegistry` and terrain in
-        // `PreparedTerrain`. Narrowing this to `missing` starves terrain of its routes, and on a
-        // camera whose colour tiles are all resident it registers none at all.
-        //
-        // That is not hypothetical. It is what the terrain and ground-anchor readback suites caught
-        // when this filter first landed here: eight of nine terrain cases failed with the ground
-        // displacing by exactly zero pixels. The upstream commit could not have seen it — it was
-        // written against a base with no terrain at all (ADR 0041 came later).
+        // Routes for EVERY visible tile, never only the missing ones. `tileTimeRoutes` expands a
+        // `raster-dem` source through `demNeighbourhoodOrSelf`, so terrain's routes come from this
+        // same list, and a resident colour texture says nothing about whether the DEM beneath it is
+        // acquired. Narrowing this to `missing` failed eight of nine terrain readback cases.
         basemapEngineHost.registerRoutes(
             tileTimeRoutes(
                 manifest = manifest,
@@ -2240,16 +2205,21 @@ internal class RenGRenderer(
             ),
         )
 
-        // Two places an answer to "does the engine need to render this again" can already live: a
-        // resident GL texture (ADR 0046), and this batch's own memo (ADR 0052). The second exists
-        // because the first cannot see inside a batch, where nothing has been drawn yet.
+        // Only tiles that are neither resident on the GPU (ADR 0046) nor already rendered by this
+        // batch (ADR 0052) go to the engine; before ADR 0046 every frame rasterised every visible
+        // tile and discarded the PNG at draw, 863-2105 ms of a 895-2256 ms frame on a Snapdragon
+        // 8 Gen 3. The memo exists because residency cannot see inside a batch, where nothing has
+        // been drawn yet.
         //
-        // A memo hit is carried into THIS frame's own tile list rather than left with the frame that
-        // rendered it. A batch says nothing about the order its frames are drawn in, or whether they
-        // are all drawn, so a frame that pointed at a sibling's texture would answer
-        // RESOURCE_UNAVAILABLE for a tile the batch definitely rendered. Sharing the immutable
-        // RenderedBasemapTile keeps every frame self-sufficient and still holds one copy of the
-        // pixels: RenGPreparedFrame snapshots the list it is given, never the arrays inside it.
+        // A memo hit is copied into THIS frame's tile list rather than left with the frame that
+        // rendered it: a batch fixes no draw order, so a frame pointing at a sibling's texture
+        // would answer RESOURCE_UNAVAILABLE for a tile the batch definitely rendered. The shared
+        // RenderedBasemapTile is immutable and holds one copy of the pixels.
+        //
+        // Reading the registry here is the one cross-phase read: preparation touches it, every
+        // other touch is under a draw. A consumer that drew one frame while preparing another
+        // would race a LinkedHashMap; every RenG consumer prepares and draws in sequence on the
+        // thread owning the GL context.
         val memo = batchRenderedTiles
         val alreadyRendered = ArrayList<RenderedBasemapTile>()
         val missing = ArrayList<CanonicalBasemapTile>(canonicalTiles.size)
@@ -2709,12 +2679,10 @@ internal class RenGRenderer(
      *
      * **One reading per frame, not one per texture.** Each release runs an eviction pass, so a frame
      * 39 tiles past the budget reaches the "out of unleased candidates, still over budget" exit 39
-     * times. Those are 39 observations of one condition, and the consumer needs the condition, not the
-     * arithmetic: this collapses them to the single worst reading, and `performDraw` emits at most one
-     * diagnostic from it. The maximum rather than the first, though the two coincide today -- within
-     * one draw nothing registers a texture after the release loop begins, so the resident total only
-     * falls -- because "the worst it got" is what the reading claims to be, and that should not
-     * quietly depend on an ordering property of a loop somewhere else.
+     * times -- 39 observations of one condition. This collapses them to the worst reading, and
+     * `performDraw` emits at most one diagnostic from it. The maximum rather than the first, though
+     * the two coincide today, because "the worst it got" should not depend on an ordering property
+     * of a loop somewhere else.
      */
     private fun releaseTextureLeases(leases: List<TextureLease>): GpuTextureResidency? {
         var worst: GpuTextureResidency? = null
@@ -3516,14 +3484,6 @@ private fun animationSelectorFailure(key: ResourceKey): RenGException = RenGExce
 )
 
 /**
- * A rendered basemap tile that will not decode, named by the tile it is about.
- *
- * Reported at [PipelineStage.DRAW] rather than at `RESOURCE_DECODING` because that is genuinely where
- * it happens -- see [RenGRenderer.resolveGroundTiles] for why the decode is deferred to the draw -- and
- * with `RESOURCE_DECODE_FAILED` rather than `GPU_OPERATION_FAILED` because the fault is in the bytes or
- * in `ResourceLimits.maximumDecodedImageBytes`, not in the caller's GL state.
- */
-/**
  * A ground tile that was resident when the frame was prepared and gone by the time it was drawn.
  *
  * Distinct from a decode failure on purpose: nothing failed to decode, and reporting it as a decode
@@ -3542,6 +3502,14 @@ private fun basemapTileEvictedFailure(key: ResourceKey): FailureDescriptor = Fai
     ),
 )
 
+/**
+ * A rendered basemap tile that will not decode, named by the tile it is about.
+ *
+ * Reported at [PipelineStage.DRAW] rather than at `RESOURCE_DECODING` because that is genuinely where
+ * it happens -- see [RenGRenderer.resolveGroundTiles] for why the decode is deferred to the draw -- and
+ * with `RESOURCE_DECODE_FAILED` rather than `GPU_OPERATION_FAILED` because the fault is in the bytes or
+ * in `ResourceLimits.maximumDecodedImageBytes`, not in the caller's GL state.
+ */
 private fun basemapTileDecodeFailure(key: ResourceKey): FailureDescriptor = FailureDescriptor(
     code = RenGErrorCode.RESOURCE_DECODE_FAILED,
     stage = PipelineStage.DRAW,

@@ -126,27 +126,20 @@ public class Camera(
          * The largest [pitch] at which the ground still reaches every row of the output frame -- a
          * quality ceiling, not a domain limit (ADR 0067).
          *
-         * [pitch] itself keeps the full `[0, 90)` range this class has always validated. A camera
-         * steeper than this is legal and is drawn exactly as asked: a document authored before this
-         * constant existed, or a keyframe an interpolated track passes through on its way somewhere
-         * shallower, is not rejected and not corrected. This exists for a caller -- typically
-         * wherever a *person* is dragging a tilt gesture -- that wants to stop **offering** a pitch
-         * before anyone reaches one, which is a different question from which pitches are
-         * admissible.
+         * [pitch] keeps the full `[0, 90)` range this class has always validated: a steeper camera
+         * is legal and is drawn exactly as asked. This exists for a caller -- typically wherever a
+         * *person* drags a tilt gesture -- that wants to stop **offering** a pitch before anyone
+         * reaches one, which is a different question from which pitches are admissible.
          *
-         * **Where the number comes from.** The vertical half field of view is exactly 22.5 degrees,
-         * which is what `FOCAL_LENGTH_SCALE = 1 + sqrt(2)` encodes, it being `1 / tan(22.5)`. A ray's
-         * angle from the downward axis is `pitch + atan(v)` exactly, so the top row of the frame sits
-         * at `pitch + 22.5`, and the first row to run out of ground is always the top one. The
-         * renderer stops trusting a ground ray at `MAXIMUM_GROUND_ANGLE_DEGREES` rather than at the
-         * horizon itself (ADR 0064), so this is that angle less the half field of view -- `89.25 -
-         * 22.5`, or **66.75 degrees** at the shipped constants. Computed from both of them rather
-         * than written as a literal, so a change to either moves this with it instead of leaving it
-         * to drift.
+         * The vertical half field of view is exactly 22.5 degrees (`FOCAL_LENGTH_SCALE = 1 + sqrt(2)`
+         * being `1 / tan(22.5)`) and a ray's angle is `pitch + atan(v)` exactly, so the top row sits
+         * at `pitch + 22.5` and is always the first to run out of ground. This is therefore
+         * `MAXIMUM_GROUND_ANGLE_DEGREES` (ADR 0064) less that half angle -- **66.75 degrees** at the
+         * shipped constants -- computed from both rather than written as a literal, so a change to
+         * either moves it.
          *
-         * **Above it the renderer keeps drawing and the horizon simply enters the frame.** The rows
-         * above it carry no ground because there is none there, and what shows through is whatever
-         * the consumer's surface was cleared to. That is a horizon, not a clipped edge.
+         * **Above it the renderer keeps drawing and the horizon enters the frame.** The rows above
+         * carry whatever the consumer's surface was cleared to: a horizon, not a clipped edge.
          */
         public val MAXIMUM_GROUND_FILLING_PITCH_DEGREES: Double =
             MAXIMUM_GROUND_ANGLE_DEGREES - atan(1.0 / FOCAL_LENGTH_SCALE) * DEGREES_PER_RADIAN

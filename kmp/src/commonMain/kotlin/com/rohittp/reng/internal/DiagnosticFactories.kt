@@ -80,19 +80,6 @@ internal fun basemapNotConfiguredDiagnostic(): Diagnostic =
     )
 
 /**
- * A draw ended with more budget-tracked texture bytes resident than
- * [com.rohittp.reng.ResourceLimits.maximumResidentGpuTextureBytes] allows, and eviction could do
- * nothing about it: every remaining byte belonged to a texture the frame itself was holding. The
- * next frame over the same camera therefore re-decodes and re-uploads whatever this one dropped —
- * a megabyte each way per 512x512 tile, every frame, at a stationary camera.
- *
- * A warning rather than a failure, because the frame drew correctly and RenG repairs nothing on the
- * caller's behalf: the two numbers are what a consumer needs to decide whether to raise the limit or
- * lower [com.rohittp.reng.RendererConfiguration.maximumBasemapTileInstances], and that decision is
- * theirs. It names no resource key: the condition is a property of the whole working set, and
- * blaming the last tile released would be arbitrary.
- */
-/**
  * One per drawn frame that presented any provisional ground at all (ADR 0057) — never one per tile,
  * for the reason [terrainCoverageIncompleteDiagnostic] gives for counting rather than listing.
  */
@@ -105,6 +92,19 @@ internal fun groundPresentedProvisionallyDiagnostic(tileCount: Int): Diagnostic 
         actual = tileCount.toLong(),
     )
 
+/**
+ * A draw ended with more budget-tracked texture bytes resident than
+ * [com.rohittp.reng.ResourceLimits.maximumResidentGpuTextureBytes] allows, and eviction could do
+ * nothing about it: every remaining byte belonged to a texture the frame itself was holding. The
+ * next frame over the same camera therefore re-decodes and re-uploads whatever this one dropped —
+ * a megabyte each way per 512x512 tile, every frame, at a stationary camera.
+ *
+ * A warning rather than a failure, because the frame drew correctly and RenG repairs nothing on the
+ * caller's behalf: the two numbers are what a consumer needs to decide whether to raise the limit or
+ * lower [com.rohittp.reng.RendererConfiguration.maximumBasemapTileInstances], and that decision is
+ * theirs. It names no resource key: the condition is a property of the whole working set, and
+ * blaming the last tile released would be arbitrary.
+ */
 internal fun residentGpuTexturesOverBudgetDiagnostic(residentBytes: Long, budgetBytes: Long): Diagnostic =
     Diagnostic(
         code = DiagnosticCode.RESIDENT_GPU_TEXTURES_OVER_BUDGET,

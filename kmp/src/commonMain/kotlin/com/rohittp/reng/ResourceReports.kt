@@ -64,19 +64,18 @@ public data class ResourceReportEntry internal constructor(
 }
 
 /**
- * What RenG's CPU-side resident cache is holding, what it is allowed to hold, and what its budget
- * has already cost (ADR 0047, ADR 0048).
+ * What RenG's CPU-side resident cache is holding, what it may hold, and what its budget has already
+ * cost (ADR 0047, ADR 0048).
  *
  * [evictedKeyCount] and [evictedBytes] are **cumulative since the renderer was created** and never
- * decrease. They cannot be per-key: an evicted key is removed from the cache outright, precisely so
- * that a later reload is not mistaken for a reload after an explicit `freeResources` -- see ADR
- * 0047. Read a difference between two reports to learn whether the budget is currently biting; read
- * a single non-zero value to learn that something has left without the consumer asking.
+ * decrease. They cannot be per-key: an evicted key is removed outright, precisely so a later reload
+ * is not mistaken for one after an explicit `freeResources` (ADR 0047). Read a difference between
+ * two reports to learn whether the budget is currently biting.
  *
- * Every figure here describes the CPU cache alone -- the compiled style, sticker and geometry
- * images, model GLBs. It is not a whole-renderer memory total: rendered basemap tiles are never
- * installed in that cache, GPU bytes are reported per entry as [ResourceUsage.knownGpuBytes], and
- * raw tile pixels in flight are governed by `ResourceLimits.maximumInFlightRawBasemapTileBytes`.
+ * Every figure describes the CPU cache alone -- the compiled style, sticker and geometry images,
+ * model GLBs -- and is not a whole-renderer memory total: rendered basemap tiles are never installed
+ * there, GPU bytes are reported per entry as [ResourceUsage.knownGpuBytes], and raw tile pixels in
+ * flight are governed by `ResourceLimits.maximumInFlightRawBasemapTileBytes`.
  */
 @ConsistentCopyVisibility
 public data class ResourceResidency internal constructor(

@@ -58,14 +58,13 @@ internal class RenGClassGateRunner(private val limits: ResourceLimits) : ClassGa
      * (ADR 0060).
      *
      * Every gate re-derives its answer from the whole resource and the driver asks on every
-     * preparation, so a resident PNG that has not changed since the last frame was copied out of the
-     * store and decoded again purely to re-answer "is this a valid PNG". Measured by the fork this is
-     * ported from, on a OnePlus 12R: a frame carrying a 2048x1365 area fill, 334 ms to 119 ms.
+     * preparation, so an unchanged resident PNG was copied out of the store and decoded again purely
+     * to re-answer "is this a valid PNG". Measured on a OnePlus 12R by the fork this is ported from:
+     * a frame carrying a 2048x1365 area fill, 334 ms to 119 ms.
      *
      * Sound rather than merely likely: validity is a pure function of the bytes and `contentDigest`
-     * is a SHA-256 of exactly those bytes, so identical bytes cannot decode differently. Keyed by
-     * gate *and* digest because the three ask different questions of one resource — a GLB that parses
-     * may still use a feature outside ADR 0021's subset.
+     * is a SHA-256 of exactly those bytes. Keyed by gate *and* digest because the three ask different
+     * questions of one resource -- a GLB that parses may still use a feature outside ADR 0021's subset.
      */
     private val passedGates: MutableSet<String> = LinkedHashSet()
 

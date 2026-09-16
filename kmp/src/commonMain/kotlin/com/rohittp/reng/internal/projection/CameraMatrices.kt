@@ -262,25 +262,19 @@ internal const val NEAR_DISTANCE_LOGICAL_PIXELS: Double = 1.0
  * How near the horizon a ground ray is still trusted, as an angle from the downward axis, in
  * degrees (ADR 0064).
  *
- * **This is a numerical guard, not a work bound, and the distinction is the whole reason it sits
- * this close to 90.** A ray immediately below the horizon has a vanishing `q` and therefore an
- * arbitrarily large `t`, which used to reach tile selection as a footprint spanning thousands of
- * world copies -- an `OverBudget` frame failure, or a non-finite vertex collapsing to an empty map.
- * Bounding the *work* a steep frame costs is `basemapLodForGroundAngle`'s job, in tile selection
- * where the cost actually is, so this constant is free to be set purely on where the arithmetic
- * stops being trustworthy rather than on what a frame can afford.
+ * **A numerical guard, not a work bound**, which is why it sits this close to 90: a ray just below
+ * the horizon has a vanishing `q` and an arbitrarily large `t`, which used to reach tile selection
+ * as a footprint spanning thousands of world copies -- an `OverBudget` failure, or a non-finite
+ * vertex collapsing to an empty map. Bounding the *work* is `basemapLodForGroundAngle`'s job, which
+ * leaves this free to sit where the arithmetic stops being trustworthy.
  *
- * `89.25` is `maxMercatorHorizonAngle` from MapLibre GL JS
- * (`src/geo/projection/mercator_utils.ts`), adopted unchanged and with attribution. Their own
- * comment gives both bounds on it -- it "must be less than 90 to prevent errors", and "shouldn't be
- * too close to 90, or the distance to the horizon will become very large, unnecessarily increasing
- * the number of tiles needed to render the map." Only the first half is this constant's problem
- * here, so there is no evidence on which to retune it and it is inherited rather than rechosen.
+ * `89.25` is `maxMercatorHorizonAngle` from MapLibre GL JS (`src/geo/projection/mercator_utils.ts`),
+ * adopted unchanged and with attribution. Only their "must be less than 90 to prevent errors" half
+ * is this constant's problem here, so it is inherited rather than rechosen.
  *
- * Because the vertical half field of view is exactly 22.5 degrees and `theta = pitch + atan(v)`
- * exactly, the top row's angle is `pitch + 22.5`, so this bound first bites at `89.25 - 22.5 =
- * 66.75` degrees of pitch and not one row earlier. Measured across the sweep it removes 0.00% of
- * frame height at 66.75 degrees, 0.62% at 67.0 and 1.60% at 67.4.
+ * With a 22.5-degree vertical half field of view and `theta = pitch + atan(v)` exactly, this first
+ * bites at `89.25 - 22.5 = 66.75` degrees of pitch: measured across the sweep it removes 0.00% of
+ * frame height at 66.75, 0.62% at 67.0 and 1.60% at 67.4.
  */
 internal const val MAXIMUM_GROUND_ANGLE_DEGREES: Double = 89.25
 

@@ -129,16 +129,14 @@ internal fun uploadTexture(
  * Uploads [rgba] as a `GL_TEXTURE_2D` **without premultiplying it**, and returns its object name.
  *
  * The one caller is the basemap ground path on Rentile's `renderRaw`, whose tiles arrive already
- * premultiplied (ADR 0044). It exists as its own entry point rather than as a third
- * [TextureContent] because the bytes cannot travel in a [DecodedImage]: that type's contract says
- * unpremultiplied, in its own KDoc, and a variant that quietly carried the other kind would make
- * that sentence false for every reader after this one.
+ * premultiplied (ADR 0044). Its own entry point rather than a third [TextureContent] because the
+ * bytes cannot travel in a [DecodedImage], whose own KDoc says unpremultiplied -- a variant quietly
+ * carrying the other kind would make that sentence false.
  *
- * [sampler] defaults to [TextureContent.IMAGE]'s, which is what a basemap tile wants and has always
- * had: linear filtering, clamped on both axes. Everything after the premultiply decision —
- * generation, binding, the level-zero upload, the four `glTexParameteri` calls and the conditional
- * mipmap — is [uploadRgba], shared with [uploadTexture] so the two paths cannot drift in anything
- * except the one statement they are meant to differ in.
+ * [sampler] defaults to [TextureContent.IMAGE]'s: linear filtering, clamped on both axes, which is
+ * what a basemap tile has always had. Everything after the premultiply decision is [uploadRgba],
+ * shared with [uploadTexture] so the two cannot drift in anything but the one statement they are
+ * meant to differ in.
  */
 internal fun uploadPremultipliedTexture(
     binding: GlBinding,

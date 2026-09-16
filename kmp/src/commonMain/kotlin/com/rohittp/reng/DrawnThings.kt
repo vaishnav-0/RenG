@@ -11,17 +11,17 @@ import com.rohittp.reng.internal.requireUnicodeScalars
 /**
  * One repeating image a frame paints behind everything else it draws (ADR 0068).
  *
- * **It needs no horizon.** The backdrop is drawn first and full frame, so wherever the ground draws
- * it covers the backdrop, and wherever the ground does not -- above the horizon of a steeply pitched
- * camera, or anywhere at all in a frame drawn with `drawBasemap = false` -- the backdrop is what
- * remains. Nothing here computes where that boundary is, because nothing has to.
+ * **It needs no horizon.** The backdrop is drawn first and full frame, so the ground covers it
+ * wherever the ground draws, and wherever it does not -- above the horizon of a steep camera, or
+ * anywhere in a frame with `drawBasemap = false` -- the backdrop is what remains. Nothing here
+ * computes that boundary because nothing has to.
  *
- * **It is not a sky.** There is no gradient and no atmosphere; it does not rotate with bearing and
- * does not change with pitch, and the ground meets it at a hard line with no fade.
+ * **It is not a sky**: no gradient, no atmosphere, no response to bearing or pitch, and the ground
+ * meets it at a hard line with no fade.
  *
  * [tileSizeLogicalPixels] is how far the pattern repeats on screen, in logical pixels, rather than a
- * multiple of [image]'s own dimensions: choosing a pattern should not require knowing how many
- * pixels it happens to be encoded at.
+ * multiple of [image]'s own dimensions: choosing a pattern should not require knowing its encoded
+ * size.
  */
 @kotlinx.serialization.Serializable(with = BackdropSerializer::class)
 public data class Backdrop(

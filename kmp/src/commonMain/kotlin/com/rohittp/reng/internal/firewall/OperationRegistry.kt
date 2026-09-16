@@ -991,12 +991,11 @@ private class SuspendJoin<K : Any, V> {
     /**
      * Drops [key], but only while [deferred] is still the entry under it.
      *
-     * That identity check is unreachable as this class stands, and says so rather than implying a
-     * race it does not have: the only caller runs this to completion *before* completing its
-     * deferred, so no sibling can wake and install a successor in between, and nothing else removes
-     * an entry. It guards the ordering instead — moving [forget] after `completeExceptionally` looks
-     * like a harmless simplification and would make the race real, and this turns that mistake into
-     * a retry rather than a deferred nothing ever completes (ADR 0050).
+     * The identity check is unreachable as this class stands, and says so rather than implying a race
+     * it does not have: the only caller runs this to completion *before* completing its deferred. It
+     * guards the ordering instead -- moving [forget] after `completeExceptionally` looks like a
+     * harmless simplification and would make the race real, and this turns that into a retry rather
+     * than a deferred nothing ever completes (ADR 0050).
      *
      * Non-suspending, and that is load-bearing rather than a style choice: the only caller runs this
      * inside a catch for its own cancellation, where `Mutex.withLock` is a cancellable suspension
