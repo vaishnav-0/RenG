@@ -32,9 +32,9 @@ internal class TextureUnitCapturingBinding(
     /** Prior state per `GL_TEXTUREi` token, in the order the draw first touched them. */
     private val saved: LinkedHashMap<Int, GlTextureUnitState> = LinkedHashMap()
 
-    override fun activeTexture(texture: Int) {
-        activeUnit = texture
-        delegate.activeTexture(texture)
+    override fun activeTexture(unit: Int) {
+        activeUnit = unit
+        delegate.activeTexture(unit)
     }
 
     override fun bindTexture(target: Int, texture: Int) {
