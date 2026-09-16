@@ -72,8 +72,11 @@ class SceneContentTest {
             Scene(outputPixelSize = OUTPUT_SIZE, frameIndex = 0L),
             newStickerPipeline(),
             newGroundPipeline(),
-            backdropPipeline = pipeline,
-            backdrop = ResolvedBackdrop(texture = 5, repeatAcross = 2.0f, repeatDown = 3.0f),
+            backdrop = ResolvedBackdrop.Pattern(
+                pipeline = pipeline,
+                texture = 5,
+                repeat = BackdropRepeat(across = 2.0f, down = 3.0f),
+            ),
         ).draw(binding)
 
         assertTrue(binding.log.any { it == "bindTexture(0xDE1,5)" }, binding.log.toString())

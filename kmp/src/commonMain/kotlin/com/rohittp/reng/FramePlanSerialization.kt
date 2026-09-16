@@ -153,25 +153,51 @@ internal object PlacementSerializer : KSerializer<Placement> {
 // Backdrop
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * One surrogate over both cases rather than a polymorphic hierarchy, so a document written before
+ * `Backdrop.Shader` existed -- carrying `image` and nothing else -- still reads back as a
+ * [Backdrop.Pattern]. The case is decided by which half is present, and a document carrying both or
+ * neither is rejected rather than guessed at.
+ */
 @Serializable
 @SerialName("Backdrop")
 private class BackdropSurrogate(
-    @SerialName("image") val image: ResourceLocator,
-    @SerialName("tileSizeLogicalPixels") val tileSizeLogicalPixels: Double,
+    @SerialName("image") val image: ResourceLocator? = null,
+    @SerialName("tileSizeLogicalPixels") val tileSizeLogicalPixels: Double? = null,
+    @SerialName("shaderPair") val shaderPair: ShaderPair? = null,
+    @SerialName("uniforms") val uniforms: Map<String, ShaderValue> = emptyMap(),
+    @SerialName("textures") val textures: Map<String, ResourceLocator> = emptyMap(),
 )
 
 internal object BackdropSerializer : KSerializer<Backdrop> {
     private val delegate = BackdropSurrogate.serializer()
     override val descriptor: SerialDescriptor = delegate.descriptor
     override fun serialize(encoder: Encoder, value: Backdrop) {
-        encoder.encodeSerializableValue(
-            delegate,
-            BackdropSurrogate(value.image, value.tileSizeLogicalPixels),
-        )
+        val surrogate = when (value) {
+            is Backdrop.Pattern -> BackdropSurrogate(
+                image = value.image,
+                tileSizeLogicalPixels = value.tileSizeLogicalPixels,
+            )
+            is Backdrop.Shader -> BackdropSurrogate(
+                shaderPair = value.shaderPair,
+                uniforms = value.uniforms,
+                textures = value.textures,
+            )
+        }
+        encoder.encodeSerializableValue(delegate, surrogate)
     }
     override fun deserialize(decoder: Decoder): Backdrop {
         val it = decoder.decodeSerializableValue(delegate)
-        return Backdrop(it.image, it.tileSizeLogicalPixels)
+        require((it.image == null) != (it.shaderPair == null)) {
+            "a backdrop must carry exactly one of image or shaderPair"
+        }
+        if (it.shaderPair != null) return Backdrop.Shader(it.shaderPair, it.uniforms, it.textures)
+        val image = requireNotNull(it.image)
+        // An absent repeat distance takes the constructor's own default rather than a second copy
+        // of the number here, which is why this is two calls and not one with an elvis.
+        return it.tileSizeLogicalPixels
+            ?.let { size -> Backdrop.Pattern(image, size) }
+            ?: Backdrop.Pattern(image)
     }
 }
 

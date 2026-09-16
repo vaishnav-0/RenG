@@ -108,9 +108,11 @@ class DiagnosticsAndFailuresTest {
 
     @Test
     fun failureFactoryAcceptsEveryAllowedFailureTableShape() {
-        assertEquals(104, allowedFailureCases.size)
+        // 104 until ADR 0071 admitted an internal-pipeline identity for the two shader codes, which
+        // is two more rows and nothing else. A count moving for any other reason is the finding.
+        assertEquals(106, allowedFailureCases.size)
         assertEquals(33, allowedFailureCases.count { !it.hasDiagnostic })
-        assertEquals(71, allowedFailureCases.count { it.hasDiagnostic })
+        assertEquals(73, allowedFailureCases.count { it.hasDiagnostic })
         assertEquals(RenGErrorCode.entries.toSet(), allowedFailureCases.map { it.code }.toSet())
 
         allowedFailureCases.forEach(::assertFailureTableOutcome)
@@ -917,8 +919,14 @@ class DiagnosticsAndFailuresTest {
                 add(failureContext(RenGErrorCode.RESOURCE_PARSE_FAILED, PipelineStage.RESOURCE_PARSING, field, IdentityShape.EXTERNAL))
             }
             add(failureContext(RenGErrorCode.UNSUPPORTED_RESOURCE_FEATURE, PipelineStage.RESOURCE_PARSING, DiagnosticField.RESOURCE, IdentityShape.EXTERNAL))
+            // Both consumer-program kinds, and only those two: a geometry's, and -- since ADR 0071
+            // let a consumer supply the backdrop's source -- an internal pipeline's. EXTERNAL and
+            // OFFSCREEN_SURFACE stay rejected, which is what keeps this a rule rather than a
+            // waiver: those identities still cannot carry a shader-compilation failure.
             listOf(RenGErrorCode.SHADER_COMPILE_FAILED, RenGErrorCode.SHADER_LINK_FAILED).forEach { code ->
-                add(failureContext(code, PipelineStage.SHADER_COMPILATION, DiagnosticField.SHADER_PAIR, IdentityShape.GEOMETRY_PROGRAM))
+                listOf(IdentityShape.GEOMETRY_PROGRAM, IdentityShape.INTERNAL_PIPELINE).forEach { identity ->
+                    add(failureContext(code, PipelineStage.SHADER_COMPILATION, DiagnosticField.SHADER_PAIR, identity))
+                }
             }
             listOf(
                 PipelineStage.GPU_RESOURCE,

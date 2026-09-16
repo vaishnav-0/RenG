@@ -301,6 +301,44 @@ sealed interface com.rohittp.reng/AnimationSelector { // com.rohittp.reng/Animat
     }
 }
 
+sealed interface com.rohittp.reng/Backdrop { // com.rohittp.reng/Backdrop|null[0]
+    final class Pattern : com.rohittp.reng/Backdrop { // com.rohittp.reng/Backdrop.Pattern|null[0]
+        constructor <init>(com.rohittp.reng/ResourceLocator, kotlin/Double = ...) // com.rohittp.reng/Backdrop.Pattern.<init>|<init>(com.rohittp.reng.ResourceLocator;kotlin.Double){}[0]
+
+        final val image // com.rohittp.reng/Backdrop.Pattern.image|{}image[0]
+            final fun <get-image>(): com.rohittp.reng/ResourceLocator // com.rohittp.reng/Backdrop.Pattern.image.<get-image>|<get-image>(){}[0]
+        final val tileSizeLogicalPixels // com.rohittp.reng/Backdrop.Pattern.tileSizeLogicalPixels|{}tileSizeLogicalPixels[0]
+            final fun <get-tileSizeLogicalPixels>(): kotlin/Double // com.rohittp.reng/Backdrop.Pattern.tileSizeLogicalPixels.<get-tileSizeLogicalPixels>|<get-tileSizeLogicalPixels>(){}[0]
+
+        final fun component1(): com.rohittp.reng/ResourceLocator // com.rohittp.reng/Backdrop.Pattern.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // com.rohittp.reng/Backdrop.Pattern.component2|component2(){}[0]
+        final fun copy(com.rohittp.reng/ResourceLocator = ..., kotlin/Double = ...): com.rohittp.reng/Backdrop.Pattern // com.rohittp.reng/Backdrop.Pattern.copy|copy(com.rohittp.reng.ResourceLocator;kotlin.Double){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Backdrop.Pattern.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // com.rohittp.reng/Backdrop.Pattern.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // com.rohittp.reng/Backdrop.Pattern.toString|toString(){}[0]
+    }
+
+    final class Shader : com.rohittp.reng/Backdrop { // com.rohittp.reng/Backdrop.Shader|null[0]
+        constructor <init>(com.rohittp.reng/ShaderPair, kotlin.collections/Map<kotlin/String, com.rohittp.reng/ShaderValue> = ..., kotlin.collections/Map<kotlin/String, com.rohittp.reng/ResourceLocator> = ...) // com.rohittp.reng/Backdrop.Shader.<init>|<init>(com.rohittp.reng.ShaderPair;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ShaderValue>;kotlin.collections.Map<kotlin.String,com.rohittp.reng.ResourceLocator>){}[0]
+
+        final val shaderPair // com.rohittp.reng/Backdrop.Shader.shaderPair|{}shaderPair[0]
+            final fun <get-shaderPair>(): com.rohittp.reng/ShaderPair // com.rohittp.reng/Backdrop.Shader.shaderPair.<get-shaderPair>|<get-shaderPair>(){}[0]
+        final val textures // com.rohittp.reng/Backdrop.Shader.textures|{}textures[0]
+            final fun <get-textures>(): kotlin.collections/Map<kotlin/String, com.rohittp.reng/ResourceLocator> // com.rohittp.reng/Backdrop.Shader.textures.<get-textures>|<get-textures>(){}[0]
+        final val uniforms // com.rohittp.reng/Backdrop.Shader.uniforms|{}uniforms[0]
+            final fun <get-uniforms>(): kotlin.collections/Map<kotlin/String, com.rohittp.reng/ShaderValue> // com.rohittp.reng/Backdrop.Shader.uniforms.<get-uniforms>|<get-uniforms>(){}[0]
+
+        final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Backdrop.Shader.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // com.rohittp.reng/Backdrop.Shader.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // com.rohittp.reng/Backdrop.Shader.toString|toString(){}[0]
+    }
+
+    final object Companion : kotlinx.serialization.internal/SerializerFactory { // com.rohittp.reng/Backdrop.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Backdrop> // com.rohittp.reng/Backdrop.Companion.serializer|serializer(){}[0]
+        final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // com.rohittp.reng/Backdrop.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+    }
+}
+
 sealed interface com.rohittp.reng/PreparedFrame : kotlin/AutoCloseable { // com.rohittp.reng/PreparedFrame|null[0]
     abstract val frameIndex // com.rohittp.reng/PreparedFrame.frameIndex|{}frameIndex[0]
         abstract fun <get-frameIndex>(): kotlin/Long // com.rohittp.reng/PreparedFrame.frameIndex.<get-frameIndex>|<get-frameIndex>(){}[0]
@@ -510,26 +548,6 @@ final class com.rohittp.reng/AnimationTrack { // com.rohittp.reng/AnimationTrack
 
     final object Companion { // com.rohittp.reng/AnimationTrack.Companion|null[0]
         final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/AnimationTrack> // com.rohittp.reng/AnimationTrack.Companion.serializer|serializer(){}[0]
-    }
-}
-
-final class com.rohittp.reng/Backdrop { // com.rohittp.reng/Backdrop|null[0]
-    constructor <init>(com.rohittp.reng/ResourceLocator, kotlin/Double = ...) // com.rohittp.reng/Backdrop.<init>|<init>(com.rohittp.reng.ResourceLocator;kotlin.Double){}[0]
-
-    final val image // com.rohittp.reng/Backdrop.image|{}image[0]
-        final fun <get-image>(): com.rohittp.reng/ResourceLocator // com.rohittp.reng/Backdrop.image.<get-image>|<get-image>(){}[0]
-    final val tileSizeLogicalPixels // com.rohittp.reng/Backdrop.tileSizeLogicalPixels|{}tileSizeLogicalPixels[0]
-        final fun <get-tileSizeLogicalPixels>(): kotlin/Double // com.rohittp.reng/Backdrop.tileSizeLogicalPixels.<get-tileSizeLogicalPixels>|<get-tileSizeLogicalPixels>(){}[0]
-
-    final fun component1(): com.rohittp.reng/ResourceLocator // com.rohittp.reng/Backdrop.component1|component1(){}[0]
-    final fun component2(): kotlin/Double // com.rohittp.reng/Backdrop.component2|component2(){}[0]
-    final fun copy(com.rohittp.reng/ResourceLocator = ..., kotlin/Double = ...): com.rohittp.reng/Backdrop // com.rohittp.reng/Backdrop.copy|copy(com.rohittp.reng.ResourceLocator;kotlin.Double){}[0]
-    final fun equals(kotlin/Any?): kotlin/Boolean // com.rohittp.reng/Backdrop.equals|equals(kotlin.Any?){}[0]
-    final fun hashCode(): kotlin/Int // com.rohittp.reng/Backdrop.hashCode|hashCode(){}[0]
-    final fun toString(): kotlin/String // com.rohittp.reng/Backdrop.toString|toString(){}[0]
-
-    final object Companion { // com.rohittp.reng/Backdrop.Companion|null[0]
-        final fun serializer(): kotlinx.serialization/KSerializer<com.rohittp.reng/Backdrop> // com.rohittp.reng/Backdrop.Companion.serializer|serializer(){}[0]
     }
 }
 

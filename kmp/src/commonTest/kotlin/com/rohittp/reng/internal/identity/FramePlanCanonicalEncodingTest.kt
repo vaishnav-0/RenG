@@ -85,7 +85,7 @@ class FramePlanCanonicalEncodingTest {
             FramePlanSegment.GEOMETRIES to representativeFieldsPlan(geometries = listOf(geometry("vertex-b"))),
             FramePlanSegment.DRAW_LABELS to representativeFieldsPlan(drawLabels = false),
             FramePlanSegment.BACKDROP to representativeFieldsPlan(
-                backdrop = Backdrop(ResourceLocator("patterns/grid.png")),
+                backdrop = Backdrop.Pattern(ResourceLocator("patterns/grid.png")),
             ),
         )
         val baseEncoded = encoder.encode(base)
@@ -532,6 +532,59 @@ class FramePlanCanonicalEncodingTest {
             FramePlanSegment.BACKDROP,
         )
     }
+}
+
+/** ADR 0071: the two backdrop cases in the canonical encoding. */
+class BackdropCanonicalEncodingTest {
+    private val encoder = FramePlanCanonicalEncoder()
+
+    /**
+     * Tags 1 and 2 stay the pattern's and the shader takes 3 upward, so which tags are present is
+     * the discriminator. The payoff, and the reason this is asserted rather than assumed: a plan
+     * carrying a pattern encodes exactly as it did before the shader case existed -- tag `0001`
+     * first, the same image and repeat behind it -- so no Frame Identity moved and no cache was
+     * invalidated by the upgrade.
+     */
+    @Test
+    fun aPatternKeepsTagsOneAndTwoAndAShaderTakesThreeUpward() {
+        val pattern = encoder.encode(planWith(Backdrop.Pattern(ResourceLocator("p.png"), 128.0)))
+            .segmentPayloads[FramePlanSegment.BACKDROP.index].fixtureLowercaseHex()
+        val shader = encoder.encode(planWith(shaderBackdrop()))
+            .segmentPayloads[FramePlanSegment.BACKDROP.index].fixtureLowercaseHex()
+
+        // A present optional, then the first field header: tag 1 for a pattern, tag 3 for a shader.
+        assertTrue(pattern.startsWith("010001"), pattern)
+        assertTrue(shader.startsWith("010003"), shader)
+        assertFalse(pattern.startsWith("010003"), pattern)
+    }
+
+    /** Two backdrops that differ at all are two frames, so neither can serve the other's cache. */
+    @Test
+    fun everyDistinctBackdropReachesADistinctFrameIdentity() {
+        val identities = listOf(
+            null,
+            Backdrop.Pattern(ResourceLocator("p.png"), 128.0),
+            Backdrop.Pattern(ResourceLocator("p.png"), 256.0),
+            Backdrop.Pattern(ResourceLocator("q.png"), 128.0),
+            shaderBackdrop(),
+            shaderBackdrop(uniforms = mapOf("uTint" to ShaderValue.Scalar(2f))),
+        ).map { encoder.encode(planWith(it)).identity.digest.lowercaseHex }
+
+        assertEquals(identities.size, identities.toSet().size, identities.toString())
+    }
+
+    private fun shaderBackdrop(
+        uniforms: Map<String, ShaderValue> = mapOf("uTint" to ShaderValue.Scalar(1f)),
+    ): Backdrop.Shader = Backdrop.Shader(
+        shaderPair = ShaderPair(
+            vertexSource = "#version 300 es\nvoid main() {}\n",
+            fragmentSource = "#version 300 es\nvoid main() {}\n",
+        ),
+        uniforms = uniforms,
+    )
+
+    private fun planWith(backdrop: Backdrop?): FramePlan =
+        FramePlan(frameIndex = 1L, camera = Camera(1.0, 2.0, 3.0, 4.0, 5.0), backdrop = backdrop)
 }
 
 private val FramePlanSegment.index: Int

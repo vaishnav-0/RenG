@@ -174,3 +174,49 @@ class FramePlanSerializationTest {
         assertEquals(setOf("frameIndex", "camera"), keys, "a minimal plan wrote more than it had to")
     }
 }
+
+/** ADR 0071: both backdrop cases over the wire, and what an older document still means. */
+class BackdropSerializationTest {
+    private val json = Json
+
+    @Test
+    fun bothCasesRoundTrip() {
+        val pattern: Backdrop = Backdrop.Pattern(ResourceLocator("patterns/grid.png"), 128.0)
+        val shader: Backdrop = Backdrop.Shader(
+            shaderPair = ShaderPair(
+                vertexSource = "#version 300 es\nvoid main() {}\n",
+                fragmentSource = "#version 300 es\nvoid main() {}\n",
+            ),
+            uniforms = mapOf("uTint" to ShaderValue.Vec3(0.1f, 0.2f, 0.3f)),
+            textures = mapOf("uMask" to ResourceLocator("masks/a.png")),
+        )
+
+        assertEquals(pattern, json.decodeFromString<Backdrop>(json.encodeToString(pattern)))
+        assertEquals(shader, json.decodeFromString<Backdrop>(json.encodeToString(shader)))
+    }
+
+    /**
+     * A document written before `Backdrop.Shader` existed carries `image` and nothing else. It must
+     * still mean what it meant -- a pattern, at the default repeat -- rather than failing to parse
+     * or arriving with a shader half nobody wrote.
+     */
+    @Test
+    fun aDocumentWrittenBeforeTheShaderCaseStillReadsAsAPattern() {
+        val decoded = json.decodeFromString<Backdrop>("""{"image":"patterns/grid.png"}""")
+
+        assertEquals(Backdrop.Pattern(ResourceLocator("patterns/grid.png")), decoded)
+    }
+
+    /** Neither half, or both, is a document nobody could have written: rejected, not guessed at. */
+    @Test
+    fun aDocumentCarryingBothHalvesOrNeitherIsRejected() {
+        assertFailsWith<IllegalArgumentException> {
+            json.decodeFromString<Backdrop>("""{"tileSizeLogicalPixels":64.0}""")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            json.decodeFromString<Backdrop>(
+                """{"image":"p.png","shaderPair":{"vertexSource":"v","fragmentSource":"f"}}""",
+            )
+        }
+    }
+}

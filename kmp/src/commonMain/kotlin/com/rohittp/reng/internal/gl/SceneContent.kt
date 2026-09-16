@@ -467,7 +467,6 @@ internal class SceneContent(
     private val labelPipeline: LabelPipeline? = null,
     private val iconPipeline: IconPipeline? = null,
     private val globeGroundPipeline: GlobeGroundPipeline? = null,
-    private val backdropPipeline: BackdropPipeline? = null,
     private val backdrop: ResolvedBackdrop? = null,
 ) : GlFrameContent {
 
@@ -510,8 +509,14 @@ internal class SceneContent(
         // that draws its backdrop; returning early on an empty *scene* would make the one case a
         // consumer is most likely to try first, a backdrop with `drawBasemap = false`, silently
         // paint nothing.
-        if (backdropPipeline != null && backdrop != null) {
-            drawBackdrop(binding, backdropPipeline, backdrop)
+        if (backdrop != null) {
+            drawBackdrop(
+                binding = binding,
+                backdrop = backdrop,
+                resolutionWidthPixels = scene.outputPixelSize.width.toFloat(),
+                resolutionHeightPixels = scene.outputPixelSize.height.toFloat(),
+                frameIndex = scene.frameIndex,
+            )
         }
 
         if (scene.groundTiles.isEmpty() &&

@@ -191,3 +191,94 @@ class DrawnThingsTest {
             1.0,
         )
 }
+
+/** ADR 0071's public surface: the two backdrop cases and what `Shader` refuses. */
+class BackdropTest {
+
+    /**
+     * The `rengBackdrop` prefix is RenG's, and holding all of it -- not just the two names in use
+     * today -- is what lets a later cycle add a uniform without turning a legal consumer document
+     * into a constructor failure. ADR 0008 records that hazard; this is the guard against it.
+     */
+    @Test
+    fun aConsumerMayNotClaimAnyNameUnderRengsBackdropPrefix() {
+        assertFailsWith<IllegalArgumentException> {
+            Backdrop.Shader(SHADER_PAIR, uniforms = mapOf("rengBackdropRepeat" to ShaderValue.Scalar(1f)))
+        }
+        // Not yet a name RenG uses, and refused anyway -- which is the whole point of a prefix.
+        assertFailsWith<IllegalArgumentException> {
+            Backdrop.Shader(SHADER_PAIR, uniforms = mapOf("rengBackdropHorizon" to ShaderValue.Scalar(1f)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Backdrop.Shader(SHADER_PAIR, textures = mapOf("rengBackdropTexture" to ResourceLocator("a")))
+        }
+    }
+
+    /** The six documented interface names stay refused here exactly as they are on a `Geometry`. */
+    @Test
+    fun aConsumerMayNotClaimADocumentedInterfaceName() {
+        assertFailsWith<IllegalArgumentException> {
+            Backdrop.Shader(SHADER_PAIR, uniforms = mapOf("uResolution" to ShaderValue.Scalar(1f)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Backdrop.Shader(SHADER_PAIR, textures = mapOf("uFrameIndex" to ResourceLocator("a")))
+        }
+    }
+
+    /** A name that merely resembles the prefix is a consumer's to use. */
+    @Test
+    fun aNameThatOnlyResemblesThePrefixIsAccepted() {
+        Backdrop.Shader(SHADER_PAIR, uniforms = mapOf("rengBackdro" to ShaderValue.Scalar(1f)))
+        Backdrop.Shader(SHADER_PAIR, uniforms = mapOf("myRengBackdropTint" to ShaderValue.Scalar(1f)))
+    }
+
+    /**
+     * Not a `data class`, because a generated `toString` would print the consumer's shader source
+     * into every log that touches a frame plan.
+     */
+    @Test
+    fun aShaderBackdropNeverPrintsItsSource() {
+        val rendered = Backdrop.Shader(
+            ShaderPair(vertexSource = "#version 300 es\nSECRET_VERTEX", fragmentSource = "#version 300 es\nSECRET_FRAGMENT"),
+            uniforms = mapOf("uTint" to ShaderValue.Scalar(1f)),
+            textures = mapOf("uMask" to ResourceLocator("secret/mask.png")),
+        ).toString()
+
+        assertFalse(rendered.contains("SECRET_VERTEX"), rendered)
+        assertFalse(rendered.contains("SECRET_FRAGMENT"), rendered)
+        assertFalse(rendered.contains("uTint"), rendered)
+        assertFalse(rendered.contains("secret/mask.png"), rendered)
+    }
+
+    /** Equality is by value across all three fields, since it is hand-written rather than generated. */
+    @Test
+    fun twoShaderBackdropsAreEqualWhenEveryFieldIs() {
+        val one = Backdrop.Shader(SHADER_PAIR, mapOf("uTint" to ShaderValue.Scalar(1f)))
+        val same = Backdrop.Shader(SHADER_PAIR, mapOf("uTint" to ShaderValue.Scalar(1f)))
+        val different = Backdrop.Shader(SHADER_PAIR, mapOf("uTint" to ShaderValue.Scalar(2f)))
+
+        assertEquals(one, same)
+        assertEquals(one.hashCode(), same.hashCode())
+        assertNotEquals(one, different)
+        assertNotEquals<Backdrop>(one, Backdrop.Pattern(ResourceLocator("p.png")))
+    }
+
+    /** The pattern case keeps every rule ADR 0068 gave it. */
+    @Test
+    fun theRepeatDistanceMustStillBePositive() {
+        Backdrop.Pattern(ResourceLocator("p.png"), tileSizeLogicalPixels = 1.0)
+        assertFailsWith<IllegalArgumentException> {
+            Backdrop.Pattern(ResourceLocator("p.png"), tileSizeLogicalPixels = 0.0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Backdrop.Pattern(ResourceLocator("p.png"), tileSizeLogicalPixels = -1.0)
+        }
+    }
+
+    private companion object {
+        val SHADER_PAIR: ShaderPair = ShaderPair(
+            vertexSource = "#version 300 es\nvoid main() {}\n",
+            fragmentSource = "#version 300 es\nvoid main() {}\n",
+        )
+    }
+}

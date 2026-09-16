@@ -1,5 +1,6 @@
 package com.rohittp.reng.internal.planning
 
+import com.rohittp.reng.Backdrop
 import com.rohittp.reng.FramePlan
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.PipelineStage
@@ -12,6 +13,7 @@ import com.rohittp.reng.ResourceKind
 import com.rohittp.reng.ResourceLimits
 import com.rohittp.reng.ResourceLocator
 import com.rohittp.reng.ShaderPair
+import com.rohittp.reng.backdropForCore
 import com.rohittp.reng.geometriesForCore
 import com.rohittp.reng.internal.DiagnosticField
 import com.rohittp.reng.internal.diff.FrameStructuralDiff
@@ -28,7 +30,6 @@ import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.maximumBytesFor
 import com.rohittp.reng.internal.resource.RentilePrivateKey
 import com.rohittp.reng.internal.resource.RentilePrivateKeyResolver
-import com.rohittp.reng.backdropForCore
 import com.rohittp.reng.modelsForCore
 import com.rohittp.reng.stickersForCore
 
@@ -241,7 +242,24 @@ internal class FramePlanningCore(
         // ADR 0068. Its own class rather than STICKER_IMAGE: RenGRenderer pairs that class's
         // references with plan.stickers by index, and a backdrop among them is an off-by-one in
         // every sticker's texture.
-        plan.backdropForCore()?.let { backdrop -> external(backdrop.image, ResourceClass.BACKDROP_IMAGE) }
+        when (val backdrop = plan.backdropForCore()) {
+            null -> Unit
+            is Backdrop.Pattern -> external(backdrop.image, ResourceClass.BACKDROP_IMAGE)
+            // ADR 0071. Its textures traverse, its program does not, and the asymmetry is the same
+            // by-index trap ADR 0068 avoided one list over: `geometryPrograms` is required to have
+            // exactly one entry per planned geometry, so a backdrop's program among them is an
+            // off-by-one in every geometry's program. The backdrop compiles its own from the
+            // ShaderPair it already carries.
+            //
+            // MODEL_TEXTURE rather than BACKDROP_IMAGE, because that class is the wrapping
+            // GL_REPEAT pattern sampler and these are ordinary clamped consumer textures. Safe to
+            // share, unlike the program list: `externalImageReference` re-derives a MODEL_TEXTURE
+            // key from the locator rather than reading the traversal back by position.
+            is Backdrop.Shader ->
+                for ((_, locator) in backdrop.textures.entries.sortedBy { it.key }) {
+                    external(locator, ResourceClass.MODEL_TEXTURE)
+                }
+        }
         for (model in plan.modelsForCore()) {
             external(model.glb, ResourceClass.MODEL_GLB)
             model.texture?.let { texture -> external(texture, ResourceClass.MODEL_TEXTURE) }

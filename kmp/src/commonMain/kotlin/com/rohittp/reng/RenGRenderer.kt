@@ -12,7 +12,6 @@ import com.rohittp.reng.internal.driver.PreparationDriver
 import com.rohittp.reng.internal.failure.FailureDescriptor
 import com.rohittp.reng.internal.failure.toException
 import com.rohittp.reng.internal.failureContextDiagnostic
-import com.rohittp.reng.internal.groundPresentedProvisionallyDiagnostic
 import com.rohittp.reng.internal.firewall.AcquiredDemTile
 import com.rohittp.reng.internal.firewall.AcquiredLabelCandidates
 import com.rohittp.reng.internal.firewall.BasemapEngineHost
@@ -24,8 +23,13 @@ import com.rohittp.reng.internal.firewall.TerrainAcquisition
 import com.rohittp.reng.internal.firewall.TerrainAcquisitionOutcome
 import com.rohittp.reng.internal.firewall.reportLabelContentExclusions
 import com.rohittp.reng.internal.firewall.reportTerrainDegradation
+import com.rohittp.reng.internal.gl.BACKDROP_SAMPLER_STATE
+import com.rohittp.reng.internal.gl.BackdropPipeline
+import com.rohittp.reng.internal.gl.BackdropPipelineResult
 import com.rohittp.reng.internal.gl.CompositePipeline
 import com.rohittp.reng.internal.gl.CompositePipelineResult
+import com.rohittp.reng.internal.gl.ConsumerBackdropPipeline
+import com.rohittp.reng.internal.gl.ConsumerBackdropPipelineResult
 import com.rohittp.reng.internal.gl.GeometryPipeline
 import com.rohittp.reng.internal.gl.GeometryPipelineResult
 import com.rohittp.reng.internal.gl.GlBinding
@@ -37,18 +41,13 @@ import com.rohittp.reng.internal.gl.GlProgramCache
 import com.rohittp.reng.internal.gl.GlobeGroundPipeline
 import com.rohittp.reng.internal.gl.GlobeGroundPipelineResult
 import com.rohittp.reng.internal.gl.GpuTextureResidency
-import com.rohittp.reng.internal.gl.GroundTileWindow
-import com.rohittp.reng.internal.gl.ancestorOf
-import com.rohittp.reng.internal.gl.windowWithin
-import com.rohittp.reng.internal.gl.withCapturedGlState
-import com.rohittp.reng.internal.thread.CallingThread
-import com.rohittp.reng.internal.thread.currentCallingThread
-import com.rohittp.reng.internal.thread.isCurrentThread
 import com.rohittp.reng.internal.gl.GroundPipeline
 import com.rohittp.reng.internal.gl.GroundPipelineResult
+import com.rohittp.reng.internal.gl.GroundTileWindow
 import com.rohittp.reng.internal.gl.IconBatch
 import com.rohittp.reng.internal.gl.IconPipeline
 import com.rohittp.reng.internal.gl.IconPipelineResult
+import com.rohittp.reng.internal.gl.InternalPipelineRole
 import com.rohittp.reng.internal.gl.LabelBatch
 import com.rohittp.reng.internal.gl.LabelPipeline
 import com.rohittp.reng.internal.gl.LabelPipelineResult
@@ -58,6 +57,7 @@ import com.rohittp.reng.internal.gl.ModelShaderVariant
 import com.rohittp.reng.internal.gl.OffscreenSurface
 import com.rohittp.reng.internal.gl.OffscreenSurfaceResult
 import com.rohittp.reng.internal.gl.RenderContextProfile
+import com.rohittp.reng.internal.gl.ResolvedBackdrop
 import com.rohittp.reng.internal.gl.ResolvedIconQuad
 import com.rohittp.reng.internal.gl.Scene
 import com.rohittp.reng.internal.gl.SceneContent
@@ -67,10 +67,6 @@ import com.rohittp.reng.internal.gl.SceneModel
 import com.rohittp.reng.internal.gl.SceneSticker
 import com.rohittp.reng.internal.gl.SceneTerrain
 import com.rohittp.reng.internal.gl.SceneTileDem
-import com.rohittp.reng.internal.gl.BACKDROP_SAMPLER_STATE
-import com.rohittp.reng.internal.gl.BackdropPipeline
-import com.rohittp.reng.internal.gl.BackdropPipelineResult
-import com.rohittp.reng.internal.gl.resolvedBackdropFor
 import com.rohittp.reng.internal.gl.StickerPipeline
 import com.rohittp.reng.internal.gl.StickerPipelineResult
 import com.rohittp.reng.internal.gl.TextureContent
@@ -78,7 +74,10 @@ import com.rohittp.reng.internal.gl.TextureLease
 import com.rohittp.reng.internal.gl.TextureSamplerState
 import com.rohittp.reng.internal.gl.UploadedPrimitive
 import com.rohittp.reng.internal.gl.allModelShaderVariants
+import com.rohittp.reng.internal.gl.ancestorOf
+import com.rohittp.reng.internal.gl.createBackdropPipeline
 import com.rohittp.reng.internal.gl.createCompositePipeline
+import com.rohittp.reng.internal.gl.createConsumerBackdropPipeline
 import com.rohittp.reng.internal.gl.createGeometryPipeline
 import com.rohittp.reng.internal.gl.createGlobeGroundPipeline
 import com.rohittp.reng.internal.gl.createGroundPipeline
@@ -86,10 +85,11 @@ import com.rohittp.reng.internal.gl.createIconPipeline
 import com.rohittp.reng.internal.gl.createLabelPipeline
 import com.rohittp.reng.internal.gl.createModelPipeline
 import com.rohittp.reng.internal.gl.createOffscreenSurface
-import com.rohittp.reng.internal.gl.createBackdropPipeline
 import com.rohittp.reng.internal.gl.createStickerPipeline
 import com.rohittp.reng.internal.gl.defaultSamplerStateFor
+import com.rohittp.reng.internal.gl.deleteBackdropPipeline
 import com.rohittp.reng.internal.gl.deleteCompositePipeline
+import com.rohittp.reng.internal.gl.deleteConsumerBackdropPipeline
 import com.rohittp.reng.internal.gl.deleteGeometryPipeline
 import com.rohittp.reng.internal.gl.deleteGlObjects
 import com.rohittp.reng.internal.gl.deleteGlobeGroundPipeline
@@ -98,23 +98,26 @@ import com.rohittp.reng.internal.gl.deleteIconPipeline
 import com.rohittp.reng.internal.gl.deleteLabelPipeline
 import com.rohittp.reng.internal.gl.deleteModelPipeline
 import com.rohittp.reng.internal.gl.deleteOffscreenSurface
-import com.rohittp.reng.internal.gl.deleteBackdropPipeline
 import com.rohittp.reng.internal.gl.deleteStickerPipeline
 import com.rohittp.reng.internal.gl.demDecodeCoefficients
 import com.rohittp.reng.internal.gl.drawFrame
 import com.rohittp.reng.internal.gl.jointMatricesForSkin
 import com.rohittp.reng.internal.gl.offscreenSurfaceDescriptorFor
 import com.rohittp.reng.internal.gl.requireResolvedAtDrawTime
+import com.rohittp.reng.internal.gl.resolvedBackdropFor
 import com.rohittp.reng.internal.gl.uploadDemTexture
 import com.rohittp.reng.internal.gl.uploadGlyphAtlas
 import com.rohittp.reng.internal.gl.uploadModelPrimitive
-import com.rohittp.reng.internal.gl.uploadSpriteAtlas
 import com.rohittp.reng.internal.gl.uploadPremultipliedTexture
+import com.rohittp.reng.internal.gl.uploadSpriteAtlas
 import com.rohittp.reng.internal.gl.uploadTexture
+import com.rohittp.reng.internal.gl.windowWithin
+import com.rohittp.reng.internal.gl.withCapturedGlState
+import com.rohittp.reng.internal.groundPresentedProvisionallyDiagnostic
+import com.rohittp.reng.internal.identity.AcceleratedSha256
 import com.rohittp.reng.internal.identity.CanonicalIdentityRegistry
 import com.rohittp.reng.internal.identity.EncodedFramePlan
 import com.rohittp.reng.internal.identity.FramePlanCanonicalEncoder
-import com.rohittp.reng.internal.identity.AcceleratedSha256
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.image.DecodedImage
 import com.rohittp.reng.internal.image.PngDecodeResult
@@ -124,7 +127,6 @@ import com.rohittp.reng.internal.label.LabelFadeState
 import com.rohittp.reng.internal.label.LabelGroundElevation
 import com.rohittp.reng.internal.label.advanceLabelFade
 import com.rohittp.reng.internal.label.placeLabels
-import com.rohittp.reng.internal.metrics.EngineMetricRecorder
 import com.rohittp.reng.internal.lifecycle.GpuLedger
 import com.rohittp.reng.internal.lifecycle.PreparedFrameFact
 import com.rohittp.reng.internal.lifecycle.RenderTargetFact
@@ -134,6 +136,7 @@ import com.rohittp.reng.internal.lifecycle.RendererLifecycleSnapshot
 import com.rohittp.reng.internal.lifecycle.RendererOwnerState
 import com.rohittp.reng.internal.math.DoubleMatrix4
 import com.rohittp.reng.internal.maximumBytesFor
+import com.rohittp.reng.internal.metrics.EngineMetricRecorder
 import com.rohittp.reng.internal.model.AnimationResolution
 import com.rohittp.reng.internal.model.DecodedModel
 import com.rohittp.reng.internal.model.ModelDecodeResult
@@ -148,8 +151,8 @@ import com.rohittp.reng.internal.planning.FramePlanningCore
 import com.rohittp.reng.internal.planning.FramePlanningOutcome
 import com.rohittp.reng.internal.planning.FramePlanningRequest
 import com.rohittp.reng.internal.planning.SpatialOutcome
-import com.rohittp.reng.internal.planning.observeLabelTiles
 import com.rohittp.reng.internal.planning.StaticResourceReference
+import com.rohittp.reng.internal.planning.observeLabelTiles
 import com.rohittp.reng.internal.preparation.buildResourceOperationDefinition
 import com.rohittp.reng.internal.projection.ResolvedFrameCamera
 import com.rohittp.reng.internal.projection.ResolvedGlobeCamera
@@ -169,6 +172,9 @@ import com.rohittp.reng.internal.terrain.demTileWindowFor
 import com.rohittp.reng.internal.terrain.frameGroundCellsPerTileSide
 import com.rohittp.reng.internal.terrain.padDemTexture
 import com.rohittp.reng.internal.terrain.terrainCellsPerTileSide
+import com.rohittp.reng.internal.thread.CallingThread
+import com.rohittp.reng.internal.thread.currentCallingThread
+import com.rohittp.reng.internal.thread.isCurrentThread
 import com.rohittp.rentile.PreparedStyle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -191,18 +197,28 @@ internal class PreparedSticker(
 )
 
 /**
- * One frame's backdrop, fetched and decoded at `prepare()` time on the same terms a sticker's image
- * is, and carrying the repeat its plan asked for (ADR 0068).
+ * One frame's backdrop as `prepare()` leaves it (ADR 0068, ADR 0071).
  *
- * It keeps the [ResourceKey] for the same reason [PreparedSticker] does: `performDraw`'s texture
- * cache is keyed on it, so an unchanged backdrop is uploaded once rather than every frame. Its
+ * [Pattern] keeps its [ResourceKey] for the same reason [PreparedSticker] does: `performDraw`'s
+ * texture cache is keyed on it, so an unchanged backdrop uploads once rather than every frame. Its
  * sampler is not a sticker's, though -- see `BACKDROP_SAMPLER_STATE`.
+ *
+ * [Shader] decodes nothing of its own beyond its consumer textures; the program is compiled at draw,
+ * where the GL context is, and memoised by shader source from there on.
  */
-internal class PreparedBackdrop(
-    internal val resourceKey: ResourceKey,
-    internal val image: DecodedImage,
-    internal val tileSizeLogicalPixels: Double,
-)
+internal sealed interface PreparedBackdrop {
+    class Pattern(
+        internal val resourceKey: ResourceKey,
+        internal val image: DecodedImage,
+        internal val tileSizeLogicalPixels: Double,
+    ) : PreparedBackdrop
+
+    class Shader(
+        internal val shaderPair: ShaderPair,
+        internal val uniforms: Map<String, ShaderValue>,
+        internal val consumerTextures: Map<String, PreparedGeometryTexture>,
+    ) : PreparedBackdrop
+}
 
 /**
  * One [Geometry] consumer texture already fetched and decoded at `prepare()` time, paired with the
@@ -906,6 +922,14 @@ internal class RenGRenderer(
     private val geometryPipelines: MutableMap<ResourceKey, GeometryPipeline> = mutableMapOf()
 
     /**
+     * One pipeline per distinct consumer backdrop shader (ADR 0071), on exactly
+     * [geometryPipelines]' terms: memoised across frames, cleared without a delete when GPU objects
+     * are declared gone, and deleted at close.
+     */
+    private val consumerBackdropPipelines: MutableMap<ResourceKey, ConsumerBackdropPipeline> =
+        mutableMapOf()
+
+    /**
      * Every model program, compiled together on the first frame that carries a [Model] and never
      * before, keyed by the variant that selects it.
      *
@@ -1233,16 +1257,27 @@ internal class RenGRenderer(
                 .singleOrNull { it.resourceClass == ResourceClass.BASEMAP_STYLE }
 
             // ADR 0068. At most one, and its own class, so it cannot be confused with the sticker
-            // images that are paired back up by position above.
+            // images that are paired back up by position above. Only a pattern has one: ADR 0071's
+            // shader backdrop brings consumer textures instead, under MODEL_TEXTURE.
             val backdropReference = planned.staticResourceTraversal
                 .filterIsInstance<StaticResourceReference.External>()
                 .singleOrNull { it.resourceClass == ResourceClass.BACKDROP_IMAGE }
-            check((backdropReference == null) == (plan.backdrop == null)) {
-                "a backdrop traverses exactly when the plan carries one"
+            check((backdropReference == null) == (plan.backdrop !is Backdrop.Pattern)) {
+                "a backdrop image traverses exactly when the plan carries a pattern backdrop"
             }
+
+            // Recomputed rather than read back out of the traversal, for the reason
+            // `externalImageReference` gives: a MODEL_TEXTURE entry cannot be told from a
+            // geometry's by position.
+            val backdropTextureReferences: List<Pair<String, StaticResourceReference.External>> =
+                (plan.backdrop as? Backdrop.Shader)
+                    ?.textures?.entries?.sortedBy { it.key }
+                    ?.map { (name, locator) -> name to externalImageReference(locator) }
+                    .orEmpty()
 
             val imageReferences = stickerImageReferences +
                 listOfNotNull(backdropReference) +
+                backdropTextureReferences.map { it.second } +
                 modelTextureReferences.filterNotNull() +
                 geometryTextureReferencesByGeometry.flatten().map { it.second }
             // Post-world-copy-dedup by construction: `canonicalResources` is what BasemapTileSelector
@@ -1317,14 +1352,31 @@ internal class RenGRenderer(
                 groundSelectedLod = planned.spatialPlan.lodObservation.selectedLod,
             )
 
-            val preparedBackdrop = plan.backdrop?.let { backdrop ->
-                val reference = requireNotNull(backdropReference)
-                PreparedBackdrop(
-                    resourceKey = reference.resourceKey,
-                    image = requireNotNull(decodedByKey[reference.resourceKey]) {
-                        "a successful acquisition must decode a traversed backdrop image"
+            val preparedBackdrop = when (val backdrop = plan.backdrop) {
+                null -> null
+                is Backdrop.Pattern -> {
+                    val reference = requireNotNull(backdropReference)
+                    PreparedBackdrop.Pattern(
+                        resourceKey = reference.resourceKey,
+                        image = requireNotNull(decodedByKey[reference.resourceKey]) {
+                            "a successful acquisition must decode a traversed backdrop image"
+                        },
+                        tileSizeLogicalPixels = backdrop.tileSizeLogicalPixels,
+                    )
+                }
+                // The uniform map is snapshotted here for the reason Task 9b item 3 gives for a
+                // geometry's: it is the consumer's own reference until this `.toMap()`.
+                is Backdrop.Shader -> PreparedBackdrop.Shader(
+                    shaderPair = backdrop.shaderPair,
+                    uniforms = backdrop.uniforms.toMap(),
+                    consumerTextures = backdropTextureReferences.associate { (name, reference) ->
+                        name to PreparedGeometryTexture(
+                            resourceKey = reference.resourceKey,
+                            image = requireNotNull(decodedByKey[reference.resourceKey]) {
+                                "a successful backdrop-texture acquisition must decode every traversed image"
+                            },
+                        )
                     },
-                    tileSizeLogicalPixels = backdrop.tileSizeLogicalPixels,
                 )
             }
 
@@ -2504,6 +2556,7 @@ internal class RenGRenderer(
         iconPipeline = null
         globeGroundPipeline = null
         geometryPipelines.clear()
+        consumerBackdropPipelines.clear()
         // The model pipelines and every uploaded primitive are forgotten on exactly the same terms and
         // in exactly the same place as the geometry pipelines above: the joint uniform buffers, the
         // vertex arrays and the vertex/index buffers all died with the context, so there is nothing
@@ -2805,15 +2858,42 @@ internal class RenGRenderer(
         // ADR 0068. Uploaded through the same texture cache every other consumer image uses, so an
         // unchanged backdrop costs one upload for the life of the renderer, but with its own
         // wrapping sampler -- it is the only texture RenG repeats.
-        val resolvedBackdrop = frame.backdrop?.let { prepared ->
-            val texture = cachedTexture(prepared.resourceKey) {
-                uploadTexture(binding, prepared.image, TextureContent.IMAGE, BACKDROP_SAMPLER_STATE)
-            }
-            resolvedBackdropFor(
-                texture = texture,
-                outputPixelSize = resolvedCamera.outputPixelSize,
-                tileSizeLogicalPixels = prepared.tileSizeLogicalPixels,
+        val resolvedBackdrop = when (val prepared = frame.backdrop) {
+            null -> null
+            is PreparedBackdrop.Pattern -> ResolvedBackdrop.Pattern(
+                pipeline = backdropPipeline,
+                texture = cachedTexture(prepared.resourceKey) {
+                    uploadTexture(binding, prepared.image, TextureContent.IMAGE, BACKDROP_SAMPLER_STATE)
+                },
+                repeat = resolvedBackdropFor(
+                    outputPixelSize = resolvedCamera.outputPixelSize,
+                    tileSizeLogicalPixels = prepared.tileSizeLogicalPixels,
+                ),
             )
+            // Memoised by shader source across frames, exactly as a geometry's program is: the two
+            // maps are cleared and deleted on the same three occasions.
+            is PreparedBackdrop.Shader -> {
+                val key = geometryKeyDeriver
+                    .internalPipeline(InternalPipelineRole.BACKDROP, prepared.shaderPair).key
+                val pipeline = consumerBackdropPipelines[key] ?: when (
+                    val result = createConsumerBackdropPipeline(
+                        binding, profile.dialect, programs, prepared.shaderPair,
+                    )
+                ) {
+                    is ConsumerBackdropPipelineResult.Created ->
+                        result.pipeline.also { consumerBackdropPipelines[key] = it }
+                    is ConsumerBackdropPipelineResult.Failed -> return result.failure
+                }
+                ResolvedBackdrop.Shader(
+                    pipeline = pipeline,
+                    uniforms = prepared.uniforms,
+                    textures = prepared.consumerTextures.mapValues { (_, texture) ->
+                        cachedTexture(texture.resourceKey) {
+                            uploadTexture(binding, texture.image, TextureContent.DATA)
+                        }
+                    },
+                )
+            }
         }
 
         val content = SceneContent(
@@ -2825,7 +2905,6 @@ internal class RenGRenderer(
             labelPipeline = label,
             iconPipeline = icon,
             globeGroundPipeline = globeGround,
-            backdropPipeline = backdropPipeline,
             backdrop = resolvedBackdrop,
         )
 
@@ -3334,6 +3413,10 @@ internal class RenGRenderer(
                 iconPipeline?.let { deleteIconPipeline(binding, programs, it) }
                 geometryPipelines.values.forEach { deleteGeometryPipeline(binding, programs, it) }
                 geometryPipelines.clear()
+                consumerBackdropPipelines.values.forEach {
+                    deleteConsumerBackdropPipeline(binding, programs, it)
+                }
+                consumerBackdropPipelines.clear()
                 // The model pipelines are deleted here and the uploaded primitives are not, and the
                 // asymmetry is deliberate: `deleteModelPipeline` owns a joint uniform buffer that is
                 // registered nowhere, whereas every vertex array and buffer an uploaded primitive holds

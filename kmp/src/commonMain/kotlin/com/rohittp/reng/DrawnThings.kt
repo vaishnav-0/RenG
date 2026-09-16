@@ -3,39 +3,104 @@ package com.rohittp.reng
 import com.rohittp.reng.internal.canonicalDouble
 import com.rohittp.reng.internal.canonicalFloat
 import com.rohittp.reng.internal.freshListCopy
+import com.rohittp.reng.internal.gl.BACKDROP_RESERVED_NAME_PREFIX
 import com.rohittp.reng.internal.gl.MAXIMUM_CONSUMER_TEXTURES
 import com.rohittp.reng.internal.gl.RESERVED_SHADER_NAMES
 import com.rohittp.reng.internal.requireFiniteFloat
 import com.rohittp.reng.internal.requireUnicodeScalars
 
 /**
- * One repeating image a frame paints behind everything else it draws (ADR 0068).
+ * What a frame paints behind everything else it draws: a repeating image, or a shader the consumer
+ * writes (ADR 0068, ADR 0071).
  *
  * **It needs no horizon.** The backdrop is drawn first and full frame, so the ground covers it
  * wherever the ground draws, and wherever it does not -- above the horizon of a steep camera, or
  * anywhere in a frame with `drawBasemap = false` -- the backdrop is what remains. Nothing here
  * computes that boundary because nothing has to.
  *
- * **It is not a sky**: no gradient, no atmosphere, no response to bearing or pitch, and the ground
- * meets it at a hard line with no fade.
- *
- * [tileSizeLogicalPixels] is how far the pattern repeats on screen, in logical pixels, rather than a
- * multiple of [image]'s own dimensions: choosing a pattern should not require knowing its encoded
- * size.
+ * Sealed rather than one type with a nullable shader: a backdrop is a pattern or a program, and
+ * neither "both" nor "neither" means anything.
  */
 @kotlinx.serialization.Serializable(with = BackdropSerializer::class)
-public data class Backdrop(
-    public val image: ResourceLocator,
-    public val tileSizeLogicalPixels: Double = DEFAULT_BACKDROP_TILE_SIZE_LOGICAL_PIXELS,
-) {
-    init {
-        val validated = canonicalDouble(tileSizeLogicalPixels, "tileSizeLogicalPixels")
-        require(validated > 0.0) { "tileSizeLogicalPixels must be positive" }
+public sealed interface Backdrop {
+
+    /**
+     * A repeating image, with no response to bearing or pitch and a hard edge where the ground
+     * meets it.
+     *
+     * [tileSizeLogicalPixels] is how far the pattern repeats on screen, in logical pixels, rather
+     * than a multiple of [image]'s own dimensions: choosing a pattern should not require knowing
+     * its encoded size.
+     */
+    public data class Pattern(
+        public val image: ResourceLocator,
+        public val tileSizeLogicalPixels: Double = DEFAULT_BACKDROP_TILE_SIZE_LOGICAL_PIXELS,
+    ) : Backdrop {
+        init {
+            val validated = canonicalDouble(tileSizeLogicalPixels, "tileSizeLogicalPixels")
+            require(validated > 0.0) { "tileSizeLogicalPixels must be positive" }
+        }
+    }
+
+    /**
+     * A shader pair drawn over the same full-frame clip-space quad (ADR 0071).
+     *
+     * The vertex stage is the consumer's, and the one thing RenG binds into it is a `vec2`
+     * clip-space position at `layout(location = 0)` -- by location, never by name. RenG also sets
+     * `uResolution` (`vec2`, pixels) and `uFrameIndex` (`uint`) on whichever stage declares them,
+     * and sets nothing else: a shader declaring neither still draws (ADR 0008).
+     *
+     * [uniforms] and [textures] bind by name, in name order, exactly as a [Geometry]'s do. Names
+     * reserved for RenG's own interface are rejected, and so is anything beginning `rengBackdrop`:
+     * that prefix is RenG's, and holding it back is what lets a later cycle add a uniform without
+     * breaking a consumer who claimed the name first.
+     *
+     * Not a `data class`, because a generated `toString` would print the shader source.
+     */
+    public class Shader(
+        public val shaderPair: ShaderPair,
+        public val uniforms: Map<String, ShaderValue> = emptyMap(),
+        public val textures: Map<String, ResourceLocator> = emptyMap(),
+    ) : Backdrop {
+        init {
+            require(uniforms.keys.none(::isReservedBackdropShaderName)) {
+                "a backdrop uniform must not use a name reserved for RenG's own shader interface"
+            }
+            require(textures.keys.none(::isReservedBackdropShaderName)) {
+                "a backdrop texture must not use a name reserved for RenG's own shader interface"
+            }
+            require(textures.size <= MAXIMUM_CONSUMER_TEXTURES) {
+                "a backdrop may declare at most $MAXIMUM_CONSUMER_TEXTURES consumer textures"
+            }
+        }
+
+        override fun equals(other: Any?): Boolean =
+            other is Shader &&
+                shaderPair == other.shaderPair &&
+                uniforms == other.uniforms &&
+                textures == other.textures
+
+        override fun hashCode(): Int {
+            var result = shaderPair.hashCode()
+            result = 31 * result + uniforms.hashCode()
+            result = 31 * result + textures.hashCode()
+            return result
+        }
+
+        override fun toString(): String =
+            "Backdrop.Shader(shaderPair=<redacted>, uniforms=<redacted>, textures=<redacted>)"
     }
 }
 
 /** A 256 logical pixel repeat, which is one canonical tile side and a sane default for a pattern. */
 private const val DEFAULT_BACKDROP_TILE_SIZE_LOGICAL_PIXELS: Double = 256.0
+
+/**
+ * Whether [name] is RenG's rather than a consumer's: one of the documented interface names, or
+ * anything under the `rengBackdrop` prefix RenG's own backdrop uniforms already use (ADR 0071).
+ */
+private fun isReservedBackdropShaderName(name: String): Boolean =
+    name in RESERVED_SHADER_NAMES || name.startsWith(BACKDROP_RESERVED_NAME_PREFIX)
 
 @kotlinx.serialization.Serializable(with = StickerSerializer::class)
 public data class Sticker(

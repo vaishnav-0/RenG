@@ -1,11 +1,13 @@
 package com.rohittp.reng.internal.planning
 
 import com.rohittp.reng.AnchoringMode
+import com.rohittp.reng.Backdrop
 import com.rohittp.reng.FramePlan
 import com.rohittp.reng.OutputPixelSize
 import com.rohittp.reng.PipelineStage
 import com.rohittp.reng.Placement
 import com.rohittp.reng.RenGErrorCode
+import com.rohittp.reng.backdropForCore
 import com.rohittp.reng.geometriesForCore
 import com.rohittp.reng.internal.DiagnosticField
 import com.rohittp.reng.internal.failure.FailureDescriptor
@@ -93,6 +95,15 @@ internal fun planMercatorSpatial(
         val fragmentProfile = scanShaderProfile(geometry.shaderPair.fragmentSource) ?: return shaderProfileFailure()
         geometries += (geometryOutcome as SpatialOutcome.Success).value
         shaderProfiles += vertexProfile to fragmentProfile
+    }
+
+    // ADR 0071. Scanned here but not carried: `shaderProfiles` is paired with `geometries` by size
+    // and the backdrop has no geometry. What the scan buys is the failure arriving as the
+    // consumer's INVALID_VALUE at FRAME_PLANNING rather than as a GL fault at draw;
+    // `createConsumerBackdropPipeline` re-scans for itself, as `createGeometryPipeline` does.
+    (plan.backdropForCore() as? Backdrop.Shader)?.let { backdrop ->
+        scanShaderProfile(backdrop.shaderPair.vertexSource) ?: return shaderProfileFailure()
+        scanShaderProfile(backdrop.shaderPair.fragmentSource) ?: return shaderProfileFailure()
     }
 
     return SpatialOutcome.Success(

@@ -340,6 +340,18 @@ private enum class IdentityRequirement {
         override fun matches(key: ResourceKey?): Boolean =
             key?.kind == ResourceKind.GEOMETRY_PROGRAM && key.resourceClass == null
     },
+
+    /**
+     * A program compiled from source a consumer wrote: a geometry's, or -- since ADR 0071 -- a
+     * backdrop's, which is keyed as an internal pipeline because its role is RenG's even though its
+     * text is not. Both carry no resource class.
+     */
+    REQUIRED_CONSUMER_PROGRAM {
+        override fun matches(key: ResourceKey?): Boolean =
+            key != null &&
+                key.resourceClass == null &&
+                (key.kind == ResourceKind.GEOMETRY_PROGRAM || key.kind == ResourceKind.INTERNAL_PIPELINE)
+    },
     OPTIONAL_ANY {
         override fun matches(key: ResourceKey?): Boolean = true
     };
@@ -591,7 +603,9 @@ private fun failureRule(code: RenGErrorCode, stage: PipelineStage): FailureRule?
             PipelineStage.SHADER_COMPILATION,
             FailureRule.Context(
                 fields = setOf(DiagnosticField.SHADER_PAIR),
-                identity = IdentityRequirement.REQUIRED_GEOMETRY_PROGRAM,
+                // Widened from REQUIRED_GEOMETRY_PROGRAM by ADR 0071: a consumer's backdrop shader
+                // fails with these codes too, under an internal-pipeline key.
+                identity = IdentityRequirement.REQUIRED_CONSUMER_PROGRAM,
             ),
         )
 

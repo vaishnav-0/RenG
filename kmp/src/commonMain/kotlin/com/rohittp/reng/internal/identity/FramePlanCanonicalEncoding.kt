@@ -127,9 +127,25 @@ internal class FramePlanCanonicalEncoder(
         field(7, CanonicalBinary.u16(placement.altitudeMode.wireValue))
     }
 
+    /**
+     * Tags 1 and 2 stay the pattern's and tags 3 upward are the shader's, rather than a
+     * discriminator field ahead of a shared body (ADR 0018 calls the table permanent, ADR 0071 adds
+     * the case). Which tags are present *is* the discriminator, and the payoff is that a plan
+     * carrying a pattern encodes to the same bytes it did before the shader case existed -- so its
+     * Frame Identity does not move and no cache is invalidated by an upgrade.
+     */
     private fun encodeBackdrop(backdrop: Backdrop): CanonicalBytes = CanonicalBinary.fields {
-        field(1, CanonicalBinary.exactUtf8(backdrop.image.value))
-        field(2, CanonicalBinary.binary64(backdrop.tileSizeLogicalPixels))
+        when (backdrop) {
+            is Backdrop.Pattern -> {
+                field(1, CanonicalBinary.exactUtf8(backdrop.image.value))
+                field(2, CanonicalBinary.binary64(backdrop.tileSizeLogicalPixels))
+            }
+            is Backdrop.Shader -> {
+                field(3, encodeShaderPair(backdrop.shaderPair))
+                field(4, encodeUniforms(backdrop.uniforms))
+                field(5, encodeTextures(backdrop.textures))
+            }
+        }
     }
 
     private fun encodeSticker(sticker: Sticker): CanonicalBytes = CanonicalBinary.fields {

@@ -12,10 +12,13 @@ internal class GlProgramCache {
         key: ResourceKey,
         vertexPlan: ShaderProfilePlan,
         fragmentPlan: ShaderProfilePlan,
+        consumerAuthored: Boolean = false,
         infoLogObserver: ShaderInfoLogObserver = ShaderInfoLogObserver { _, _ -> },
     ): GlProgramResult {
         programs[key]?.let { return GlProgramResult.Linked(it) }
-        val result = compileShaderProgram(binding, dialect, key, vertexPlan, fragmentPlan, infoLogObserver)
+        val result = compileShaderProgram(
+            binding, dialect, key, vertexPlan, fragmentPlan, consumerAuthored, infoLogObserver,
+        )
         if (result is GlProgramResult.Linked) programs[key] = result.program
         return result
     }

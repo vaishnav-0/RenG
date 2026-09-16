@@ -425,23 +425,48 @@ internal fun drawGeometry(
         binding.uniform1ui(pipeline.frameIndexLocation, frameIndex.toInt())
     }
 
-    uniformsSnapshot.entries.sortedBy { it.key }.forEach { (name, value) ->
-        val location = pipeline.consumerLocation(binding, name)
+    bindConsumerValues(
+        binding = binding,
+        locate = { name -> pipeline.consumerLocation(binding, name) },
+        uniforms = uniformsSnapshot,
+        textures = texturesSnapshot,
+    )
+
+    binding.drawElements(GL_TRIANGLES, grid.triangleIndices.size, GL_UNSIGNED_SHORT, 0)
+}
+
+/**
+ * Binds [uniforms] and then [textures] by name, each resolved through [locate], in name order.
+ *
+ * Shared by the geometry pass and the consumer backdrop (ADR 0071) so the two cannot drift in how a
+ * name resolves, what an undeclared one does (nothing -- ADR 0008), or which unit a texture lands
+ * on. Name order rather than map order is what makes the unit assignment deterministic for a given
+ * document, and plain `String` comparison is what keeps it locale-independent.
+ *
+ * The `activeTexture`/`bindTexture` pair runs even when the sampler is undeclared: the unit is
+ * consumed either way, so skipping it would shift every later texture's unit.
+ */
+internal fun bindConsumerValues(
+    binding: GlBinding,
+    locate: (String) -> Int,
+    uniforms: Map<String, ShaderValue>,
+    textures: Map<String, Int>,
+) {
+    uniforms.entries.sortedBy { it.key }.forEach { (name, value) ->
+        val location = locate(name)
         if (location >= 0) {
             bindConsumerUniform(binding, location, value)
         }
     }
 
-    texturesSnapshot.entries.sortedBy { it.key }.forEachIndexed { unitIndex, (name, texture) ->
-        val samplerLocation = pipeline.consumerLocation(binding, name)
+    textures.entries.sortedBy { it.key }.forEachIndexed { unitIndex, (name, texture) ->
+        val samplerLocation = locate(name)
         binding.activeTexture(GL_TEXTURE0 + unitIndex)
         binding.bindTexture(GL_TEXTURE_2D, texture)
         if (samplerLocation >= 0) {
             binding.uniform1i(samplerLocation, unitIndex)
         }
     }
-
-    binding.drawElements(GL_TRIANGLES, grid.triangleIndices.size, GL_UNSIGNED_SHORT, 0)
 }
 
 /**
