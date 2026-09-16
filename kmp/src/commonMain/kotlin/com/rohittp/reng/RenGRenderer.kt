@@ -148,6 +148,7 @@ import com.rohittp.reng.internal.planning.FramePlanningCore
 import com.rohittp.reng.internal.planning.FramePlanningOutcome
 import com.rohittp.reng.internal.planning.FramePlanningRequest
 import com.rohittp.reng.internal.planning.SpatialOutcome
+import com.rohittp.reng.internal.planning.observeLabelTiles
 import com.rohittp.reng.internal.planning.StaticResourceReference
 import com.rohittp.reng.internal.preparation.buildResourceOperationDefinition
 import com.rohittp.reng.internal.projection.ResolvedFrameCamera
@@ -1013,6 +1014,13 @@ internal class RenGRenderer(
     private var retainedLabelHandover: RetainedLabelHandover? = null
 
     /**
+     * The label tile set the last labelled frame settled on (ADR 0070), so the next one can be handed
+     * the same list and hit [retainedLabelHandover] instead of re-acquiring every label tile and Glyph
+     * Range. Committed after a successful preparation, exactly as the selected LOD and the fade are.
+     */
+    private var previousLabelTiles: List<CanonicalBasemapTile>? = null
+
+    /**
      * The glyph atlas of [retainedLabelHandover]'s batch, decoded once rather than on every frame that
      * keeps a label.
      *
@@ -1261,8 +1269,13 @@ internal class RenGRenderer(
             // candidates. Task 8b is what makes one selection reachable from both switches -- since
             // that split the selection exists on a `drawBasemap = false, drawLabels = true` frame,
             // which is exactly the pairing that used to plan no tiles at all.
+            // ADR 0070: not the ground's selection. See [observeLabelTiles] -- the ground's set moves
+            // with the camera, and the label request key cannot afford to.
             val labelCanonicalTiles = if (plan.drawLabels) {
-                planned.spatialPlan.tileSelection?.canonicalResources.orEmpty()
+                observeLabelTiles(
+                    required = planned.spatialPlan.tileSelection?.canonicalResources.orEmpty(),
+                    previous = previousLabelTiles,
+                )
             } else {
                 emptyList()
             }
@@ -1438,6 +1451,7 @@ internal class RenGRenderer(
 
             previousEncodedPlan = planned.encodedPlan
             previousSelectedLod = planned.spatialPlan.lodObservation.selectedLod
+            if (plan.drawLabels) previousLabelTiles = labelCanonicalTiles
             previousLabelFade = labelFade.nextState
 
             // Bound to a local as well as to `prepared`, so the two statements below read the frame
@@ -3383,6 +3397,7 @@ internal class RenGRenderer(
                 // are dropped here rather than in `clearFrameHistory()` because they are caches -- see
                 // [labelHandover] for why that distinction is the whole decision.
                 retainedLabelHandover = null
+                previousLabelTiles = null
                 retainedGlyphAtlas = null
                 retainedSpriteAtlas = null
                 // The renderer owns exactly one Rentile engine (ADR 0016), so closing the renderer closes

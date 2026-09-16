@@ -45,8 +45,9 @@ import kotlinx.coroutines.test.runTest
  *
  * **The two ways a cache test passes for the wrong reason, and how each is closed here.**
  * - *A one-tile fixture cannot tell "cached the batch" from "cached nothing and the second call was
- *   cheap".* Every frame below selects **nine** tiles, and the tile assertions are exact sorted lists
- *   of nine urls rather than counts or set memberships, so a cache that retained eight of them, or that
+ *   cheap".* Every frame below selects **twenty-five** tiles -- the nine its camera covers plus ADR
+ *   0070's ring of one -- and the tile assertions are exact sorted lists of twenty-five urls rather
+ *   than counts or set memberships, so a cache that retained twenty-four of them, or that
  *   re-fetched one, fails.
  * - *Asserting a hit by object identity passes even if the cache serves a stale batch for a changed
  *   key.* So no assertion here compares object identity. The hit is asserted as request counts plus the
@@ -75,7 +76,7 @@ class RendererLabelResidencyTest {
         assertEquals(
             TILE_URLS_A,
             transport.tileUrls(),
-            "nine label tiles reach the consumer once across two frames, not eighteen times",
+            "twenty-five label tiles reach the consumer once across two frames, not fifty times",
         )
         assertEquals(
             GLYPH_URLS_A.sorted(),
@@ -116,6 +117,38 @@ class RendererLabelResidencyTest {
      * atlas however different their letters are. That was measured here by asserting it and watching it
      * fail -- see [residencyTileBytes], which gives [cameraB]'s tiles a fourth range of their own.
      */
+    /**
+     * ADR 0070 end to end, and the two halves are what make it a claim rather than an observation.
+     *
+     * A camera one tile east selects a **different** ground tile set -- that is the condition under
+     * which every release before this one re-acquired every label tile and every Glyph Range -- and
+     * the margin already covers it, so the consumer is asked for nothing at all. Three tiles east is
+     * outside the margin, and the traffic returns, which is what says the first half is the mechanism
+     * working rather than a renderer that has stopped asking for anything.
+     */
+    @Test
+    fun aCameraThatMovesInsideTheMarginAsksTheConsumerForNothing() = runTest {
+        val transport = ResidencyTransport()
+        val renderer = residencyRenderer(transport)
+
+        renderer.prepare(residencyPlan(frameIndex = 0L, camera = cameraA()))
+        val afterFirst = transport.tileUrls()
+        assertEquals(TILE_URLS_A, afterFirst, "the first frame fetches its own twenty-five")
+
+        renderer.prepare(residencyPlan(frameIndex = 1L, camera = cameraEastOfA(tiles = 1)))
+        assertEquals(
+            afterFirst,
+            transport.tileUrls(),
+            "a camera one tile east selects different ground tiles and fetches no label tile at all",
+        )
+
+        renderer.prepare(residencyPlan(frameIndex = 2L, camera = cameraEastOfA(tiles = 3)))
+        assertTrue(
+            transport.tileUrls().size > afterFirst.size,
+            "and three tiles east is past the margin, so the traffic returns",
+        )
+    }
+
     @Test
     fun aCameraMoveOntoADifferentTileSetReAcquiresRatherThanServingTheRetainedBatch() = runTest {
         val transport = ResidencyTransport()
@@ -128,7 +161,7 @@ class RendererLabelResidencyTest {
         assertEquals(
             (TILE_URLS_A + TILE_URLS_B).sorted(),
             transport.tileUrls(),
-            "the moved frame fetches its own nine tiles, and the unmoved one fetched none",
+            "the moved frame fetches its own twenty-five tiles, and the unmoved one fetched none",
         )
         assertEquals(
             (GLYPH_URLS_A + GLYPH_URLS_B).sorted(),
@@ -374,8 +407,21 @@ private fun cameraA(): Camera = Camera(
  *
  * Disjoint rather than adjacent on purpose: an overlapping move would let a partially correct
  * invalidation pass, because some of the second frame's tiles would legitimately be absent from the
- * second round of traffic. With no overlap, every one of the nine is either fetched or not.
+ * second round of traffic. With no overlap, every one of the twenty-five is either fetched or not.
  */
+/**
+ * [cameraA] moved [tiles] whole tiles east at zoom 4, where a tile spans `360 / 16` degrees. One tile
+ * moves the three-by-three ground selection by a column while staying inside ADR 0070's margin; three
+ * moves it clear of the margin entirely.
+ */
+private fun cameraEastOfA(tiles: Int): Camera = Camera(
+    latitude = cameraA().latitude,
+    unwrappedLongitude = cameraA().unwrappedLongitude + tiles * (360.0 / 16.0),
+    zoom = 4.0,
+    bearing = 0.0,
+    pitch = 0.0,
+)
+
 private fun cameraB(): Camera = Camera(
     latitude = -48.92249926375824,
     unwrappedLongitude = 101.25,
@@ -441,19 +487,27 @@ private val ICON_STYLE_JSON: String =
         """"paint":{"text-color":"#ffaa00","text-translate":[64,0]}}""" +
         """]}"""
 
-/** The nine tiles [cameraA] selects, as the exact urls the engine composes for them. */
+/**
+ * The tiles [cameraA]'s label acquisition asks for: the three-by-three its camera covers, widened to
+ * five-by-five by ADR 0070's ring of one. Written as the exact urls the engine composes for them.
+ */
 private val TILE_URLS_A: List<String> =
-    (2..4).flatMap { x -> (5..7).map { y -> "${TILE_PREFIX}4/$x/$y.pbf" } }.sorted()
+    (1..5).flatMap { x -> (4..8).map { y -> "${TILE_PREFIX}4/$x/$y.pbf" } }.sorted()
 
-/** The nine [cameraB] selects. Sharing no url with [TILE_URLS_A] is what the assertions rest on. */
+/**
+ * The same for [cameraB]. **Sharing no url with [TILE_URLS_A] is what the assertions rest on**, and the
+ * ring does not endanger it: the two cameras are eight tiles apart in `x` and one tile of margin each
+ * leaves them six apart, so the widened sets are still disjoint.
+ */
 private val TILE_URLS_B: List<String> =
-    (11..13).flatMap { x -> (9..11).map { y -> "${TILE_PREFIX}4/$x/$y.pbf" } }.sorted()
+    (10..14).flatMap { x -> (8..12).map { y -> "${TILE_PREFIX}4/$x/$y.pbf" } }.sorted()
 
 /**
  * The letter tile `(x, y)` carries, which is what makes two tile sets produce two different atlases.
  *
- * `A + (x + 3y) mod 26` gives [TILE_URLS_A]'s nine tiles the letters `R..Z` and [TILE_URLS_B]'s `M..U`
- * -- overlapping ranges but different *sets*, so the glyphs Rentile packs for the two differ and its own
+ * `A + (x + 3y) mod 26` gives [TILE_URLS_A]'s twenty-five tiles the letters `N..Z` and `A..D`, and
+ * [TILE_URLS_B]'s `I..Y` -- overlapping ranges but different *sets*, so the glyphs Rentile packs differ
+ * between them and its own
  * `LabelCandidateBatch.contentKey` differs with them. Every candidate in the batch contributes, not only
  * the on-screen one, because the closure is frozen over every tile the plan was handed.
  */
@@ -467,7 +521,7 @@ private fun tileLetter(x: Int, y: Int): Char = 'A' + ((x + 3 * y) % 26)
  * fixture could not distinguish two atlases at all. Rentile packs every glyph of every Glyph Range it
  * fetched rather than only the ones its candidates used -- measured here, by asserting the opposite and
  * watching it fail -- so two tile sets needing the same three ranges pack a **byte-identical** atlas
- * under one `contentKey` however different their letters are. [TILE_URLS_B]'s nine tiles all sit at
+ * under one `contentKey` however different their letters are. [TILE_URLS_B]'s tiles all sit at
  * `x >= 8`, so they alone need the sans `512-767` range, and that is what makes the moved frame's atlas
  * a genuinely different one rather than the same one sampled differently.
  */
