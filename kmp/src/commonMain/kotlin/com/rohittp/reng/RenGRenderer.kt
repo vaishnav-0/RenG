@@ -1738,16 +1738,17 @@ internal class RenGRenderer(
     ): List<PreparedGroundInstance> {
         if (instances.isEmpty() || styleDigest == null) return emptyList()
         val renderedKeys = renderedTiles.mapTo(HashSet()) { it.key }
-        val keyByCanonicalTile = HashMap<CanonicalBasemapTile, ResourceKey>(renderedTiles.size)
         return instances.map { instance ->
             val canonical = CanonicalBasemapTile(
                 lod = instance.lod,
                 tileY = instance.tileY,
                 canonicalX = instance.canonicalX,
             )
-            val key = keyByCanonicalTile.getOrPut(canonical) {
-                basemapEngineHost.renderedTileKey(styleDigest, instance)
-            }
+            // The local memo this used to keep is gone: it collapsed the several unwrapped world-copy
+            // instances of one canonical tile, which the host's own remembrance now does (ADR 0069),
+            // and it could never see the derivations `renderBasemapTiles` made for the same tiles a
+            // moment earlier in this same frame.
+            val key = basemapEngineHost.renderedTileKey(styleDigest, instance)
             // Rendered this frame, already on the GPU from an earlier one, or -- since ADR 0057 --
             // coming from a resident ancestor because this frame's budget declined to rasterise it.
             // All three are ways for the draw to have pixels; only naming none of them is a defect.

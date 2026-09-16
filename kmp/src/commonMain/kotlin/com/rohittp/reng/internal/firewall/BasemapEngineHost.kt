@@ -122,6 +122,12 @@ internal class BasemapEngineHost(
 
     private var derivedManifest: StyleManifestBinding? = null
 
+    /**
+     * Derived rendered-tile keys, by the two inputs that can vary (ADR 0069). A `LinkedHashMap` because
+     * the bound is spent oldest-first.
+     */
+    private val rememberedTileKeys: MutableMap<RememberedTileKeyIdentity, ResourceKey> = LinkedHashMap()
+
     private var closed: Boolean = false
 
     val isClosed: Boolean get() = closed
@@ -924,7 +930,7 @@ internal class BasemapEngineHost(
 
     /** RenG's own identity for the rendered tile [tile] of [style] at this host's tile output size. */
     fun renderedTileKey(style: PreparedStyle, tile: CanonicalBasemapTile): ResourceKey =
-        basemapTileKey(style.digest, tile, tileOutputSize, sha256)
+        rememberedTileKey(style.digest, tile)
 
     /**
      * The same identity for one unwrapped draw [instance], which the world-copy-projecting overload of
@@ -939,10 +945,52 @@ internal class BasemapEngineHost(
      * `basemapStyleDigest` and never the `PreparedStyle` it came from.
      */
     fun renderedTileKey(styleDigest: String, tile: CanonicalBasemapTile): ResourceKey =
-        basemapTileKey(styleDigest, tile, tileOutputSize, sha256)
+        rememberedTileKey(styleDigest, tile)
 
     fun renderedTileKey(styleDigest: String, instance: BasemapTileInstance): ResourceKey =
-        basemapTileKey(styleDigest, instance, tileOutputSize, sha256)
+        rememberedTileKey(
+            styleDigest,
+            // The world copy is projected away before the key is derived, exactly as the overload of
+            // [basemapTileKey] this used to call does, so every unwrapped instance of one canonical
+            // tile shares one entry here as well as one rendered resource.
+            CanonicalBasemapTile(
+                lod = instance.lod,
+                tileY = instance.tileY,
+                canonicalX = instance.canonicalX,
+            ),
+        )
+
+    /**
+     * [basemapTileKey] for `(styleDigest, tile)`, derived once and then remembered (ADR 0069).
+     *
+     * **The derivation is not cheap and it used to run twice per visible tile per frame**, before
+     * anything had been decided: `renderBasemapTiles` asks for every canonical tile's key
+     * unconditionally to test residency, `groundInstances` asks for the same keys again, and each ask
+     * built a fresh `ResourceKeyDeriver`, a canonical binary, a SHA-256 and a 64-character hex string.
+     * At the tile counts `CLAUDE.md` records -- 93 canonical tiles at 3840x2160 and pitch 0, 167 with
+     * a frame of LOD history -- a perfectly still camera with every tile already resident paid all of
+     * it on every frame forever.
+     *
+     * The answer is a pure function of `(styleDigest, tile)`: the other two inputs are [tileOutputSize]
+     * and [sha256], both fixed for this host's lifetime, which is the whole reason
+     * [renderedTileKey] is asked of the host rather than derived by callers.
+     *
+     * Bounded at [MAXIMUM_REMEMBERED_TILE_KEYS], oldest first, in the shape
+     * `ClassGateRunner.remember` already established rather than a second one.
+     */
+    private fun rememberedTileKey(styleDigest: String, tile: CanonicalBasemapTile): ResourceKey {
+        val identity = RememberedTileKeyIdentity(styleDigest, tile)
+        rememberedTileKeys[identity]?.let { return it }
+
+        val key = basemapTileKey(styleDigest, tile, tileOutputSize, sha256)
+        rememberedTileKeys[identity] = key
+        val oldest = rememberedTileKeys.iterator()
+        while (rememberedTileKeys.size > MAXIMUM_REMEMBERED_TILE_KEYS) {
+            oldest.next()
+            oldest.remove()
+        }
+        return key
+    }
 
     /**
      * Idempotent. Releases the compiled style's lease, then closes the engine — whose own `close()` is
@@ -1311,6 +1359,22 @@ private fun underivableGlyphRoutesFailure(): RenGException = FailureDescriptor(
         fieldName = DiagnosticField.RESOURCE,
     ),
 ).toException()
+
+/** What a remembered rendered-tile key varies by; everything else [basemapTileKey] takes is fixed per host. */
+private data class RememberedTileKeyIdentity(
+    val styleDigest: String,
+    val tile: CanonicalBasemapTile,
+)
+
+/**
+ * How many rendered-tile keys one host remembers (ADR 0069).
+ *
+ * `RendererConfiguration.maximumBasemapTileInstances` is capped at 4096 and canonical tiles are never
+ * more numerous than the instances naming them, so this is exactly large enough that **one frame can
+ * never evict a key it is still using**. Past that the policy is uninteresting: forgetting costs one
+ * re-derivation, which is what every frame did for every tile before this cache existed.
+ */
+internal const val MAXIMUM_REMEMBERED_TILE_KEYS: Int = 4096
 
 /** The failure for work asked of an already-closed host: the ground did not draw, and nothing more. */
 private fun basemapRenderFailure(): FailureDescriptor =

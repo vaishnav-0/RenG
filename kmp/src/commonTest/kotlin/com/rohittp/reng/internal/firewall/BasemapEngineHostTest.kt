@@ -26,6 +26,8 @@ import com.rohittp.reng.internal.basemap.BasemapTileJsonOutcome
 import com.rohittp.reng.internal.cache.ResidentCache
 import com.rohittp.reng.internal.identity.CanonicalBytes
 import com.rohittp.reng.internal.identity.PureKotlinSha256
+import com.rohittp.reng.internal.identity.Sha256Function
+import com.rohittp.reng.internal.identity.Sha256Digest
 import com.rohittp.reng.internal.GpuByteAccount
 import com.rohittp.reng.internal.identity.ResourceKeyDeriver
 import com.rohittp.reng.internal.planning.BasemapTileInstance
@@ -1390,16 +1392,150 @@ internal fun hostStyleRecord(json: String = HOST_STYLE_JSON): StoredRawResource 
 internal fun hostEngineSanitizedIdOf(url: String): String =
     PureKotlinSha256.digest(CanonicalBytes(redactAuthenticationQuery(url).encodeToByteArray())).lowercaseHex
 
+class RenderedTileKeyRemembranceTest {
+    /**
+     * ADR 0069's claim, and it is counted rather than timed: the derivation builds a fresh
+     * `ResourceKeyDeriver`, a canonical binary, a SHA-256 and a hex string, and it used to run twice
+     * per visible tile on every frame forever. Asking fifty times must hash exactly as much as asking
+     * once.
+     */
+    @Test
+    fun aRenderedTileKeyIsDerivedOnceHoweverManyTimesItIsAsked() {
+        val sha256 = CountingSha256()
+        val host = basemapEngineHost(sha256 = sha256)
+        val tile = CanonicalBasemapTile(lod = 14, tileY = 5, canonicalX = 9)
+
+        val first = host.renderedTileKey(STYLE_DIGEST, tile)
+        val afterFirst = sha256.digests
+        assertTrue(afterFirst > 0, "the first ask must actually derive something")
+
+        repeat(50) { assertEquals(first, host.renderedTileKey(STYLE_DIGEST, tile)) }
+
+        assertEquals(afterFirst, sha256.digests)
+    }
+
+    /**
+     * The instance overload projects the world copy away before it asks, so the several unwrapped
+     * copies of one canonical tile share one entry as well as one rendered resource -- the property
+     * the local map in `groundInstances` used to provide and this replaces.
+     */
+    @Test
+    fun everyUnwrappedCopyOfOneTileSharesTheSameRemembrance() {
+        val sha256 = CountingSha256()
+        val host = basemapEngineHost(sha256 = sha256)
+        val tile = CanonicalBasemapTile(lod = 14, tileY = 5, canonicalX = 9)
+
+        val canonical = host.renderedTileKey(STYLE_DIGEST, tile)
+        val afterFirst = sha256.digests
+
+        for (copy in -2..2) {
+            val instance = BasemapTileInstance(
+                lod = 14,
+                tileY = 5,
+                unwrappedX = 9L + copy * (1L shl 14),
+                instanceCopy = copy,
+                canonicalX = 9,
+            )
+            assertEquals(canonical, host.renderedTileKey(STYLE_DIGEST, instance))
+        }
+
+        assertEquals(afterFirst, sha256.digests)
+    }
+
+    /** The style digest is half the identity, so two styles never share an answer. */
+    @Test
+    fun aDifferentStyleDerivesItsOwnKey() {
+        val sha256 = CountingSha256()
+        val host = basemapEngineHost(sha256 = sha256)
+        val tile = CanonicalBasemapTile(lod = 3, tileY = 1, canonicalX = 2)
+
+        val first = host.renderedTileKey(STYLE_DIGEST, tile)
+        val afterFirst = sha256.digests
+        val second = host.renderedTileKey(OTHER_STYLE_DIGEST, tile)
+
+        assertNotEquals(first, second)
+        assertTrue(sha256.digests > afterFirst)
+    }
+
+    /** A cache that returned one tile's key for another would be worse than no cache at all. */
+    @Test
+    fun distinctTilesNeverShareARememberedKey() {
+        val host = basemapEngineHost()
+        val keys = mutableSetOf<ResourceKey>()
+        for (lod in 1..4) {
+            for (y in 0..3) {
+                for (x in 0..3) {
+                    keys += host.renderedTileKey(
+                        STYLE_DIGEST,
+                        CanonicalBasemapTile(lod = lod, tileY = y, canonicalX = x),
+                    )
+                }
+            }
+        }
+        assertEquals(4 * 4 * 4, keys.size)
+    }
+
+    /**
+     * The bound is exactly `maximumBasemapTileInstances`' own ceiling, so one frame can never evict a
+     * key it is still using -- which is the whole argument for the number. Past it the oldest goes,
+     * and forgetting costs one re-derivation, which is what every frame used to pay for every tile.
+     */
+    @Test
+    fun theRemembranceIsBoundedAndForgetsTheOldestFirst() {
+        val sha256 = CountingSha256()
+        val host = basemapEngineHost(sha256 = sha256)
+        fun tileAt(index: Int) = CanonicalBasemapTile(lod = 22, tileY = index, canonicalX = 0)
+
+        val oldest = tileAt(0)
+        host.renderedTileKey(STYLE_DIGEST, oldest)
+        for (index in 1 until MAXIMUM_REMEMBERED_TILE_KEYS) host.renderedTileKey(STYLE_DIGEST, tileAt(index))
+
+        // Still exactly full, so the first entry is still remembered.
+        val beforeOverflow = sha256.digests
+        host.renderedTileKey(STYLE_DIGEST, oldest)
+        assertEquals(beforeOverflow, sha256.digests)
+
+        // One past the bound evicts it, and the newcomer stays.
+        val newcomer = tileAt(MAXIMUM_REMEMBERED_TILE_KEYS)
+        host.renderedTileKey(STYLE_DIGEST, newcomer)
+        val afterOverflow = sha256.digests
+        host.renderedTileKey(STYLE_DIGEST, oldest)
+        assertTrue(sha256.digests > afterOverflow, "the oldest entry must have been forgotten")
+
+        val afterRederiving = sha256.digests
+        host.renderedTileKey(STYLE_DIGEST, newcomer)
+        assertEquals(afterRederiving, sha256.digests, "the newcomer must still be remembered")
+    }
+
+    private companion object {
+        const val STYLE_DIGEST: String = "0123456789abcdef"
+        const val OTHER_STYLE_DIGEST: String = "fedcba9876543210"
+    }
+}
+
 internal fun basemapEngineHost(
     transport: Transport = CountingHostTransport(),
     store: Store = CountingHostStore(),
     cache: ResidentCache = ResidentCache(),
+    sha256: Sha256Function = PureKotlinSha256,
 ): BasemapEngineHost = BasemapEngineHost(
     transport = transport,
     store = store,
     cache = cache,
     tileOutputSizePixels = 512,
+    sha256 = sha256,
 )
+
+/** Counts what [BasemapEngineHost] hashes, so a derivation that did not happen is observable. */
+internal class CountingSha256 : Sha256Function {
+    var digests: Int = 0
+        private set
+
+    override fun digest(bytes: CanonicalBytes): Sha256Digest {
+        digests += 1
+        return PureKotlinSha256.digest(bytes)
+    }
+}
 
 /** Counts every [Transport.execute] call and records the last request. Single-threaded by design: every
  *  test here drives it from one `runTest` scheduler. */
