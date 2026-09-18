@@ -276,6 +276,82 @@ class ConsumerBackdropPipelineTest {
         assertTrue(first != rengsOwn)
     }
 
+    /**
+     * ADR 0072's uniform, bound on a shader that declares it. Sixteen floats, column-major, and
+     * `transpose = false` -- GL is told to read them as they are, so a transposed upload would be
+     * a silently mirrored grid rather than an error.
+     */
+    @Test
+    fun aShaderDeclaringTheInverseViewProjectionReceivesIt() {
+        val binding = RecordingGlBinding().withDeclaredNames(
+            BACKDROP_INVERSE_VIEW_PROJECTION_UNIFORM_NAME to INVERSE_LOCATION,
+        )
+        val pipeline = createdPipeline(binding)
+        val matrix = FloatArray(16) { it.toFloat() }
+        binding.log.clear()
+
+        drawBackdrop(
+            binding = binding,
+            backdrop = ResolvedBackdrop.Shader(pipeline, emptyMap(), emptyMap(), matrix),
+            resolutionWidthPixels = 1f,
+            resolutionHeightPixels = 1f,
+            frameIndex = 0L,
+        )
+
+        assertTrue(
+            binding.log.any { it.startsWith("uniformMatrix4fv($INVERSE_LOCATION,1,false") },
+            binding.log.toString(),
+        )
+        // The exact sixteen floats, in the order handed over: a transposing upload would still
+        // log a call and still draw, and only the values tell the two apart.
+        assertEquals(matrix.toList(), binding.uniformMatrix4fvValues[INVERSE_LOCATION]?.toList())
+    }
+
+    /**
+     * A camera that does not invert binds nothing, rather than binding an identity a shader would
+     * read as a real answer and draw a grid from.
+     */
+    @Test
+    fun anUninvertibleCameraBindsNoMatrixAtAll() {
+        val binding = RecordingGlBinding().withDeclaredNames(
+            BACKDROP_INVERSE_VIEW_PROJECTION_UNIFORM_NAME to INVERSE_LOCATION,
+        )
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawBackdrop(
+            binding = binding,
+            backdrop = ResolvedBackdrop.Shader(pipeline, emptyMap(), emptyMap(), inverseViewProjection = null),
+            resolutionWidthPixels = 1f,
+            resolutionHeightPixels = 1f,
+            frameIndex = 0L,
+        )
+
+        assertTrue(binding.log.none { it.startsWith("uniformMatrix4fv") }, binding.log.toString())
+        assertTrue(binding.log.any { it.startsWith("drawArrays(0x5,0,4)") }, binding.log.toString())
+    }
+
+    /** A shader that never names it still draws, which is ADR 0008 holding for this uniform too. */
+    @Test
+    fun aShaderNotDeclaringTheInverseViewProjectionStillDraws() {
+        val binding = RecordingGlBinding().withNoDeclaredNames()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        drawBackdrop(
+            binding = binding,
+            backdrop = ResolvedBackdrop.Shader(
+                pipeline, emptyMap(), emptyMap(), FloatArray(16) { it.toFloat() },
+            ),
+            resolutionWidthPixels = 1f,
+            resolutionHeightPixels = 1f,
+            frameIndex = 0L,
+        )
+
+        assertTrue(binding.log.none { it.startsWith("uniformMatrix4fv") }, binding.log.toString())
+        assertTrue(binding.log.any { it.startsWith("drawArrays(0x5,0,4)") }, binding.log.toString())
+    }
+
     private fun createdPipeline(binding: RecordingGlBinding): ConsumerBackdropPipeline =
         (
             createConsumerBackdropPipeline(
@@ -294,6 +370,7 @@ class ConsumerBackdropPipelineTest {
     private companion object {
         const val RESOLUTION_LOCATION: Int = 31
         const val FRAME_INDEX_LOCATION: Int = 32
+        const val INVERSE_LOCATION: Int = 33
 
         val CONSUMER_SHADER_PAIR: ShaderPair = ShaderPair(
             vertexSource = "#version 300 es\n" +

@@ -1219,6 +1219,23 @@ internal fun composeGeometryViewProjection(camera: ResolvedMercatorCamera): Floa
     (camera.projectionMatrix * camera.viewMatrix).toColumnMajorFloatArray()
 
 /**
+ * The inverse of that same product, column-major, or `null` when the camera does not invert
+ * (ADR 0072) -- what `rengBackdropInverseViewProjection` carries to a backdrop shader.
+ *
+ * Its own named function rather than three lines at the call site, for the reason
+ * `resolvedBackdropFor` is one: the factor order is the whole content, `view * projection` is a
+ * perfectly valid matrix that draws a perfectly plausible wrong grid, and no GL call log can tell
+ * the two apart. Naming it puts the order somewhere a test can reach.
+ *
+ * Takes [ResolvedFrameCamera] rather than either concrete camera because both modes build these
+ * two matrices from the same two functions. What differs is the ground, not the matrix: under
+ * Mercator it is the plane `z = 0`, under a globe that plane is only the sphere's tangent at the
+ * anchor -- see ADR 0072.
+ */
+internal fun composeBackdropInverseViewProjection(camera: ResolvedFrameCamera): FloatArray? =
+    (camera.projectionMatrix * camera.viewMatrix).inverse()?.toColumnMajorFloatArray()
+
+/**
  * The same matrix for a globe camera, and it is the same two factors in the same order.
  *
  * It is **not** [com.rohittp.reng.internal.projection.globeFixedViewProjection], which the globe

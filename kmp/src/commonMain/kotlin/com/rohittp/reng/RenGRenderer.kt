@@ -105,6 +105,7 @@ import com.rohittp.reng.internal.gl.jointMatricesForSkin
 import com.rohittp.reng.internal.gl.offscreenSurfaceDescriptorFor
 import com.rohittp.reng.internal.gl.requireResolvedAtDrawTime
 import com.rohittp.reng.internal.gl.resolvedBackdropFor
+import com.rohittp.reng.internal.gl.composeBackdropInverseViewProjection
 import com.rohittp.reng.internal.gl.uploadDemTexture
 import com.rohittp.reng.internal.gl.uploadGlyphAtlas
 import com.rohittp.reng.internal.gl.uploadModelPrimitive
@@ -2892,6 +2893,9 @@ internal class RenGRenderer(
                             uploadTexture(binding, texture.image, TextureContent.DATA)
                         }
                     },
+                    // ADR 0072. The inverse of exactly the product a geometry is handed forward,
+                    // and the same two factors in both projection modes.
+                    inverseViewProjection = composeBackdropInverseViewProjection(resolvedCamera),
                 )
             }
         }

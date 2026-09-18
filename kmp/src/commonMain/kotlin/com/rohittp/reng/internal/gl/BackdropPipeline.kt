@@ -52,7 +52,17 @@ internal const val BACKDROP_REPEAT_UNIFORM_NAME: String = "rengBackdropRepeat"
 internal const val BACKDROP_TEXTURE_UNIFORM_NAME: String = "rengBackdropTexture"
 
 /**
- * The prefix both names above share, reserved against consumer uniform and texture names on
+ * `inverse(projectionMatrix * viewMatrix)` for the frame, so a backdrop shader can find the ground
+ * under a pixel and draw a pattern fixed to the map rather than to the screen (ADR 0072).
+ *
+ * Under the prefix, so it was already refused as a consumer name from the day ADR 0071 reserved
+ * one -- which is why adding it costs no ABI and breaks nobody.
+ */
+internal const val BACKDROP_INVERSE_VIEW_PROJECTION_UNIFORM_NAME: String =
+    "rengBackdropInverseViewProjection"
+
+/**
+ * The prefix the names above share, reserved against consumer uniform and texture names on
  * `Backdrop.Shader` (ADR 0071).
  *
  * Reserved as a prefix rather than as the two literals, because ADR 0008 makes adding a documented
@@ -167,6 +177,7 @@ internal class ConsumerBackdropPipeline(
     val vertexBuffer: Int,
     val resolutionLocation: Int,
     val frameIndexLocation: Int,
+    val inverseViewProjectionLocation: Int,
 ) {
     private val consumerLocations: MutableMap<String, Int> = HashMap()
 
@@ -223,6 +234,8 @@ internal fun createConsumerBackdropPipeline(
             vertexBuffer = quad.vertexBuffer,
             resolutionLocation = binding.getUniformLocation(program, UNIFORM_RESOLUTION),
             frameIndexLocation = binding.getUniformLocation(program, UNIFORM_FRAME_INDEX),
+            inverseViewProjectionLocation =
+                binding.getUniformLocation(program, BACKDROP_INVERSE_VIEW_PROJECTION_UNIFORM_NAME),
         ),
     )
 }
@@ -269,6 +282,12 @@ internal sealed interface ResolvedBackdrop {
         val pipeline: ConsumerBackdropPipeline,
         val uniforms: Map<String, ShaderValue>,
         val textures: Map<String, Int>,
+        /**
+         * Column-major `inverse(projection * view)`, or `null` when the frame's camera does not
+         * invert -- in which case the name is simply never bound, exactly as ADR 0008 says happens
+         * to a name RenG does not set (ADR 0072).
+         */
+        val inverseViewProjection: FloatArray? = null,
     ) : ResolvedBackdrop {
         override val program: Int get() = pipeline.program
         override val vertexArray: Int get() = pipeline.vertexArray
@@ -344,6 +363,12 @@ internal fun drawBackdrop(
             }
             if (pipeline.frameIndexLocation >= 0) {
                 binding.uniform1ui(pipeline.frameIndexLocation, frameIndex.toInt())
+            }
+            val inverseViewProjection = backdrop.inverseViewProjection
+            if (pipeline.inverseViewProjectionLocation >= 0 && inverseViewProjection != null) {
+                binding.uniformMatrix4fv(
+                    pipeline.inverseViewProjectionLocation, 1, false, inverseViewProjection,
+                )
             }
             bindConsumerValues(
                 binding = binding,

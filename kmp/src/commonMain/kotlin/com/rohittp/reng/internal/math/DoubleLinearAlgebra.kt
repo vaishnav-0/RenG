@@ -241,6 +241,68 @@ internal class DoubleMatrix4 internal constructor(valuesInColumnMajorOrder: List
         )
     }
 
+    /**
+     * The inverse of any invertible 4 by 4, by Gauss-Jordan elimination with partial pivoting, or
+     * `null` when it is singular (ADR 0072).
+     *
+     * [inverseAffine] is the one to reach for whenever the bottom row really is `[0, 0, 0, 1]`: it
+     * is cheaper and it says so in the type of problem it solves. This exists for the one matrix in
+     * this codebase that is **not** affine -- a projection, whose bottom row is `[0, 0, -1, 0]` --
+     * and for the product of a projection with a view, which a backdrop shader is handed inverted.
+     *
+     * Deliberately general rather than the four-line closed form the current projection admits.
+     * The point of inverting it for a consumer is that RenG absorbs projection changes on their
+     * behalf, and a hand-derived inverse would absorb the next one by quietly returning the wrong
+     * answer.
+     */
+    fun inverse(): DoubleMatrix4? {
+        // Row-major working copy of `this | I`, so the identity emerges on the right.
+        val augmented = Array(DIMENSION) { row ->
+            DoubleArray(DIMENSION * 2) { column ->
+                when {
+                    column < DIMENSION -> this[row, column]
+                    column - DIMENSION == row -> 1.0
+                    else -> 0.0
+                }
+            }
+        }
+
+        for (pivotColumn in 0 until DIMENSION) {
+            // Partial pivoting: the largest magnitude available, which is what keeps a
+            // near-singular matrix from being inverted through a near-zero divisor.
+            var pivotRow = pivotColumn
+            for (row in pivotColumn + 1 until DIMENSION) {
+                if (abs(augmented[row][pivotColumn]) > abs(augmented[pivotRow][pivotColumn])) {
+                    pivotRow = row
+                }
+            }
+            val pivot = augmented[pivotRow][pivotColumn]
+            if (pivot == 0.0 || !pivot.isFinite()) return null
+
+            val swap = augmented[pivotColumn]
+            augmented[pivotColumn] = augmented[pivotRow]
+            augmented[pivotRow] = swap
+
+            val pivotValues = augmented[pivotColumn]
+            for (column in 0 until DIMENSION * 2) pivotValues[column] /= pivot
+
+            for (row in 0 until DIMENSION) {
+                if (row == pivotColumn) continue
+                val factor = augmented[row][pivotColumn]
+                if (factor == 0.0) continue
+                val target = augmented[row]
+                for (column in 0 until DIMENSION * 2) {
+                    target[column] -= factor * pivotValues[column]
+                }
+            }
+        }
+
+        val inverted = fromRows(
+            List(DIMENSION) { row -> List(DIMENSION) { column -> augmented[row][column + DIMENSION] } },
+        )
+        return if (inverted.values.all { it.isFinite() }) inverted else null
+    }
+
     operator fun times(other: DoubleMatrix4): DoubleMatrix4 =
         DoubleMatrix4(List(ELEMENT_COUNT) { index ->
             val row = index % DIMENSION
