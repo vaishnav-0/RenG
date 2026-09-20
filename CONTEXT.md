@@ -77,7 +77,10 @@ basemap tile LOD, and label fade. Only one prepare invocation runs at a time. A 
 strictly increasing and above history; every item completes pure validation, projection, tile-budget, diff,
 and resource-reference planning in index order before any resource work begins. Independent resource work
 then runs in parallel.
-History commits only when the whole batch succeeds, and returned prepared frames preserve input order.
+The preparation session remains active across planning, the shared resource operation, acquisition, frame
+construction, and commit or rollback. History commits only when the whole batch succeeds, and returned prepared
+frames preserve input order. A failed or cancelled batch atomically closes every provisional frame, releases its
+leases and raw-tile reservation, and leaves both history and the prepared style at their prior committed values.
 Structural diffing uses the last successfully prepared plan as the first baseline and each immediately preceding
 input plan as the next baseline within a batch; missing history is an empty baseline.
 A diff may reuse content-keyed work, but every **Prepared Frame** leases the complete resource set derived
@@ -111,8 +114,9 @@ _Avoid_: Viewport, logical size, density-independent size, Render Target dimensi
 The renderer-lifetime values fixed at setup: required **Output Pixel Size**, **Transport**, and **Store**;
 optional **Basemap Style**, defaulting to none; **Resource Limits**, defaulting to their documented ceilings;
 maximum basemap tile instances, defaulting to `512`; maximum preparation batch size, defaulting to `256`;
-maximum concurrent resource operations, defaulting to `8`; and a non-throwing **Diagnostic** sink, defaulting
-to none. The already-current **Render Context** is
+maximum concurrent resource operations, defaulting to `8`; maximum unleased consumer-authored pipelines retained
+between draws, defaulting to `64`; maximum distinct consumer-authored pipelines in one frame, defaulting to `256`;
+and a non-throwing **Diagnostic** sink, defaulting to none. The already-current **Render Context** is
 passed separately to renderer creation and setup does not suspend; style acquisition occurs during frame
 preparation.
 _Avoid_: Frame Plan, render options, mutable settings
@@ -124,16 +128,25 @@ resource operations, default `8` and configurable from `1` through `64`.
 _Avoid_: Coroutine dispatcher, unbounded async, transport retry count
 
 **Resource Limits**:
-The immutable configurable byte ceilings supplied at setup. Every value is bytes in
-`[1, 2147483647]`. Encoded-response defaults are: basemap style `8 MiB`; basemap metadata (TileJSON and
+The immutable configurable ceilings supplied at setup. Byte ceilings are in `[1, 2147483647]`, except that
+in-flight raw basemap pixels and unleased resident CPU resources admit zero. Encoded-response defaults are:
+basemap style `8 MiB`; basemap metadata (TileJSON and
 sprite JSON) `4 MiB`; basemap vector/raster/DEM tile `32 MiB`; basemap sprite image `32 MiB`; basemap GeoJSON
 `64 MiB`; sticker image `32 MiB`; model GLB `256 MiB`; and model texture `32 MiB`. A request carries its
 selected ceiling and oversize resident, stored, or transported content fails before decode or use. Two
 further ceilings bound work an encoded ceiling cannot: a decoded-image ceiling, decided from the declared
-image dimensions before any pixel buffer is allocated rather than after decompression; and a model JSON-chunk
-ceiling bounding a GLB's JSON chunk independently of the whole-GLB ceiling, because a parsed value tree costs
-far more than its text. Structural depth bounds — JSON nesting and node-hierarchy depth — are fixed and not
-configurable.
+image dimensions before any pixel buffer is allocated rather than after decompression; an image-decode
+working-set ceiling, projected before allocation from the final RGBA image, two streaming scanlines, and the
+bounded premultiplication upload chunk; and a model JSON-chunk ceiling bounding a GLB's JSON chunk independently
+of the whole-GLB ceiling, because a parsed value tree costs far more than its text. Structural depth bounds —
+JSON nesting and node-hierarchy depth — are fixed and not configurable.
+Aggregate ceilings independently bound unleased resident CPU resource bytes, resident GPU texture bytes, resident
+GPU model-buffer bytes, raw basemap pixels retained across open Prepared Frames, and all CPU payload retained by
+open Prepared Frames. A CPU or GPU lease may temporarily keep unleased residency above its LRU ceiling; its last
+release enforces that ceiling immediately. Raw pixels require an atomic reservation before rendering and fall back
+to encoded tiles rather than exceeding their ceiling. Prepared-frame admission is hard: leased resource generations
+are counted once across sharing frames, while each frame's own basemap, terrain, pose and label payload is counted
+once per frame; closing or rolling back the frame releases that reservation exactly once.
 _Avoid_: Transport timeout, cache size, decoded-memory estimate, retry budget
 
 **Basemap Style**:
@@ -146,9 +159,9 @@ _Avoid_: Map style, theme, basemap, style profile
 **Prepared Frame**:
 A network-free, GL-free rendering input holding every resource one **Frame Plan** needs, produced
 before any drawing occurs and owned by the renderer that prepared it. It may be drawn repeatedly until
-its idempotent, context-free `close()` releases its resource leases; closing it performs no immediate GL
-deletion. Renderer close invalidates it for drawing but does not change the harmless idempotence of its own
-later `close()`.
+its idempotent, context-free `close()` atomically claims and releases its resource leases and raw-tile reservation
+exactly once, even when close calls race; closing it performs no immediate GL deletion. Renderer close invalidates
+it for drawing but does not change the harmless idempotence of its own later `close()`.
 _Avoid_: Frame buffer, render pass, draw queue, prepared batch
 
 **Render Target**:
@@ -192,7 +205,8 @@ _Avoid_: Boolean closed flag, implicit context switch, recoverable close
 
 **GPU Object Loss**:
 The consumer's declaration that the renderer's GL objects no longer exist. `notifyGpuObjectsGone()` is
-context-free, forgets handles without deleting them, retains CPU state, and invalidates prior render
+context-free, serializes with any in-flight renderer GL operation, and atomically forgets handles, compiled
+programs, and consumer-pipeline state without deleting them. It retains CPU state and invalidates prior render
 targets. Further GL work requires explicit adoption of an already-current replacement **Render Context**.
 _Avoid_: Free, close, context switch, automatic recovery
 
@@ -208,9 +222,10 @@ Render Target minting, and drawing fail `RENDERER_CLOSED`.
 _Avoid_: Free resources, GPU object loss, frame close, reset
 
 **Preparation Cancellation**:
-The idempotent suspending snapshot barrier requested by `cancelPreparations()`. It cancels only the prepare
-invocation active when called and returns after that invocation terminates; no active invocation is a no-op.
-Cancellation remains an unwrapped `CancellationException` and commits no **Frame History**. Kotlin stack
+The idempotent suspending snapshot barrier requested by `cancelPreparations()`. It cancels the outer worker of
+only the prepare invocation active when called and returns after its planning, acquisition, construction, and
+rollback have terminated; no active invocation is a no-op. Cancellation remains an unwrapped
+`CancellationException` and commits no **Frame History**. Kotlin stack
 recovery may provide a copy whose immediate cause is the original exception, so referential identity is not
 part of the contract. Cancellation is not a persistent mode.
 _Avoid_: Renderer close, cancel latch, frame close, partial batch commit
@@ -332,6 +347,13 @@ _Avoid_: Layer, overlay, custom layer, primitive
 **Shader Pair**:
 The `vertexSource` and `fragmentSource` shader sources a **Geometry** is painted with.
 _Avoid_: Program, material, effect
+
+**Consumer Pipeline Residency**:
+The renderer-local, count-bounded LRU shared by compiled Geometry and consumer Backdrop shader pipelines. Every
+pipeline used by a draw is leased until that complete draw returns, including failure cleanup; releasing the last
+lease immediately deletes least-recently-used unleased entries above the configured retained limit. Frame planning
+rejects more than the configured number of distinct consumer pipeline keys before acquisition or GL work.
+_Avoid_: Shader source cache, internal fixed pipeline, GPU byte budget
 
 **Shader Profile**:
 The single accepted shader source dialect — a GLSL ES 3.00 body whose first directive physical line, after
@@ -520,11 +542,14 @@ _Avoid_: Cache predicate, mutable filter, locator query
 
 **Resource Generation**:
 One concrete loaded instance of a **Resource Key**'s content, holding its exact raw bytes and record
-metadata, its decoded or parsed product, and later its GPU allocations. Exactly one generation of a key is
+metadata and its decoded or parsed product. Its renderer-local monotonic generation identity also namespaces
+every reusable consumer texture, model image, and model primitive derived from it, including the subresource and
+upload variant. Exactly one generation of a key is
 current, and only the current generation satisfies a new **Resource Operation**. A generation superseded by
 different content stays usable while leased and disappears when its last lease closes. Freeing retires every
 generation of the matched keys: those with no lease go immediately, and the rest wait for their last lease.
-A retired generation is never resurrected, even when identical bytes return, so a free result stays a
+A GPU allocation derived later by an old Prepared Frame is born retired and is deleted when that draw's lease
+ends. A retired generation is never resurrected, even when identical bytes return, so a free result stays a
 truthful account of what happened at that instant.
 _Avoid_: Cache entry, version, revision, snapshot
 
@@ -716,8 +741,12 @@ _Avoid_: Log message, arbitrary metadata, exception cause
 - A violated uniqueness rule is an error; RenG never silently removes or repairs duplicates
 - Numeric construction canonicalizes only negative zero; non-finite, out-of-range, and malformed values
   are errors and are never clamped, wrapped, or repaired
-- Renderer-held resources remain resident without automatic LRU eviction until explicit free or
-  **Renderer Close**
+- Unleased CPU generations are evicted least-recently-used to the resident CPU byte ceiling after install,
+  decoded-image/model attachment, and the last lease release; eviction forgets a key and never marks it freed
+- Unleased measured GPU textures and model buffers are independently evicted least-recently-used to their byte
+  ceilings as soon as their last draw lease releases. Generation identity prevents reuse across reload or free
+- Consumer-authored Geometry and Backdrop pipelines share a count-bounded LRU; one frame also has a distinct-key
+  planning ceiling, and draw-scoped leases keep every pipeline in use alive until cleanup
 - Free retires leased generations without invalidating live **Prepared Frame**s; new preparation reloads a
   fresh generation and emits one warning
 - A free result is a linearized point-in-time account. If free wins a race with the last lease release, it

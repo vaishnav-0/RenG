@@ -33,6 +33,8 @@ public class RendererConfiguration(
     maximumConcurrentResourceOperations: Int = 8,
     diagnosticSink: DiagnosticSink = DiagnosticSink.None,
     terrainShading: Boolean = false,
+    maximumCachedConsumerPipelines: Int = 64,
+    maximumConsumerPipelinesPerFrame: Int = 256,
 ) {
     public val outputPixelSize: OutputPixelSize
     public val transport: Transport
@@ -73,6 +75,12 @@ public class RendererConfiguration(
      */
     public val terrainShading: Boolean
 
+    /** Maximum unleased consumer Geometry/Backdrop pipelines retained between draws. */
+    public val maximumCachedConsumerPipelines: Int
+
+    /** Hard planning limit on distinct consumer Geometry/Backdrop shader pairs in one frame. */
+    public val maximumConsumerPipelinesPerFrame: Int
+
     init {
         require(maximumBasemapTileInstances in 1..4096) {
             "maximumBasemapTileInstances must be within the supported range"
@@ -82,6 +90,12 @@ public class RendererConfiguration(
         }
         require(maximumConcurrentResourceOperations in 1..64) {
             "maximumConcurrentResourceOperations must be within the supported range"
+        }
+        require(maximumCachedConsumerPipelines in 1..4096) {
+            "maximumCachedConsumerPipelines must be within the supported range"
+        }
+        require(maximumConsumerPipelinesPerFrame in 1..4096) {
+            "maximumConsumerPipelinesPerFrame must be within the supported range"
         }
 
         this.outputPixelSize = outputPixelSize
@@ -94,6 +108,8 @@ public class RendererConfiguration(
         this.maximumConcurrentResourceOperations = maximumConcurrentResourceOperations
         this.diagnosticSink = diagnosticSink
         this.terrainShading = terrainShading
+        this.maximumCachedConsumerPipelines = maximumCachedConsumerPipelines
+        this.maximumConsumerPipelinesPerFrame = maximumConsumerPipelinesPerFrame
     }
 }
 

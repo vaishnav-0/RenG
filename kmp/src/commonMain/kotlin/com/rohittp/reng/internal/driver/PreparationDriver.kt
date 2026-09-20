@@ -46,10 +46,8 @@ import com.rohittp.reng.internal.resource.WriteStore
 import com.rohittp.reng.internal.resource.ordinaryResourceClassGates
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -104,13 +102,9 @@ import kotlin.coroutines.coroutineContext
  * does at its own seam. [ResourceOperationStateMachine]'s own arbitration decides what an observed adapter
  * cancellation means for the whole operation; this driver only supplies the observation.
  *
- * [cancel] is this driver's own cross-coroutine cancellation entry point, distinct from either of the
- * above: it lets a caller that does not hold the specific [Job] running [run] — a future
- * [com.rohittp.reng.Renderer.cancelPreparations] implementation, called from whatever coroutine the
- * consumer happens to be on — stop an in-flight preparation anyway. It tracks at most one active [run]
- * invocation, which is all ADR 0014's serialized frame preparation ever leaves in flight on one driver at
- * a time; it is not a general-purpose multi-run scheduler. Calling it while no [run] is active is a no-op,
- * the same idempotent spirit as this codebase's `close()`/`free()` operations.
+ * Cross-coroutine cancellation belongs to the renderer's outer preparation-session coordinator. This
+ * driver deliberately has no independently published active job: structured cancellation of [run]'s
+ * caller reaches every action child in this scope.
  */
 internal class PreparationDriver(
     private val transport: Transport,
@@ -122,7 +116,6 @@ internal class PreparationDriver(
     private val maximumConcurrentOperations: Int,
     private val clock: () -> Long,
 ) {
-    private val activeRunJob = MutableStateFlow<Job?>(null)
 
     /**
      * [leaseSink], when supplied, collects every resident-cache lease this run takes, so the owner that
@@ -130,13 +123,14 @@ internal class PreparationDriver(
      * [com.rohittp.reng.PreparedFrame.close] does with the ones its own preparation took. Omitting it
      * leaves the leases outstanding for the cache's lifetime, which is what every caller did before
      * owner-lease bookkeeping existed and what every test driving this class directly still expects.
+     * [leaseObserver], when supplied, runs immediately after that lease has been recorded for cleanup;
+     * throwing from it aborts the operation while leaving the lease reachable by the caller's rollback.
      */
     suspend fun run(
         definition: ResourceOperationDefinition,
         leaseSink: MutableList<Lease>? = null,
+        leaseObserver: ((Lease) -> Unit)? = null,
     ): ResourceOperationOutcome = coroutineScope {
-        activeRunJob.value = coroutineContext[Job]
-        try {
             val executor = ResourceActionExecutor(
                 transport = transport,
                 store = store,
@@ -146,6 +140,7 @@ internal class PreparationDriver(
                 resourceLimits = resourceLimits,
                 clock = clock,
                 leaseSink = leaseSink,
+                leaseObserver = leaseObserver,
             )
             val semaphore = Semaphore(maximumConcurrentOperations)
             val events = Channel<ResourceOperationEvent>(Channel.UNLIMITED)
@@ -235,20 +230,7 @@ internal class PreparationDriver(
                 advancePendingCursors()
             }
 
-            requireNotNull(outcome)
-        } finally {
-            activeRunJob.value = null
-        }
-    }
-
-    /**
-     * Cancels whichever [run] invocation is currently active on this driver and suspends until it has
-     * actually finished unwinding, mirroring [com.rohittp.reng.Renderer.cancelPreparations]'s own suspend
-     * signature so a caller that awaits this knows preparation has genuinely stopped rather than merely
-     * requested to. See the class KDoc for why one job reference is enough.
-     */
-    suspend fun cancel() {
-        activeRunJob.value?.cancelAndJoin()
+        requireNotNull(outcome)
     }
 }
 
@@ -261,7 +243,7 @@ internal class PreparationDriver(
  * job on `close()` and surfacing that to in-flight work, say) and [adapterCancellationEventFor] reports it
  * as a [com.rohittp.reng.internal.resource.CancellationCause.ADAPTER] observation; `false` means this
  * child's own `Job` genuinely has been cancelled — a caller cancelling [PreparationDriver.run], or
- * [PreparationDriver.cancel] — in which case rethrowing unwrapped is what lets
+ * its outer preparation session — in which case rethrowing unwrapped is what lets
  * [kotlinx.coroutines.coroutineScope]'s ordinary structured-concurrency cancellation proceed, exactly as
  * [ResourceActionExecutor.suppliedCall] already does at its own seam. Left unhandled entirely — the shape
  * before this function existed — an adapter's own unsolicited [CancellationException] would complete its

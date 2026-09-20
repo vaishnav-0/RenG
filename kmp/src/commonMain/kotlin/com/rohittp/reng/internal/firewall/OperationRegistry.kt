@@ -749,7 +749,11 @@ internal class OperationRegistry(
     private fun passesClassSpecificReadValidation(resourceClass: ResourceClass, stored: StoredRawResource): Boolean =
         when (resourceClass) {
             ResourceClass.BASEMAP_SPRITE_IMAGE ->
-                decodePng(stored.bytes, SPRITE_IMAGE_DECODE_CEILING_BYTES) is PngDecodeResult.Success
+                decodePng(
+                    stored.bytes,
+                    SPRITE_IMAGE_DECODE_CEILING_BYTES,
+                    SPRITE_IMAGE_WORKING_CEILING_BYTES,
+                ) is PngDecodeResult.Success
             ResourceClass.BASEMAP_SPRITE_JSON ->
                 parseJson(stored.bytes, 0, stored.bytes.size, SPRITE_JSON_MAXIMUM_DEPTH) is JsonParse.Parsed
             // Deliberate, and the reason is specific rather than "nothing else needs checking". Rentile's
@@ -1315,6 +1319,7 @@ private val UNSUPPORTED_SPRITE_ENTRY_FIELDS: Set<String> = setOf("stretchX", "st
 /** Generous enough for any sticker/sprite-sized image; only used to decide whether a sprite image
  *  record decodes at all before answering the engine's read, never to size an actual buffer. */
 private const val SPRITE_IMAGE_DECODE_CEILING_BYTES: Long = 64L * 1024L * 1024L
+private const val SPRITE_IMAGE_WORKING_CEILING_BYTES: Long = 128L * 1024L * 1024L
 
 /** Sprite JSON documents are small, flat atlas manifests; this is a generous nesting ceiling used
  *  only to prove the document parses at all before answering the engine's read. */

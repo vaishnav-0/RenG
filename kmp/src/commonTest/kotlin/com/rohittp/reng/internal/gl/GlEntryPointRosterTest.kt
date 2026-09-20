@@ -5,8 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class GlEntryPointRosterTest {
-    @Test fun rosterHasExactlyNinetyOneEntryPoints() {
-        assertEquals(91, GlEntryPoint.entries.size)
+    @Test fun rosterHasExactlyNinetyTwoEntryPoints() {
+        assertEquals(92, GlEntryPoint.entries.size)
     }
 
     @Test fun theRosterContainsTheThreeUniformSettersTheShaderInterfaceNeeds() {

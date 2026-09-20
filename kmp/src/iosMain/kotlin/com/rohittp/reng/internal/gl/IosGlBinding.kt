@@ -102,6 +102,7 @@ import platform.gles3.glSamplerParameteri
 import platform.gles3.glScissor
 import platform.gles3.glShaderSource
 import platform.gles3.glTexImage2D
+import platform.gles3.glTexSubImage2D
 import platform.gles3.glTexParameteri
 import platform.gles3.glTexStorage2D
 import platform.gles3.glUniform1f
@@ -264,6 +265,19 @@ internal object IosGlBinding : GlBinding {
             glTexImage2D(
                 target.toUInt(), level, internalFormat, width, height,
                 border, format.toUInt(), type.toUInt(), pinned.addressOf(0),
+            )
+        }
+    }
+
+    override fun texSubImage2D(
+        target: Int, level: Int, xOffset: Int, yOffset: Int, width: Int, height: Int,
+        format: Int, type: Int, pixels: ByteArray,
+    ) {
+        require(pixels.isNotEmpty()) { "a texture sub-image needs pixels" }
+        pixels.usePinned { pinned ->
+            glTexSubImage2D(
+                target.toUInt(), level, xOffset, yOffset, width, height,
+                format.toUInt(), type.toUInt(), pinned.addressOf(0),
             )
         }
     }

@@ -50,6 +50,14 @@ batch's worth. It sits between the existing `maximumBasemapTileBytes` (32 MiB) a
 `maximumDecodedImageBytes` (256 MiB), and like every other field on that type it is a caller's to
 raise.
 
+The budget is one atomic reservation ledger for all open Prepared Frames, not a read-then-add counter.
+A frame reserves the exact bytes of both reusable batch pixels and newly rendered raw tiles before asking
+Rentile for the new pixels; if the combined reservation cannot be made, the affected tiles take the encoded
+fallback. Ownership transfers to the Prepared Frame only with successful construction. Failed construction,
+whole-batch rollback, and concurrent repeated frame close all release through the same single-use reservation, so
+held bytes cannot be double-subtracted or stranded outside the budget. Renderer close invalidates an open frame;
+that frame's later idempotent close still releases its reservation.
+
 ## The premultiplication seam
 
 **The pixels arrive premultiplied, and that is the one thing this change can get silently wrong.**

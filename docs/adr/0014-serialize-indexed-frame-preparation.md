@@ -29,3 +29,15 @@ it is not a latch. A second prepare, history clearing, resource freeing, or rend
 with active preparation and fails with the operation's typed `PREPARATION_IN_PROGRESS` error. Cancelling
 the calling coroutine remains the way to cancel one specific prepare, and every `CancellationException`
 propagates unchanged.
+
+The active invocation is one published outer worker, not only its resource-acquisition children. Its lifetime
+starts before planning touches renderer state and spans ordered planning, the batch-wide firewall operation,
+acquisition, Prepared Frame construction, history/style commit, and rollback. `cancelPreparations()` snapshots
+that worker and `cancelAndJoin`s it, so returning from the barrier means none of those phases can still mutate the
+renderer.
+
+Prepared Frames remain provisional until every batch item succeeds. A later failure or cancellation closes them
+in reverse construction order, atomically taking each frame's leases and raw-pixel reservation exactly once.
+Only then does the invocation end; neither the provisional history nor a newly compiled prepared style becomes
+visible. Valid cache content acquired before the terminal outcome may remain, as above, but no caller-owned frame
+or ownership token leaks out of the failed transaction.

@@ -99,18 +99,24 @@ already is -- so a source that is not a Shader Profile at all fails as `INVALID_
 
 ## One pipeline becomes many, and they are keyed by their source
 
-The backdrop pipeline is a single nullable field created once at renderer setup, which is the right
-shape for exactly one program. A consumer shader means a program per distinct `ShaderPair`, so the
-backdrop joins `geometryPipelines` in taking a map keyed by `ResourceKey` and cleared, recreated and
-deleted on the same three occasions.
+The backdrop pipeline was a single nullable field created once at renderer setup, which was the right
+shape for exactly one program. A consumer shader means a program per distinct `ShaderPair`, so backdrop
+and geometry pipelines now share a keyed cache that is cleared, recreated and deleted on the same three
+occasions.
 
 The key needs no new machinery: `internalPipeline(role, shaderPair)` already hashes both sources
 verbatim alongside the role's wire value, so two different backdrop shaders already derive two
 different keys and the same shader reused across frames already derives one. `Pattern` keeps the
 singleton, because there is still exactly one of RenG's own program.
 
-The cost is the one `GlProgramCache` always had and never had to face here: it has no eviction, only
-explicit removal. A consumer cycling through distinct shader sources grows it without bound. That is
-recorded rather than fixed -- it is the same exposure `geometryPipelines` has carried since ADR 0008,
-it wants one decision covering both, and inventing a second eviction policy for the smaller of the
-two would be the wrong place to start.
+Geometry and consumer Backdrop pipelines therefore share one count-bounded LRU. A draw leases every pipeline it
+uses for its complete duration and releases all leases in failure cleanup as well as success; only unleased entries
+are candidates, and a last release immediately deletes least-recently-used entries above
+`maximumCachedConsumerPipelines` (64 by default). This also releases each evicted Geometry pipeline's reusable CPU
+grid scratch through ordinary reachability. Declared GPU-object loss forgets the cache without deletion, while
+renderer close deletes every remaining entry exactly once.
+
+An LRU bounds history, not one pathological frame. Planning therefore also counts distinct Geometry and consumer
+Backdrop pipeline keys in each frame and rejects more than `maximumConsumerPipelinesPerFrame` (256 by default) as
+`RESOURCE_LIMIT_EXCEEDED` before acquisition or GL work. A frame may temporarily take the retained cache above its
+steady limit while its pipelines are leased; cleanup trims it before the draw returns.

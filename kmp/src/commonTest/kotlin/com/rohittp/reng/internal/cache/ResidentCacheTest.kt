@@ -360,19 +360,58 @@ class ResidentCacheTest {
     }
 
     @Test
-    fun releasingTheLastLeaseMakesAKeyEvictableAtTheNextInstall() {
+    fun releasingTheLastLeaseImmediatelyEvictsAnOverBudgetCurrentGeneration() {
         val cache = ResidentCache(residentByteBudget = 64L)
         val held = keyNamed("held-then-released")
         val lease = cache.installAndTakeLease(held, storedA, null)
-        cache.install(keyNamed("held-pressure-one"), storedB, null)
+        val pressureLease = cache.installAndTakeLease(keyNamed("held-pressure-one"), storedB, null)
         assertNotNull(cache.current(held))
 
         cache.releaseLease(lease)
-        cache.install(keyNamed("held-pressure-two"), storedA, null)
 
-        // Releasing a lease does not itself evict -- the sweep runs where the total can grow, which
-        // is an install. This is the pair that matters for a closing Prepared Frame (ADR 0045).
+        // No unrelated install is needed to enforce the ceiling after the pin disappears.
         assertNull(cache.current(held))
+        cache.releaseLease(pressureLease)
+    }
+
+    @Test
+    fun releasingALeaseDoesNotManufactureANewLruAccess() {
+        val cache = ResidentCache(residentByteBudget = 128L)
+        val oldest = keyNamed("release-recency-oldest")
+        val newer = keyNamed("release-recency-newer")
+        val oldestLease = cache.installAndTakeLease(oldest, storedA, null)
+        cache.install(newer, storedB, null)
+
+        // Both generations fit, so releasing only removes the pin. A later install supplies pressure:
+        // the released key must remain oldest. Treating release as an access would move it behind the
+        // newer key and evict the wrong generation.
+        cache.releaseLease(oldestLease)
+        cache.install(keyNamed("release-recency-pressure"), storedA, null)
+
+        assertNull(cache.current(oldest))
+        assertNotNull(cache.current(newer))
+    }
+
+    @Test
+    fun zeroBudgetEvictsAJustUnleasedCurrentGeneration() {
+        val cache = ResidentCache(residentByteBudget = 0L)
+        val key = keyNamed("release-zero-budget")
+        val lease = cache.installAndTakeLease(key, storedA, null)
+
+        cache.releaseLease(lease)
+
+        assertNull(cache.current(key))
+        assertEquals(0L, cache.report(ResourceSelector.All, noGpuObjects).cpuResidency.residentBytes)
+    }
+
+    @Test
+    fun everyInstallGetsANewGenerationIdentityEvenForIdenticalBytes() {
+        val cache = ResidentCache()
+        val key = keyNamed("generation-identity")
+        val first = cache.install(key, storedA, null)
+        val second = cache.install(key, storedA, null)
+
+        assertTrue(first.id != second.id)
     }
 
     @Test

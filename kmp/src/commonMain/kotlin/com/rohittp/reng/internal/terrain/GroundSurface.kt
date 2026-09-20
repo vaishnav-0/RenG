@@ -2,6 +2,7 @@ package com.rohittp.reng.internal.terrain
 
 import com.rohittp.reng.internal.projection.GeographicPosition
 import com.rohittp.reng.internal.projection.projectMercator
+import com.rohittp.reng.internal.image.DecodedImage
 import kotlin.math.floor
 
 /**
@@ -65,10 +66,10 @@ internal class GroundSurfaceTile(val source: DemTileCoordinate, val window: DemT
  *
  * Rentile `0.7.0` hands over already-decoded texels, so a lookup is three array reads and
  * [demElevationMetres]. The design's §6 argument for a *sparse* CPU decode — that decoding the
- * visible set would cost about 224 MiB — describes a decode that no longer exists. What this does
- * cost is one [com.rohittp.reng.internal.image.DecodedImage.rgbaSnapshot] per distinct source DEM,
- * taken once at construction, which is why the renderer builds this only for a frame that actually
- * carries ground-relative content.
+ * visible set would cost about 224 MiB — describes a decode that no longer exists. This surface
+ * retains the existing immutable [com.rohittp.reng.internal.image.DecodedImage] references and reads
+ * channels through their internal indexed accessor; construction copies no DEM raster. The renderer
+ * still builds the tile index only for a frame that actually queries elevation.
  */
 internal class GroundSurface(
     /** The LOD every ground tile in this frame is drawn at; both tile selectors emit exactly one. */
@@ -83,13 +84,9 @@ internal class GroundSurface(
 ) {
     private val tileSnapshot: Map<DemTileCoordinate, GroundSurfaceTile> = LinkedHashMap(tiles)
 
-    /**
-     * One `ByteArray` per distinct source image, snapshotted once. [DecodedImage.rgbaSnapshot] copies
-     * on every call, so holding the copy is what stops a per-node lookup from being a per-node
-     * megabyte.
-     */
-    private val bytesBySource: Map<DemTileCoordinate, ByteArray> =
-        texelsBySource.mapValues { (_, texels) -> texels.image.rgbaSnapshot() }
+    /** One immutable decoded owner per source; construction allocates metadata, never another raster. */
+    private val imagesBySource: Map<DemTileCoordinate, DecodedImage> =
+        texelsBySource.mapValues { (_, texels) -> texels.image }
 
     init {
         require(lod in 0..MAXIMUM_GROUND_SURFACE_ZOOM) { "a ground surface sits at a real tile zoom" }
@@ -225,27 +222,27 @@ internal class GroundSurface(
         val southward = texelY >= interior
         if (eastward || southward) {
             val neighbour = neighbourOf(source, if (eastward) 1 else 0, if (southward) 1 else 0)
-            val bytes = neighbour?.let { bytesFor(it) }
-            if (bytes != null) {
+            val image = neighbour?.let { imageFor(it) }
+            if (image != null) {
                 return texelMetres(
-                    bytes = bytes,
+                    image = image,
                     x = if (eastward) 0 else texelX,
                     y = if (southward) 0 else texelY,
                 )
             }
         }
-        val own = bytesFor(source) ?: return 0.0
+        val own = imageFor(source) ?: return 0.0
         return texelMetres(
-            bytes = own,
+            image = own,
             x = if (eastward) interior - 1 else texelX,
             y = if (southward) interior - 1 else texelY,
         )
     }
 
-    private fun bytesFor(tile: DemTileCoordinate): ByteArray? {
-        val bytes = bytesBySource[tile] ?: return null
+    private fun imageFor(tile: DemTileCoordinate): DecodedImage? {
+        val image = imagesBySource[tile] ?: return null
         val expected = interiorSizePx.toLong() * interiorSizePx.toLong() * RGBA_CHANNELS.toLong()
-        return if (bytes.size.toLong() == expected) bytes else null
+        return if (image.byteCount.toLong() == expected) image else null
     }
 
     private fun neighbourOf(source: DemTileCoordinate, deltaX: Int, deltaY: Int): DemTileCoordinate? {
@@ -259,12 +256,12 @@ internal class GroundSurface(
         )
     }
 
-    private fun texelMetres(bytes: ByteArray, x: Int, y: Int): Double {
+    private fun texelMetres(image: DecodedImage, x: Int, y: Int): Double {
         val offset = (y * interiorSizePx + x) * RGBA_CHANNELS
         return demElevationMetres(
-            red = bytes[offset].toInt() and 0xFF,
-            green = bytes[offset + 1].toInt() and 0xFF,
-            blue = bytes[offset + 2].toInt() and 0xFF,
+            red = image.rgbaByteAt(offset).toInt() and 0xFF,
+            green = image.rgbaByteAt(offset + 1).toInt() and 0xFF,
+            blue = image.rgbaByteAt(offset + 2).toInt() and 0xFF,
             encoding = encoding,
         )
     }

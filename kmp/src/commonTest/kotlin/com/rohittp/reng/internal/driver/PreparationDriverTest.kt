@@ -16,6 +16,7 @@ import com.rohittp.reng.Transport
 import com.rohittp.reng.TransportRequest
 import com.rohittp.reng.TransportResponse
 import com.rohittp.reng.TransportResponseMetadata
+import com.rohittp.reng.internal.cache.Lease
 import com.rohittp.reng.internal.cache.ResidentCache
 import com.rohittp.reng.internal.firewall.basemapEngineHost
 import com.rohittp.reng.internal.identity.CanonicalBytes
@@ -201,6 +202,45 @@ class PreparationDriverTest {
         assertEquals(RenGErrorCode.RESOURCE_UNAVAILABLE, failed.failure.code)
         assertEquals(PipelineStage.RESOURCE_LOOKUP, failed.failure.stage)
     }
+
+    @Test
+    fun aLeaseIsOwnedForRollbackBeforeItsAdmissionObserverRuns() = runTest {
+        val cache = ResidentCache()
+        val leases = mutableListOf<Lease>()
+        var observed = false
+        val executor = ResourceActionExecutor(
+            transport = CountingTransport(),
+            store = CountingStore(),
+            cache = cache,
+            classGateRunner = RenGClassGateRunner(ResourceLimits()),
+            resourceLimits = ResourceLimits(),
+            basemapEngineHost = basemapEngineHost(cache = cache),
+            clock = FixedClock,
+            leaseSink = leases,
+            leaseObserver = { lease ->
+                assertTrue(leases.single() === lease, "rollback ownership must be published first")
+                observed = true
+                throw AdmissionRejected
+            },
+        )
+        val registration = registration("admission")
+        val content = ResolvedResourceContent(
+            route = registration.route,
+            resourceKey = registration.resourceKey,
+            stored = StoredRawResource(
+                bytes = validStickerPng,
+                contentDigest = "d".repeat(64),
+                metadata = StoredRawResourceMetadata(storedAtEpochMillis = 0L),
+            ),
+            provenance = ContentProvenance.TRANSPORT_200,
+        )
+
+        assertFailsWith<AdmissionRejected> {
+            executor.execute(InstallVisibility(ResourceActionId(1L), 0L, content))
+        }
+        assertTrue(observed)
+        cache.releaseLease(leases.single())
+    }
 }
 
 // ---- driver + fixture wiring -------------------------------------------------------------------
@@ -228,6 +268,8 @@ private fun driver(
 private object FixedClock : () -> Long {
     override fun invoke(): Long = 1_700_000_000_000L
 }
+
+private object AdmissionRejected : RuntimeException()
 
 private class CountingClock : () -> Long {
     var samples: Int = 0

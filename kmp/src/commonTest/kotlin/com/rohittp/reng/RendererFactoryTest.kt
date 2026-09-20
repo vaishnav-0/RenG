@@ -25,6 +25,7 @@ import com.rohittp.reng.internal.gl.RenderContextProbe
 import com.rohittp.reng.internal.gl.STICKER_MODEL_VIEW_PROJECTION_UNIFORM_NAME
 import com.rohittp.reng.internal.gl.STICKER_TEXTURE_UNIFORM_NAME
 import com.rohittp.reng.internal.gl.composeScreenModelViewProjection
+import com.rohittp.reng.internal.lifecycle.PreparedFrameFact
 import com.rohittp.reng.internal.math.DoubleVector3
 import com.rohittp.reng.internal.planning.SpatialOutcome
 import com.rohittp.reng.internal.planning.resolvePlacement
@@ -143,6 +144,47 @@ class RendererFactoryTest {
         val renderer = createRenderer(testConfiguration(transport = transport), validGlesBinding(), fixedProbe())
         renderer.prepare(FramePlan(frameIndex = 0L, camera = testCamera()))
         assertEquals(0, transport.executeCalls)
+    }
+
+    @Test
+    fun emptyAndNonIncreasingBatchesFailBeforeConsumerWork() = runTest {
+        val transport = CountingTransport()
+        val renderer = createRenderer(testConfiguration(transport = transport), validGlesBinding(), fixedProbe())
+
+        val empty = assertFailsWith<RenGException> { renderer.prepareBatch(emptyList()) }
+        assertEquals(RenGErrorCode.INVALID_VALUE, empty.code)
+        assertEquals(PipelineStage.FRAME_PLANNING, empty.stage)
+
+        val unordered = assertFailsWith<RenGException> {
+            renderer.prepareBatch(
+                listOf(
+                    FramePlan(frameIndex = 1L, camera = testCamera()),
+                    FramePlan(frameIndex = 1L, camera = testCamera()),
+                ),
+            )
+        }
+        assertEquals(RenGErrorCode.PREPARATION_ORDER_VIOLATION, unordered.code)
+        assertEquals(0, transport.executeCalls)
+    }
+
+    @Test
+    fun failedBatchRollsBackCompletedFramesAndHistory() = runTest {
+        val renderer = createRenderer(
+            testConfiguration(
+                transport = Transport { TransportResponse(statusCode = 500, body = byteArrayOf()) },
+            ),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val first = FramePlan(frameIndex = 0L, camera = testCamera())
+        val failing = oneStickerPlan(frameIndex = 1L)
+
+        assertFailsWith<RenGException> { renderer.prepareBatch(listOf(first, failing)) }
+        assertEquals(0, outstandingLeases(renderer))
+
+        val retried = renderer.prepare(first)
+        assertEquals(0L, retried.frameIndex, "failed batch must not commit its first frame to history")
+        retried.close()
     }
 
     // ---- drawBasemap warn-and-degrade -------------------------------------------------------------
@@ -422,6 +464,106 @@ class RendererFactoryTest {
         )
     }
 
+    @Test
+    fun recreatedObjectsKeepFreeAndCloseGuardedByTheAdoptedContext() {
+        val original = RenderContextIdentity(1L)
+        val adopted = RenderContextIdentity(2L)
+        var currentContext: RenderContextIdentity? = original
+        val binding = validGlesBinding()
+        val renderer = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            binding,
+            RenderContextProbe { currentContext },
+        )
+
+        renderer.notifyGpuObjectsGone()
+        currentContext = adopted
+        renderer.adoptCurrentRenderContext()
+        binding.log.clear()
+
+        currentContext = RenderContextIdentity(3L)
+        val freeFailure = assertFailsWith<RenGException> { renderer.freeResources() }
+        assertEquals(RenGErrorCode.DIFFERENT_CURRENT_RENDER_CONTEXT, freeFailure.code)
+        assertTrue(binding.log.none { it.startsWith("delete") }, "a failed free must issue no GL delete")
+
+        currentContext = null
+        val closeFailure = assertFailsWith<RenGException> { renderer.close() }
+        assertEquals(RenGErrorCode.NO_CURRENT_RENDER_CONTEXT, closeFailure.code)
+        assertTrue(binding.log.none { it.startsWith("delete") }, "a failed close must issue no GL delete")
+
+        currentContext = adopted
+        renderer.close()
+        assertTrue(binding.log.any { it.startsWith("delete") }, "close on the adopted context must clean up")
+    }
+
+    @Test
+    fun failedRecreationRollsBackToContextFreeAwaitingAdoptionState() {
+        var currentContext: RenderContextIdentity? = RenderContextIdentity(1L)
+        val binding = validGlesBinding()
+        val renderer = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            binding,
+            RenderContextProbe { currentContext },
+        )
+
+        renderer.notifyGpuObjectsGone()
+        binding.compileStatus = 0
+        val adoptionFailure = assertFailsWith<RenGException> { renderer.adoptCurrentRenderContext() }
+        assertEquals(RenGErrorCode.GPU_OPERATION_FAILED, adoptionFailure.code)
+
+        val targetFailure = assertFailsWith<RenGException> {
+            renderer.mintRenderTarget(FramebufferName(0u))
+        }
+        assertEquals(RenGErrorCode.RENDER_CONTEXT_ADOPTION_REQUIRED, targetFailure.code)
+
+        currentContext = null
+        binding.log.clear()
+        renderer.close()
+        assertTrue(
+            binding.log.none { it.startsWith("delete") },
+            "failed recreation cleaned its partial objects and rollback left nothing for close to delete",
+        )
+    }
+
+    @Test
+    fun duplicateImagesInAFreedButOpenFrameShareOneBornRetiredUpload() = runTest {
+        val binding = validGlesBinding()
+        val renderer = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            binding,
+            fixedProbe(),
+        )
+        val locator = ResourceLocator("https://example.invalid/shared.png")
+        val frame = renderer.prepare(
+            FramePlan(
+                frameIndex = 0L,
+                camera = testCamera(),
+                stickers = listOf(
+                    Sticker(testPlacement(), locator),
+                    Sticker(testPlacement(), locator),
+                ),
+            ),
+        )
+        val target = renderer.mintRenderTarget(FramebufferName(0u))
+
+        renderer.freeResources(ResourceSelector.ByClass(ResourceClass.STICKER_IMAGE))
+        binding.log.clear()
+        renderer.draw(frame, target)
+
+        assertEquals(
+            1,
+            binding.log.count { it.startsWith("genTextures") },
+            "both occurrences must share the active born-retired allocation",
+        )
+        assertEquals(
+            1,
+            binding.log.count { it.startsWith("deleteTextures") },
+            "the shared retired allocation must be deleted when its final draw lease ends",
+        )
+        frame.close()
+        renderer.close()
+    }
+
     // ---- Task 9b item 2: a sticker's quad is sized from its own image's pixel dimensions ------------
 
     @Test
@@ -585,7 +727,12 @@ class RendererFactoryTest {
         renderer.prepare(modelPlan(tracks = listOf(AnimationTrack(AnimationSelector.Index(0L), 0.25))))
 
         val failure = assertFailsWith<RenGException> {
-            renderer.prepare(modelPlan(tracks = listOf(AnimationTrack(AnimationSelector.Index(1L), 0.25))))
+            renderer.prepare(
+                modelPlan(
+                    frameIndex = 1L,
+                    tracks = listOf(AnimationTrack(AnimationSelector.Index(1L), 0.25)),
+                ),
+            )
         }
         assertEquals(RenGErrorCode.RESOURCE_PARSE_FAILED, failure.code)
         assertEquals(PipelineStage.RESOURCE_PARSING, failure.stage)
@@ -932,7 +1079,7 @@ class RendererFactoryTest {
     }
 
     @Test
-    fun queryResourcesStopsClaimingZeroGpuBytesOnceATextureIsResident() = runTest {
+    fun queryResourcesReportsExactGpuBytesOnceATextureIsResident() = runTest {
         val binding = validGlesBinding()
         val renderer = createRenderer(testConfiguration(transport = CountingTransport()), binding, fixedProbe())
         val plan = FramePlan(
@@ -951,23 +1098,20 @@ class RendererFactoryTest {
 
         renderer.draw(frame, renderer.mintRenderTarget(FramebufferName(0u)))
 
-        // The same key, the same query, after `cachedTexture` uploaded and registered a texture under
-        // it. That texture goes through the unbudgeted `register` path, so its bytes are genuinely
-        // unknown to the layer that owns it -- and the report must now say "unknown" rather than
-        // repeating the zero it was entitled to a moment ago. These are two different claims and the
-        // difference is the whole defect: before this fix, both frames read 0L / false.
+        // The same key, the same query, after the generation-aware texture cache uploaded the
+        // fixture's 2x2 RGBA8 level. Consumer textures now join the measured GPU texture budget, so
+        // the report can give the exact 2 * 2 * 4 allocation instead of falling back to "unknown".
         val afterDraw = renderer.queryResources(selector).entries.single().usage
-        assertNull(afterDraw.knownGpuBytes, "a resident texture of unrecorded size has no known byte count")
-        assertTrue(afterDraw.hasUnknownGpuBytes, "and the report must declare that it does not know")
+        assertEquals(16L, afterDraw.knownGpuBytes)
+        assertFalse(afterDraw.hasUnknownGpuBytes)
         assertEquals(beforeDraw.rawBytes, afterDraw.rawBytes, "nothing about the CPU-side account changed")
     }
 
     @Test
     fun aModelsGlbIsReportedAsAResidentResourceAndIsFreed() = runTest {
-        // A GLB is bytes, never a GPU object of its own: its vertex and index buffers are registered
-        // under `ResourceKeyDeriver.modelGeometry` keys, not under this one, so this entry's own GPU
-        // account is a knowable zero and stays one. What a report can say about a model here is that
-        // its GLB is resident, and by how many bytes.
+        // Preparation has made the GLB resident but has not uploaded its generation yet, so its GPU
+        // account is a knowable zero. What the report can say at this point is that the source bytes
+        // are resident, and by how many bytes.
         val binding = modelBinding()
         val renderer = createRenderer(testConfiguration(transport = ModelTransport()), binding, fixedProbe())
         renderer.prepare(modelPlan())
@@ -991,10 +1135,11 @@ class RendererFactoryTest {
     }
 
     private fun modelPlan(
+        frameIndex: Long = 0L,
         texture: ResourceLocator? = null,
         tracks: List<AnimationTrack> = emptyList(),
     ): FramePlan = FramePlan(
-        frameIndex = 0L,
+        frameIndex = frameIndex,
         camera = modelCamera(),
         models = listOf(
             Model(
@@ -1116,6 +1261,118 @@ class RendererFactoryTest {
         assertEquals(0, outstandingLeases(renderer))
     }
 
+    @Test
+    fun closedFrameKeepsOwnedClosedPrecedenceAfterDroppingRendererCallback() = runTest {
+        val renderer = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val frame = renderer.prepare(oneStickerPlan(frameIndex = 0L))
+        val target = renderer.mintRenderTarget(FramebufferName(0u))
+
+        frame.close()
+        val failure = assertFailsWith<RenGException> { renderer.draw(frame, target) }
+
+        assertEquals(RenGErrorCode.PREPARED_FRAME_CLOSED, failure.code)
+        assertEquals(PipelineStage.DRAW, failure.stage)
+    }
+
+    @Test
+    fun ownerIdentityTokensStillRejectForeignFramesAndTargets() = runTest {
+        val first = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val second = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val firstFrame = first.prepare(oneStickerPlan(frameIndex = 0L))
+        val secondFrame = second.prepare(oneStickerPlan(frameIndex = 0L))
+        val firstTarget = first.mintRenderTarget(FramebufferName(0u))
+        val secondTarget = second.mintRenderTarget(FramebufferName(0u))
+
+        val foreignFrame = assertFailsWith<RenGException> { second.draw(firstFrame, secondTarget) }
+        val foreignTarget = assertFailsWith<RenGException> { second.draw(secondFrame, firstTarget) }
+
+        assertEquals(RenGErrorCode.FOREIGN_PREPARED_FRAME, foreignFrame.code)
+        assertEquals(RenGErrorCode.FOREIGN_RENDER_TARGET, foreignTarget.code)
+        firstFrame.close()
+        secondFrame.close()
+    }
+
+    @Test
+    fun rendererCloseDrainsAndDetachesEveryOpenPreparedFrame() = runTest {
+        val renderer = createRenderer(
+            testConfiguration(transport = CountingTransport()),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val concreteRenderer = renderer as RenGRenderer
+        val first = renderer.prepare(oneStickerPlan(frameIndex = 0L)) as RenGPreparedFrame
+        val second = renderer.prepare(oneStickerPlan(frameIndex = 1L)) as RenGPreparedFrame
+
+        assertTrue(concreteRenderer.inFlightPreparedFrameCpuBytes > 0L)
+        assertTrue(first.retainsCloseOwner)
+        assertTrue(second.retainsCloseOwner)
+        assertTrue(first.stickers.isNotEmpty())
+        assertTrue(second.stickers.isNotEmpty())
+
+        renderer.close()
+
+        assertEquals(0L, concreteRenderer.inFlightPreparedFrameCpuBytes)
+        listOf(first, second).forEach { frame ->
+            assertEquals(PreparedFrameFact.OwnedClosed, frame.fact())
+            assertFalse(frame.isRegistered)
+            assertFalse(frame.retainsCloseOwner)
+            assertTrue(frame.stickers.isEmpty())
+            assertNull(frame.takeClosePayload(), "renderer close must drain every ownership token")
+            frame.close()
+            frame.close()
+        }
+    }
+
+    @Test
+    fun preparedFrameCpuAdmissionCountsSharedGenerationsOnceAndReleasesOnLastClose() = runTest {
+        val generationBytes = onePixelPng.size.toLong() + 2L * 2L * 4L
+        // Admit both encoded generations, then reject exactly when the second one's 16 decoded
+        // bytes are projected -- before decode allocates them.
+        val admissionLimit = generationBytes * 2L - 1L
+        val renderer = createRenderer(
+            testConfiguration(
+                transport = CountingTransport(),
+                resourceLimits = ResourceLimits(maximumInFlightPreparedFrameCpuBytes = admissionLimit),
+            ),
+            validGlesBinding(),
+            fixedProbe(),
+        )
+        val first = renderer.prepare(oneStickerPlan(frameIndex = 0L))
+        val second = renderer.prepare(oneStickerPlan(frameIndex = 1L))
+        val uniquePlan = FramePlan(
+            frameIndex = 2L,
+            camera = testCamera(),
+            stickers = listOf(Sticker(testPlacement(), ResourceLocator("https://example.invalid/b.png"))),
+        )
+
+        val failure = assertFailsWith<RenGException> { renderer.prepare(uniquePlan) }
+
+        assertEquals(RenGErrorCode.RESOURCE_LIMIT_EXCEEDED, failure.code)
+        assertEquals(PipelineStage.FRAME_PREPARATION, failure.stage)
+        assertEquals("preparedFrameCpuBytes", failure.diagnostics.single().fieldName)
+        assertEquals(admissionLimit, failure.diagnostics.single().limit)
+        assertEquals(admissionLimit + 1L, failure.diagnostics.single().actual)
+
+        first.close()
+        assertFailsWith<RenGException> { renderer.prepare(uniquePlan) }
+        second.close()
+
+        val replacement = renderer.prepare(uniquePlan)
+        replacement.close()
+    }
+
     private fun oneStickerPlan(frameIndex: Long): FramePlan = FramePlan(
         frameIndex = frameIndex,
         camera = testCamera(),
@@ -1144,6 +1401,7 @@ class RendererFactoryTest {
         transport: Transport = Transport { error("test transport must not execute") },
         store: Store = NoOpStore(),
         basemapStyle: ResourceLocator? = null,
+        resourceLimits: ResourceLimits = ResourceLimits(),
         diagnosticSink: DiagnosticSink = DiagnosticSink.None,
         terrainShading: Boolean = false,
     ): RendererConfiguration = RendererConfiguration(
@@ -1151,6 +1409,7 @@ class RendererFactoryTest {
         transport = transport,
         store = store,
         basemapStyle = basemapStyle,
+        resourceLimits = resourceLimits,
         diagnosticSink = diagnosticSink,
         terrainShading = terrainShading,
     )

@@ -76,6 +76,34 @@ private fun isMipmapMinificationFilter(minFilter: Int): Boolean = minFilter == G
     minFilter == GL_NEAREST_MIPMAP_LINEAR ||
     minFilter == GL_LINEAR_MIPMAP_LINEAR
 
+/** Exact RGBA8 storage for level zero and every mip level [sampler] requests. */
+internal fun textureAllocationBytes(
+    width: Int,
+    height: Int,
+    sampler: TextureSamplerState,
+): Long {
+    require(width > 0 && height > 0) { "texture dimensions must be positive" }
+    var levelWidth = width.toLong()
+    var levelHeight = height.toLong()
+    var total = 0L
+    while (true) {
+        val pixels = checkedPositiveProduct(levelWidth, levelHeight)
+        val levelBytes = checkedPositiveProduct(pixels, 4L)
+        check(total <= Long.MAX_VALUE - levelBytes) { "texture byte size overflow" }
+        total += levelBytes
+        if (!isMipmapMinificationFilter(sampler.minFilter) || (levelWidth == 1L && levelHeight == 1L)) {
+            return total
+        }
+        levelWidth = maxOf(1L, levelWidth / 2L)
+        levelHeight = maxOf(1L, levelHeight / 2L)
+    }
+}
+
+private fun checkedPositiveProduct(left: Long, right: Long): Long {
+    check(left == 0L || right <= Long.MAX_VALUE / left) { "texture byte size overflow" }
+    return left * right
+}
+
 /**
  * Uploads [image]'s current unpremultiplied RGBA8 bytes as a `GL_TEXTURE_2D` and returns its object name.
  *
@@ -91,9 +119,9 @@ private fun isMipmapMinificationFilter(minFilter: Int): Boolean = minFilter == G
  * across RGBA channels — must never take this path: a multiply destroys it silently, with no error.
  * `CONTEXT.md` sets this same precedent for terrain samples, which must stay bit-exact.
  *
- * [image] is never mutated by either path: [DecodedImage.rgbaSnapshot] already returns a fresh copy on
- * every read, and premultiplication (when it happens at all) runs on that copy. Cycle C's canonical
- * decoded form stays unpremultiplied.
+ * [image] is never mutated by either path. DATA is consumed synchronously from its immutable backing;
+ * IMAGE premultiplication writes only into a bounded upload workspace. Cycle C's canonical decoded
+ * form stays unpremultiplied.
  *
  * [sampler] sets the four `glTexParameteri` calls this upload always makes, and defaults to exactly
  * today's behaviour for [content] — see [defaultSamplerStateFor] — so stickers, the ground, and
@@ -117,12 +145,71 @@ internal fun uploadTexture(
     content: TextureContent,
     sampler: TextureSamplerState = defaultSamplerStateFor(content),
 ): Int {
-    val bytes = image.rgbaSnapshot()
-    val uploadBytes = when (content) {
-        TextureContent.IMAGE -> premultiplyAlpha(bytes)
-        TextureContent.DATA -> bytes
+    return when (content) {
+        TextureContent.IMAGE -> uploadPremultipliedInChunks(binding, image, sampler)
+        TextureContent.DATA -> image.readRgbaBytes { bytes ->
+            uploadRgba(binding, bytes, image.width, image.height, sampler)
+        }
     }
-    return uploadRgba(binding, uploadBytes, image.width, image.height, sampler)
+}
+
+/** Uploads premultiplied RGBA with a reusable <=1 MiB workspace instead of a second full raster. */
+private fun uploadPremultipliedInChunks(
+    binding: GlBinding,
+    image: DecodedImage,
+    sampler: TextureSamplerState,
+): Int {
+    val names = IntArray(1)
+    binding.genTextures(1, names)
+    val texture = names[0]
+    binding.bindTexture(GL_TEXTURE_2D, texture)
+    binding.texImage2D(
+        target = GL_TEXTURE_2D,
+        level = 0,
+        internalFormat = GL_RGBA8,
+        width = image.width,
+        height = image.height,
+        border = 0,
+        format = GL_RGBA,
+        type = GL_UNSIGNED_BYTE,
+        pixels = null,
+    )
+
+    val maximumChunkPixels = PREMULTIPLY_UPLOAD_CHUNK_BYTES / RGBA_CHANNELS
+    image.readRgbaBytes { source ->
+        val rowPixels = image.width
+        if (rowPixels <= maximumChunkPixels) {
+            val rowsPerChunk = maxOf(1, maximumChunkPixels / rowPixels)
+            val chunk = ByteArray(minOf(image.height, rowsPerChunk) * rowPixels * RGBA_CHANNELS)
+            var y = 0
+            while (y < image.height) {
+                val rows = minOf(rowsPerChunk, image.height - y)
+                val pixels = rows * rowPixels
+                premultiplyRange(source, y * rowPixels * RGBA_CHANNELS, pixels, chunk)
+                binding.texSubImage2D(
+                    GL_TEXTURE_2D, 0, 0, y, rowPixels, rows, GL_RGBA, GL_UNSIGNED_BYTE, chunk,
+                )
+                y += rows
+            }
+        } else {
+            val chunk = ByteArray(maximumChunkPixels * RGBA_CHANNELS)
+            for (y in 0 until image.height) {
+                var x = 0
+                while (x < rowPixels) {
+                    val pixels = minOf(maximumChunkPixels, rowPixels - x)
+                    val sourceOffset = (y * rowPixels + x) * RGBA_CHANNELS
+                    premultiplyRange(source, sourceOffset, pixels, chunk)
+                    binding.texSubImage2D(
+                        GL_TEXTURE_2D, 0, x, y, pixels, 1, GL_RGBA, GL_UNSIGNED_BYTE, chunk,
+                    )
+                    x += pixels
+                }
+            }
+        }
+    }
+
+    applySampler(binding, sampler)
+    return texture
 }
 
 /**
@@ -175,38 +262,33 @@ private fun uploadRgba(
         pixels = uploadBytes,
     )
 
-    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampler.minFilter)
-    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampler.magFilter)
-    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, sampler.wrapS)
-    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, sampler.wrapT)
-
-    if (isMipmapMinificationFilter(sampler.minFilter)) {
-        binding.generateMipmap(GL_TEXTURE_2D)
-    }
+    applySampler(binding, sampler)
 
     return texture
 }
 
-/**
- * Premultiplies tightly packed RGBA8 [bytes] into a fresh array; [bytes] itself is never written to.
- *
- * Rounding is pinned to round-half-up: `(component * alpha + 127) / 255`, not the truncating
- * `(component * alpha) / 255`. The two differ whenever the product does not divide 255 evenly — for
- * example `137 * 137`, where truncation yields 73 and this rule yields 74 — and an unpinned choice is
- * exactly the kind of thing that silently diverges between platforms. Alpha itself is carried through
- * untouched.
- */
-private fun premultiplyAlpha(bytes: ByteArray): ByteArray {
-    val premultiplied = bytes.copyOf()
-    var pixelStart = 0
-    while (pixelStart < premultiplied.size) {
-        val alpha = premultiplied[pixelStart + 3].toInt() and 0xFF
-        for (channel in 0 until 3) {
-            val index = pixelStart + channel
-            val component = premultiplied[index].toInt() and 0xFF
-            premultiplied[index] = ((component * alpha + 127) / 255).toByte()
-        }
-        pixelStart += 4
-    }
-    return premultiplied
+private fun applySampler(binding: GlBinding, sampler: TextureSamplerState) {
+    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampler.minFilter)
+    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampler.magFilter)
+    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, sampler.wrapS)
+    binding.texParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, sampler.wrapT)
+    if (isMipmapMinificationFilter(sampler.minFilter)) binding.generateMipmap(GL_TEXTURE_2D)
 }
+
+private fun premultiplyRange(source: ByteArray, sourceOffset: Int, pixelCount: Int, out: ByteArray) {
+    var sourcePixel = sourceOffset
+    var destinationPixel = 0
+    repeat(pixelCount) {
+        val alpha = source[sourcePixel + 3].toInt() and 0xFF
+        for (channel in 0 until 3) {
+            val component = source[sourcePixel + channel].toInt() and 0xFF
+            out[destinationPixel + channel] = ((component * alpha + 127) / 255).toByte()
+        }
+        out[destinationPixel + 3] = source[sourcePixel + 3]
+        sourcePixel += RGBA_CHANNELS
+        destinationPixel += RGBA_CHANNELS
+    }
+}
+
+private const val RGBA_CHANNELS: Int = 4
+private const val PREMULTIPLY_UPLOAD_CHUNK_BYTES: Int = 1024 * 1024

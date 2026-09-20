@@ -105,7 +105,12 @@ internal class RenGClassGateRunner(private val limits: ResourceLimits) : ClassGa
     }
 
     private fun runDecodePng(content: ResolvedResourceContent): SuppliedValidationOutcome =
-        when (decodePng(content.stored.bytes, limits.maximumDecodedImageBytes)) {
+        when (decodePng(
+                content.stored.bytes,
+                limits.maximumDecodedImageBytes,
+                limits.maximumImageDecodeWorkingBytes,
+            )
+        ) {
             is PngDecodeResult.Success -> SuppliedValidationOutcome.Valid
             is PngDecodeResult.Malformed,
             is PngDecodeResult.Unsupported,

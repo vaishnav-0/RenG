@@ -26,3 +26,16 @@ Failing without state change gives the consumer a recoverable precondition error
 to retry under the correct context. The former drop-and-warn fallback was rejected because it made free and
 close indistinguishable from declared loss, hid unreclaimed live objects, and violated the contract that
 freeing valid objects deletes them properly.
+
+The exact-context proof and the complete permitted GL operation execute under one re-entrant renderer gate. That
+gate serializes draw, free, close, adoption, and declared loss across calling threads, so lifecycle facts cannot
+change between validation and deletion. Active-preparation admission remains outside and earlier in the lifecycle
+decision: free or close still reports `PREPARATION_IN_PROGRESS` before probing a context.
+
+Reusable consumer GPU allocations are identified by logical Resource Key, monotonic CPU generation, subresource,
+and texture upload variant. Resource free snapshots selected CPU generations, retires matching GPU generations
+(including GPU-only owners selected by key/kind), and deletes unleased allocations immediately. A leased allocation
+is deleted by its last draw release; if an old Prepared Frame uploads after the free, the generation high-water mark
+makes that allocation born retired, so it is likewise deleted at the end of that draw instead of becoming resident
+again. Texture and model-buffer residency have independent byte ceilings, both enforced immediately when a last
+lease makes an entry evictable.

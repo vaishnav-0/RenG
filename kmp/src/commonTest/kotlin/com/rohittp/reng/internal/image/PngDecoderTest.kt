@@ -109,6 +109,15 @@ class PngDecoderTest {
     }
 
     @Test
+    fun decidesThePeakWorkingCeilingBeforeAllocating() {
+        // 4x4 RGBA output is 64 bytes. The bounded upload workspace for this tiny image is another
+        // 64 bytes (larger than the two 13-byte RGB row buffers), for a projected peak of 128.
+        assertEquals(64L, projectedPngRgbaBytes(filterNoneFixture))
+        assertIs<PngDecodeResult.TooLarge>(decodePng(filterNoneFixture, 1L shl 20, 127L))
+        assertIs<PngDecodeResult.Success>(decodePng(filterNoneFixture, 1L shl 20, 128L))
+    }
+
+    @Test
     fun appliesNoColourTransformForAnyAncillaryColourChunk() {
         val plain = assertIs<PngDecodeResult.Success>(decodePng(rgb8Reference, 1L shl 20))
         // Pin the reference decode against an independently-computed expectation first, so the loop

@@ -109,17 +109,16 @@ internal fun demElevationTile(texels: DemTexels, encoding: DemEncoding): DemElev
     val image = texels.image
     val sizePx = image.width
     if (sizePx <= 0 || image.height != sizePx) return null
-    val rgba = image.rgbaSnapshot()
-    if (rgba.size.toLong() != sizePx.toLong() * sizePx.toLong() * 4L) return null
+    if (image.byteCount.toLong() != sizePx.toLong() * sizePx.toLong() * 4L) return null
 
     val metres = DoubleArray(sizePx * sizePx)
     var texel = 0
     while (texel < metres.size) {
         val channel = texel * 4
         metres[texel] = demElevationMetres(
-            red = rgba[channel].toInt() and 0xFF,
-            green = rgba[channel + 1].toInt() and 0xFF,
-            blue = rgba[channel + 2].toInt() and 0xFF,
+            red = image.rgbaByteAt(channel).toInt() and 0xFF,
+            green = image.rgbaByteAt(channel + 1).toInt() and 0xFF,
+            blue = image.rgbaByteAt(channel + 2).toInt() and 0xFF,
             encoding = encoding,
         )
         texel++

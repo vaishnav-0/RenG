@@ -160,16 +160,15 @@ internal class SceneTerrain(
      * The same displaced surface, readable on the CPU, or `null` when nothing in this frame asked a
      * question of it.
      *
-     * **It is built per frame and only on demand**, because holding it costs one `rgbaSnapshot` per
-     * distinct source DEM and a frame that asks nothing of it would pay that for nothing. That
-     * conditional construction is the whole of what survives the design's §6 "sparse CPU decode":
-     * Rentile `0.7.0` hands over decoded texels, so there is no decode to be sparse about, only a
-     * copy to be avoided.
+     * **It is built per frame and only on demand**, because a frame that asks nothing of the surface
+     * needs no tile index. Rentile `0.7.0` hands over decoded texels and [GroundSurface] keeps their
+     * immutable [com.rohittp.reng.internal.image.DecodedImage] references directly, so constructing
+     * this surface copies no DEM raster.
      *
      * **It is built during `prepare()` and carried here, not derived at draw time**, because the
      * label placement pass rode this exact object before the frame existed -- ADR 0035 puts label
-     * collision inside `prepare()`. Two constructions would be two copies of every source DEM and
-     * two answers to which of the frame's tiles displace.
+     * collision inside `prepare()`. Two constructions would be two indexes and two answers to which
+     * of the frame's tiles displace, even though both reference the same pixels.
      */
     val surface: GroundSurface? = null,
 ) {

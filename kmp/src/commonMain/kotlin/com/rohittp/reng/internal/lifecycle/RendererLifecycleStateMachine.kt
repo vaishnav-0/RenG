@@ -74,6 +74,7 @@ internal object RendererLifecycleStateMachine {
 
         val stage = when (operation) {
             RendererLifecycleOperation.BeginPreparation -> PipelineStage.FRAME_PREPARATION
+            RendererLifecycleOperation.EndPreparation -> return null
             RendererLifecycleOperation.ClearFrameHistory -> PipelineStage.FRAME_PLANNING
             is RendererLifecycleOperation.FreeResources -> PipelineStage.RESOURCE_FREE
             RendererLifecycleOperation.CloseRenderer -> PipelineStage.RENDERER_CLOSE
@@ -90,6 +91,8 @@ internal object RendererLifecycleStateMachine {
             snapshot.copy(preparationActive = true),
             operation,
         )
+
+        RendererLifecycleOperation.EndPreparation -> endPreparation(snapshot)
 
         RendererLifecycleOperation.CancelPreparations -> beginCancellation(
             snapshot,
@@ -128,6 +131,8 @@ internal object RendererLifecycleStateMachine {
             snapshot.copy(preparationActive = true),
             operation,
         )
+
+        RendererLifecycleOperation.EndPreparation -> endPreparation(snapshot)
 
         RendererLifecycleOperation.CancelPreparations -> beginCancellation(
             snapshot,
@@ -169,6 +174,8 @@ internal object RendererLifecycleStateMachine {
             RenGErrorCode.RENDERER_CLOSED,
             PipelineStage.FRAME_PREPARATION,
         )
+
+        RendererLifecycleOperation.EndPreparation -> noOp(snapshot)
 
         RendererLifecycleOperation.CancelPreparations,
         RendererLifecycleOperation.NotifyGpuObjectsGone,
@@ -215,6 +222,14 @@ internal object RendererLifecycleStateMachine {
             action = RendererLifecycleAction.RequestPreparationCancellation,
             cursor = RendererLifecycleCursor.AwaitingPreparationTermination(snapshot, operation),
         )
+    } else {
+        noOp(snapshot)
+    }
+
+    private fun endPreparation(
+        snapshot: RendererLifecycleSnapshot,
+    ): RendererLifecycleTransition = if (snapshot.preparationActive) {
+        executePermitted(snapshot, RendererLifecycleOperation.EndPreparation)
     } else {
         noOp(snapshot)
     }
@@ -285,7 +300,7 @@ internal object RendererLifecycleStateMachine {
         require(cursor.operation is RendererLifecycleOperation.NotifyGpuObjectsGone) {
             "render-call quiescence is valid only for GPU object loss"
         }
-        return succeeded(
+        return executePermitted(
             cursor.snapshot.copy(
                 ownerState = RendererOwnerState.AWAITING_CONTEXT_ADOPTION,
                 contextGeneration = cursor.snapshot.contextGeneration + 1L,
@@ -294,6 +309,7 @@ internal object RendererLifecycleStateMachine {
                     deferredDeletions = emptyList(),
                 ),
             ),
+            cursor.operation,
         )
     }
 
@@ -405,7 +421,7 @@ internal object RendererLifecycleStateMachine {
     ): RendererLifecycleTransition = when (observation) {
         RendererLifecycleObservation.PermittedOperationSucceeded -> {
             val completedSnapshot = when (cursor.operation) {
-                RendererLifecycleOperation.BeginPreparation ->
+                RendererLifecycleOperation.EndPreparation ->
                     cursor.snapshot.copy(preparationActive = false)
 
                 RendererLifecycleOperation.CloseRenderer -> cursor.snapshot.copy(

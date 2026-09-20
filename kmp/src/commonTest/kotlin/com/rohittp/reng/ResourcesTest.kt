@@ -246,6 +246,55 @@ class ResourcesTest {
     }
 
     @Test
+    fun gpuBufferBudgetHasADocumentedDefaultAndInclusiveByteRange() {
+        assertEquals(512L * 1024L * 1024L, ResourceLimits().maximumResidentGpuBufferBytes)
+        assertEquals(1L, ResourceLimits(maximumResidentGpuBufferBytes = 1L).maximumResidentGpuBufferBytes)
+        assertEquals(
+            Int.MAX_VALUE.toLong(),
+            ResourceLimits(maximumResidentGpuBufferBytes = Int.MAX_VALUE.toLong()).maximumResidentGpuBufferBytes,
+        )
+        assertFailsWith<IllegalArgumentException> { ResourceLimits(maximumResidentGpuBufferBytes = 0L) }
+        assertFailsWith<IllegalArgumentException> {
+            ResourceLimits(maximumResidentGpuBufferBytes = Int.MAX_VALUE.toLong() + 1L)
+        }
+    }
+
+    @Test
+    fun imageDecodeWorkingBudgetHasADocumentedDefaultAndInclusiveByteRange() {
+        assertEquals(512L * 1024L * 1024L, ResourceLimits().maximumImageDecodeWorkingBytes)
+        assertEquals(1L, ResourceLimits(maximumImageDecodeWorkingBytes = 1L).maximumImageDecodeWorkingBytes)
+        assertEquals(
+            Int.MAX_VALUE.toLong(),
+            ResourceLimits(maximumImageDecodeWorkingBytes = Int.MAX_VALUE.toLong()).maximumImageDecodeWorkingBytes,
+        )
+        assertFailsWith<IllegalArgumentException> { ResourceLimits(maximumImageDecodeWorkingBytes = 0L) }
+        assertFailsWith<IllegalArgumentException> {
+            ResourceLimits(maximumImageDecodeWorkingBytes = Int.MAX_VALUE.toLong() + 1L)
+        }
+    }
+
+    @Test
+    fun preparedFrameCpuBudgetHasADocumentedDefaultAndInclusiveByteRange() {
+        assertEquals(1024L * 1024L * 1024L, ResourceLimits().maximumInFlightPreparedFrameCpuBytes)
+        assertEquals(
+            1L,
+            ResourceLimits(maximumInFlightPreparedFrameCpuBytes = 1L).maximumInFlightPreparedFrameCpuBytes,
+        )
+        assertEquals(
+            Int.MAX_VALUE.toLong(),
+            ResourceLimits(
+                maximumInFlightPreparedFrameCpuBytes = Int.MAX_VALUE.toLong(),
+            ).maximumInFlightPreparedFrameCpuBytes,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            ResourceLimits(maximumInFlightPreparedFrameCpuBytes = 0L)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ResourceLimits(maximumInFlightPreparedFrameCpuBytes = Int.MAX_VALUE.toLong() + 1L)
+        }
+    }
+
+    @Test
     fun basemapTileIsANonExternalResourceKind() {
         assertTrue(ResourceKind.BASEMAP_TILE in ResourceKind.entries)
         // Only EXTERNAL keys carry a resource class; this invariant must survive the new entry.

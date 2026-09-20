@@ -100,3 +100,17 @@ The attach is idempotent and first-writer-wins. Two preparations racing to decod
 is possible — `prepare` is serialised by `preparationMutex`, so today it is not, but the cache has
 never relied on its callers being serial — and both produce equal pixels, so keeping the first and
 charging once is the only outcome that keeps the byte account true.
+
+## Bound the decode peak, not only its retained result
+
+The decoded-image ceiling alone did not bound peak memory: constructing a full filtered raster beside the final
+RGBA image could require another image-sized allocation, and premultiplication could add one more. PNG decode now
+streams through two source-width scanlines directly into the final RGBA array. Before allocating them, it projects
+that output plus the larger of the row workspace and the bounded 1 MiB premultiplication upload chunk against
+`maximumImageDecodeWorkingBytes` (512 MiB by default). Every production PNG path supplies that ceiling, including
+stickers, consumer textures, model images, basemap tiles, sprites, and glyph atlases.
+
+The same generation ownership now memoizes a decoded GLB expansion. Animation time and pose remain per frame, but
+the immutable document, binary views, draw catalogue, and embedded images are decoded once, charged to
+`maximumResidentCpuResourceBytes`, and discarded with that generation. A reloaded generation never reuses the old
+expansion merely because its logical Resource Key matches.

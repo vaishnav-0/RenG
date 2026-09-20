@@ -60,6 +60,9 @@ internal class RecordingGlBinding : GlBinding {
     val pixels: MutableMap<Int, ByteArray> = mutableMapOf()
     val indexedUniformBuffer: MutableMap<Int, Int> = mutableMapOf()
     private var lastTexImage2DPixels: ByteArray? = null
+    private var lastTexImage2DWidth: Int = 0
+    private var lastTexImage2DHeight: Int = 0
+    val texSubImage2DPayloads: MutableList<ByteArray> = mutableListOf()
 
     private fun hex(value: Int): String = "0x${value.toString(16).uppercase()}"
 
@@ -186,10 +189,35 @@ internal class RecordingGlBinding : GlBinding {
         border: Int, format: Int, type: Int, pixels: ByteArray?,
     ) {
         log += "texImage2D(${hex(target)},$level,${hex(internalFormat)},$width,$height,$border,${hex(format)},${hex(type)})"
-        lastTexImage2DPixels = pixels
+        lastTexImage2DWidth = width
+        lastTexImage2DHeight = height
+        val expectedBytes = width * height * 4
+        lastTexImage2DPixels = when {
+            expectedBytes <= 0 -> ByteArray(0)
+            pixels == null -> ByteArray(expectedBytes)
+            else -> pixels.copyOf(expectedBytes)
+        }
     }
 
-    /** The exact bytes passed to the most recent [texImage2D] call, or empty if none was passed or made. */
+    override fun texSubImage2D(
+        target: Int, level: Int, xOffset: Int, yOffset: Int, width: Int, height: Int,
+        format: Int, type: Int, pixels: ByteArray,
+    ) {
+        log += "texSubImage2D(${hex(target)},$level,$xOffset,$yOffset,$width,$height,${hex(format)},${hex(type)})"
+        texSubImage2DPayloads += pixels.copyOf()
+        val destination = lastTexImage2DPixels ?: return
+        val rowBytes = width * 4
+        for (row in 0 until height) {
+            pixels.copyInto(
+                destination = destination,
+                destinationOffset = ((yOffset + row) * lastTexImage2DWidth + xOffset) * 4,
+                startIndex = row * rowBytes,
+                endIndex = (row + 1) * rowBytes,
+            )
+        }
+    }
+
+    /** The reconstructed level-zero bytes after the most recent image and sub-image upload calls. */
     fun lastTexImageBytes(): List<Byte> = lastTexImage2DPixels?.toList().orEmpty()
 
     override fun texStorage2D(target: Int, levels: Int, internalFormat: Int, width: Int, height: Int) {

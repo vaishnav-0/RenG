@@ -73,6 +73,9 @@ internal enum class FramebufferFact {
 internal sealed interface RendererLifecycleOperation {
     data object BeginPreparation : RendererLifecycleOperation
 
+    /** Internal completion boundary for the suspend invocation begun by [BeginPreparation]. */
+    data object EndPreparation : RendererLifecycleOperation
+
     data object CancelPreparations : RendererLifecycleOperation
 
     data object ClearFrameHistory : RendererLifecycleOperation

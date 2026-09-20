@@ -10,7 +10,16 @@ import com.rohittp.reng.ResourceUsage
 import com.rohittp.reng.StoredRawResource
 import com.rohittp.reng.internal.GpuByteAccount
 import com.rohittp.reng.internal.image.DecodedImage
-import kotlinx.coroutines.sync.Mutex
+import com.rohittp.reng.internal.model.DecodedModel
+import com.rohittp.reng.internal.thread.PlatformLock
+
+/**
+ * Renderer-local identity of one installed CPU generation.
+ *
+ * Equality of bytes is deliberately irrelevant: reinstalling byte-identical content after a free is
+ * still a new generation and must never revive GPU objects owned by the retired one.
+ */
+internal data class ResidentGenerationId(val value: Long)
 
 /**
  * One resident copy of a [ResourceKey]'s raw bytes and, for image classes, its decoded pixels. A
@@ -21,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
  * a stale resident as a `304` baseline.
  */
 internal class ResidentGeneration(
+    val id: ResidentGenerationId,
     val key: ResourceKey,
     val stored: StoredRawResource,
     decoded: DecodedImage?,
@@ -33,6 +43,10 @@ internal class ResidentGeneration(
      * vocabulary that belong to the renderer, and happens a step later.
      */
     var decoded: DecodedImage? = decoded
+        private set
+
+    /** The immutable draw-ready GLB expansion shared by every occurrence of this generation. */
+    var decodedModel: DecodedModel? = null
         private set
 
     var leaseCount: Int = 0
@@ -62,6 +76,21 @@ internal class ResidentGeneration(
         val added = image.byteCount.toLong()
         byteSize += added
         return added
+    }
+
+    /**
+     * Attaches [model] once and returns the retained instance plus newly chargeable bytes.
+     *
+     * The cache lock makes observation and attachment one state transition. A caller may have done
+     * duplicate speculative decode work before entering it, but only one expansion is retained or
+     * charged. Renderer preparation is itself exclusive, so ordinary repeated model occurrences do
+     * not even perform that speculative duplicate: they observe [decodedModel] first.
+     */
+    fun attachDecodedModel(model: DecodedModel): Pair<DecodedModel, Long> {
+        decodedModel?.let { return it to 0L }
+        decodedModel = model
+        byteSize += model.decodedCpuBytes
+        return model to model.decodedCpuBytes
     }
 
     fun addLease() {
@@ -116,7 +145,7 @@ private class KeyEntry {
  * simply installs a fresh generation and clears the marker, because freeing is never an error the caller
  * must recover from.
  *
- * This class carries the renderer mutex, because its per-key state is exactly what that mutex exists to
+ * This class carries the renderer lock, because its per-key state is exactly what that lock exists to
  * guard: every public method locks for its own state transition only, and never across an adapter call, a
  * decode, or a parse — none of which this cache ever performs itself. [free] and [report] share the same
  * locked snapshot, which is what makes the free/release race well defined: whichever call locks first
@@ -132,7 +161,7 @@ internal class ResidentCache(
      */
     private val residentByteBudget: Long = Long.MAX_VALUE,
 ) {
-    private val mutex = Mutex()
+    private val lock = PlatformLock()
     private val entries: MutableMap<ResourceKey, KeyEntry> = mutableMapOf()
 
     /**
@@ -154,6 +183,9 @@ internal class ResidentCache(
      */
     private var residentBytes: Long = 0L
 
+    /** Monotonic within this renderer/cache; zero is reserved as an invalid/unassigned token. */
+    private var nextGenerationId: Long = 1L
+
     /**
      * What the budget has cost since this cache was created, cumulative and never decreasing
      * (ADR 0048). Counted here rather than per key because [evictOverBudget] removes the key.
@@ -174,7 +206,7 @@ internal class ResidentCache(
     ): ResidentGeneration = locked {
         val entry = entries.getOrPut(key) { KeyEntry() }
         retireCurrent(entry)
-        val generation = ResidentGeneration(key = key, stored = stored, decoded = decoded)
+        val generation = newGeneration(key = key, stored = stored, decoded = decoded)
         entry.current = generation
         entry.freed = false
         residentBytes += generation.byteSize
@@ -197,6 +229,19 @@ internal class ResidentCache(
         residentBytes += added
         touch(generation.key)
         evictOverBudget()
+    }
+
+    /**
+     * Records one decoded model on [generation], charging the retained expansion exactly once, and
+     * returns whichever immutable model won a racing attachment.
+     */
+    fun attachDecodedModel(generation: ResidentGeneration, model: DecodedModel): DecodedModel = locked {
+        val (retained, added) = generation.attachDecodedModel(model)
+        if (added == 0L) return@locked retained
+        residentBytes += added
+        touch(generation.key)
+        evictOverBudget()
+        retained
     }
 
     fun takeLease(generation: ResidentGeneration): Lease = locked {
@@ -226,7 +271,7 @@ internal class ResidentCache(
     ): Lease = locked {
         val entry = entries.getOrPut(key) { KeyEntry() }
         retireCurrent(entry)
-        val generation = ResidentGeneration(key = key, stored = stored, decoded = decoded)
+        val generation = newGeneration(key = key, stored = stored, decoded = decoded)
         generation.addLease()
         entry.current = generation
         entry.freed = false
@@ -269,6 +314,10 @@ internal class ResidentCache(
         if (generation.leaseCount == 0) {
             val removed = entries[generation.key]?.retired?.remove(generation) == true
             if (removed) residentBytes -= generation.byteSize
+            // A current generation can have kept the cache over budget only because this lease pinned
+            // it. The moment the last lease goes it is a candidate, so enforce the ceiling before the
+            // release returns rather than waiting for an unrelated future install.
+            evictOverBudget()
         }
     }
 
@@ -331,6 +380,17 @@ internal class ResidentCache(
         entries[key]?.freed ?: false
     }
 
+    /**
+     * Point-in-time generation identities selected for retirement. Callers use this immediately
+     * before [free] to retire generation-owned GPU groups, including CPU generations that have not
+     * uploaded anything yet. The public free result remains keyed/count-based and unchanged.
+     */
+    fun generationIds(selector: ResourceSelector): Map<ResourceKey, Set<ResidentGenerationId>> = locked {
+        entries
+            .filterKeys { it.matches(selector) }
+            .mapValues { (_, entry) -> (listOfNotNull(entry.current) + entry.retired).mapTo(linkedSetOf()) { it.id } }
+    }
+
     fun closeAll(): Unit = locked {
         entries.clear()
         recency.clear()
@@ -340,6 +400,17 @@ internal class ResidentCache(
         // nothing can read would only be state to get wrong.
         evictedKeyCount = 0L
         evictedBytes = 0L
+    }
+
+    private fun newGeneration(
+        key: ResourceKey,
+        stored: StoredRawResource,
+        decoded: DecodedImage?,
+    ): ResidentGeneration {
+        check(nextGenerationId != Long.MAX_VALUE) { "resident generation identity space exhausted" }
+        val id = ResidentGenerationId(nextGenerationId)
+        nextGenerationId += 1L
+        return ResidentGeneration(id = id, key = key, stored = stored, decoded = decoded)
     }
 
     /**
@@ -414,7 +485,9 @@ internal class ResidentCache(
             reloadRequired = freed,
             usage = ResourceUsage(
                 rawBytes = resident.sumOf { it.stored.byteSnapshot.size.toLong() },
-                decodedCpuBytes = resident.sumOf { (it.decoded?.byteCount ?: 0).toLong() },
+                decodedCpuBytes = resident.sumOf {
+                    (it.decoded?.byteCount ?: 0).toLong() + (it.decodedModel?.decodedCpuBytes ?: 0L)
+                },
                 knownGpuBytes = gpu.knownBytes,
                 hasUnknownGpuBytes = gpu.hasUnknownBytes,
             ),
@@ -439,18 +512,9 @@ internal class ResidentCache(
     /**
      * Runs [block] as this cache's one state transition at a time. Held only across the synchronous
      * bookkeeping in [block] — never across an adapter call, a decode, or a parse, none of which any
-     * [ResidentCache] method performs. [Mutex.tryLock] and [Mutex.unlock] are safe to call from ordinary,
-     * non-suspending code and across real threads, which is what lets [free] and [releaseLease] race from
-     * separate coroutines and still linearize at this exact boundary.
+     * [ResidentCache] method performs. [PlatformLock] blocks a contending thread rather than busy-spinning,
+     * so a holder descheduled between those few field operations cannot make another worker peg a core or
+     * starve it indefinitely. [free] and [releaseLease] still linearize at this exact boundary.
      */
-    private inline fun <T> locked(block: () -> T): T {
-        while (!mutex.tryLock()) {
-            // Uncontended in practice: every critical section here is a few field reads/writes.
-        }
-        try {
-            return block()
-        } finally {
-            mutex.unlock()
-        }
-    }
+    private fun <T> locked(block: () -> T): T = lock.withLock(block)
 }

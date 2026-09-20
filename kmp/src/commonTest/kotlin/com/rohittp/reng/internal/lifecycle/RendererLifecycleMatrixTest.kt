@@ -30,6 +30,12 @@ class RendererLifecycleMatrixTest {
                 ),
             ),
             MatrixCase(
+                operation = RendererLifecycleOperation.EndPreparation,
+                live = Expected.Outcome(RendererLifecycleOutcome.NoOp),
+                awaiting = Expected.Outcome(RendererLifecycleOutcome.NoOp),
+                closed = Expected.Outcome(RendererLifecycleOutcome.NoOp),
+            ),
+            MatrixCase(
                 operation = RendererLifecycleOperation.CancelPreparations,
                 live = Expected.Outcome(RendererLifecycleOutcome.NoOp),
                 awaiting = Expected.Outcome(RendererLifecycleOutcome.NoOp),
@@ -220,9 +226,17 @@ class RendererLifecycleMatrixTest {
             begun.actions,
         )
 
-        val completed = RendererLifecycleStateMachine.resume(
+        val permitted = RendererLifecycleStateMachine.resume(
             requireNotNull(begun.cursor),
             RendererLifecycleObservation.RenderCallsQuiesced,
+        )
+        assertEquals(
+            listOf(RendererLifecycleAction.ExecutePermittedOperation(RendererLifecycleOperation.NotifyGpuObjectsGone)),
+            permitted.actions,
+        )
+        val completed = RendererLifecycleStateMachine.resume(
+            requireNotNull(permitted.cursor),
+            RendererLifecycleObservation.PermittedOperationSucceeded,
         )
         assertEquals(RendererLifecycleOutcome.Succeeded, completed.outcome)
         assertEquals(RendererOwnerState.AWAITING_CONTEXT_ADOPTION, completed.snapshot.ownerState)
@@ -318,7 +332,7 @@ class RendererLifecycleMatrixTest {
     }
 
     @Test
-    fun preparationIsMarkedActiveOnlyWhileItsPermittedOperationIsOutstanding() {
+    fun preparationRemainsActiveUntilTheExplicitEndOperationCompletes() {
         val initial = snapshot(RendererOwnerState.LIVE)
         val begun = RendererLifecycleStateMachine.begin(
             initial,
@@ -331,10 +345,27 @@ class RendererLifecycleMatrixTest {
             RendererLifecycleObservation.PermittedOperationSucceeded,
         )
         assertEquals(RendererLifecycleOutcome.Succeeded, succeeded.outcome)
-        assertFalse(succeeded.snapshot.preparationActive)
+        assertTrue(succeeded.snapshot.preparationActive)
+
+        val overlap = RendererLifecycleStateMachine.begin(
+            succeeded.snapshot,
+            RendererLifecycleOperation.BeginPreparation,
+        )
+        assertFailure(overlap, RenGErrorCode.PREPARATION_IN_PROGRESS, PipelineStage.FRAME_PREPARATION)
+
+        val ending = RendererLifecycleStateMachine.begin(
+            succeeded.snapshot,
+            RendererLifecycleOperation.EndPreparation,
+        )
+        val ended = RendererLifecycleStateMachine.resume(
+            requireNotNull(ending.cursor),
+            RendererLifecycleObservation.PermittedOperationSucceeded,
+        )
+        assertEquals(RendererLifecycleOutcome.Succeeded, ended.outcome)
+        assertFalse(ended.snapshot.preparationActive)
 
         val second = RendererLifecycleStateMachine.begin(
-            succeeded.snapshot,
+            ended.snapshot,
             RendererLifecycleOperation.BeginPreparation,
         )
         val suppliedFailure = FailureDescriptor(

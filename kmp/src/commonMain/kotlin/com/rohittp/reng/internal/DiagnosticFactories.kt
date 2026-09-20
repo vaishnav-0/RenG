@@ -34,6 +34,7 @@ internal enum class DiagnosticField(internal val wireName: String) {
     ANIMATION_SELECTOR("animationSelector"),
     SHADER_PAIR("shaderPair"),
     RENDER_TARGET("renderTarget"),
+    PREPARED_FRAME_CPU_BYTES("preparedFrameCpuBytes"),
 }
 
 internal fun failureContextDiagnostic(
@@ -280,6 +281,7 @@ private val diagnosticFieldsByStage: Map<PipelineStage, Set<DiagnosticField>> = 
         DiagnosticField.FRAME_IDENTITY,
         DiagnosticField.SHADER_PAIR,
     ),
+    PipelineStage.FRAME_PREPARATION to setOf(DiagnosticField.PREPARED_FRAME_CPU_BYTES),
     PipelineStage.RESOURCE_LOOKUP to setOf(DiagnosticField.RESOURCE),
     PipelineStage.STORE_VALIDATION to setOf(DiagnosticField.RESOURCE),
     PipelineStage.TRANSPORT_VALIDATION to setOf(DiagnosticField.RESPONSE_BODY_BYTES),
@@ -410,6 +412,11 @@ private fun failureRule(code: RenGErrorCode, stage: PipelineStage): FailureRule?
         RenGErrorCode.RESOURCE_LIMIT_EXCEEDED -> when (stage) {
             PipelineStage.FRAME_PLANNING -> FailureRule.Context(
                 fields = setOf(DiagnosticField.PLANS, DiagnosticField.BASEMAP_TILE_INSTANCES),
+                numericLimit = PresenceRequirement.REQUIRED,
+            )
+
+            PipelineStage.FRAME_PREPARATION -> FailureRule.Context(
+                fields = setOf(DiagnosticField.PREPARED_FRAME_CPU_BYTES),
                 numericLimit = PresenceRequirement.REQUIRED,
             )
 

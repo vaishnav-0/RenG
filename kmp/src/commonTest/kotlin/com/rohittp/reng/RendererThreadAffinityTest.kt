@@ -95,6 +95,28 @@ class RendererThreadAffinityTest {
         renderer.close()
     }
 
+    @Test
+    fun aFailedLiveAdoptionDoesNotMoveTheRendererToTheCallingThread() = runTest {
+        val renderer = threadTestRenderer()
+
+        val (adoptionFailure, followingGlFailure) = withContext(Dispatchers.Default) {
+            val adoption = assertFailsWith<RenGException> {
+                renderer.adoptCurrentRenderContext()
+            }
+            val glCall = assertFailsWith<RenGException> {
+                renderer.mintRenderTarget(FramebufferName(0u))
+            }
+            adoption to glCall
+        }
+
+        assertEquals(RenGErrorCode.INVALID_VALUE, adoptionFailure.code)
+        assertEquals(RenGErrorCode.RENDER_CONTEXT_THREAD_CHANGED, followingGlFailure.code)
+        // The failed declaration changed neither lifecycle ownership nor thread ownership: the
+        // original thread still owns the live GL objects and can continue or close normally.
+        renderer.mintRenderTarget(FramebufferName(0u))
+        renderer.close()
+    }
+
     /**
      * The declaration ADR 0056 is built around — and the price of it, asserted rather than described.
      *

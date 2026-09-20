@@ -10,7 +10,7 @@ import platform.posix.dlsym
 private const val EGL_DISPATCH_LIBRARY: String = "libEGL.so.1"
 
 /**
- * Resolves all ninety-one roster entries against the running system's EGL dispatch library.
+ * Resolves all ninety-two roster entries against the running system's EGL dispatch library.
  *
  * Resolution is eager and total: every name must resolve or the whole binding is
  * [GlBindingResult.Unsupported]. This turns a partially resolvable driver into a setup-time
@@ -45,7 +45,7 @@ private fun Boolean.toGlBoolean(): UByte = if (this) 1u.toUByte() else 0u.toUByt
 private fun UByte.toKotlinBoolean(): Boolean = this.toInt() != 0
 
 /**
- * The ninety-one-entry [GlBinding] over a fully resolved function-pointer table.
+ * The ninety-two-entry [GlBinding] over a fully resolved function-pointer table.
  *
  * [table] is indexed by [GlEntryPoint.ordinal]; each property below reinterprets exactly one
  * slot to the C signature Kotlin/Native needs to call it, using the standard width mapping:
@@ -116,6 +116,9 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
     private val texImage2DFn: CPointer<CFunction<
         (UInt, Int, Int, Int, Int, Int, UInt, UInt, COpaquePointer?) -> Unit>> =
         table[GlEntryPoint.TEX_IMAGE_2D.ordinal].reinterpret()
+    private val texSubImage2DFn: CPointer<CFunction<
+        (UInt, Int, Int, Int, Int, Int, UInt, UInt, COpaquePointer?) -> Unit>> =
+        table[GlEntryPoint.TEX_SUB_IMAGE_2D.ordinal].reinterpret()
     private val texStorage2DFn: CPointer<CFunction<(UInt, Int, UInt, Int, Int) -> Unit>> =
         table[GlEntryPoint.TEX_STORAGE_2D.ordinal].reinterpret()
     private val texParameteriFn: CPointer<CFunction<(UInt, UInt, Int) -> Unit>> =
@@ -384,6 +387,19 @@ internal class LinuxGlBinding(table: List<COpaquePointer>) : GlBinding {
             texImage2DFn(
                 target.toUInt(), level, internalFormat, width, height,
                 border, format.toUInt(), type.toUInt(), pinned.addressOf(0),
+            )
+        }
+    }
+
+    override fun texSubImage2D(
+        target: Int, level: Int, xOffset: Int, yOffset: Int, width: Int, height: Int,
+        format: Int, type: Int, pixels: ByteArray,
+    ) {
+        require(pixels.isNotEmpty()) { "a texture sub-image needs pixels" }
+        pixels.usePinned { pinned ->
+            texSubImage2DFn(
+                target.toUInt(), level, xOffset, yOffset, width, height,
+                format.toUInt(), type.toUInt(), pinned.addressOf(0),
             )
         }
     }

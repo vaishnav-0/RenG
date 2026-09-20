@@ -7,6 +7,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class GlTextureUploadTest {
+    private fun RecordingGlBinding.premultipliedUploadBytes(): List<Byte> =
+        texSubImage2DPayloads.single().take(4)
+
     // 255,0,0,128 unpremultiplied.
     private fun halfAlphaRed() = DecodedImage(1, 1, byteArrayOf(-1, 0, 0, -128))
 
@@ -19,7 +22,7 @@ class GlTextureUploadTest {
         val binding = RecordingGlBinding()
         uploadTexture(binding, halfAlphaRed(), TextureContent.IMAGE)
         // 255 * 128/255 = 128 exactly; alpha is untouched.
-        assertEquals(listOf<Byte>(-128, 0, 0, -128), binding.lastTexImageBytes())
+        assertEquals(listOf<Byte>(-128, 0, 0, -128), binding.premultipliedUploadBytes())
     }
 
     @Test
@@ -43,7 +46,19 @@ class GlTextureUploadTest {
         uploadTexture(binding, nonExactDivisionPixel(), TextureContent.IMAGE)
         // 137 * 137 = 18769. Truncating (18769 / 255) = 73; this rule, (18769 + 127) / 255, = 74.
         // Pin the exact byte, not a range, so the two rules cannot silently agree by coincidence.
-        assertEquals(listOf<Byte>(74, 74, 74, -119), binding.lastTexImageBytes())
+        assertEquals(listOf<Byte>(74, 74, 74, -119), binding.premultipliedUploadBytes())
+    }
+
+    @Test
+    fun premultipliedUploadWorkspaceIsBoundedToOneMebibyte() {
+        val width = 300_000
+        val rgba = ByteArray(width * 4) { index -> if (index % 4 == 3) 127 else 100 }
+        val binding = RecordingGlBinding()
+
+        uploadTexture(binding, DecodedImage(width, 1, rgba), TextureContent.IMAGE)
+
+        assertEquals(2, binding.texSubImage2DPayloads.size)
+        assertTrue(binding.texSubImage2DPayloads.all { it.size <= 1024 * 1024 })
     }
 
     // An unset minification filter is the failure mode that renders black on a real driver (GL's
@@ -209,5 +224,17 @@ class GlTextureUploadTest {
             dataBinding.log.filter { it.startsWith("texParameteri") },
         )
         assertTrue(dataBinding.log.none { it.startsWith("generateMipmap") })
+    }
+
+    @Test
+    fun allocationBytesIncludeExactlyTheRequestedMipmapChain() {
+        val noMipmaps = defaultSamplerStateFor(TextureContent.IMAGE)
+        val mipmaps = noMipmaps.copy(minFilter = GL_LINEAR_MIPMAP_LINEAR)
+
+        assertEquals(8L * 4L * 4L, textureAllocationBytes(8, 4, noMipmaps))
+        assertEquals(
+            (8L * 4L + 4L * 2L + 2L * 1L + 1L * 1L) * 4L,
+            textureAllocationBytes(8, 4, mipmaps),
+        )
     }
 }

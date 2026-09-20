@@ -103,4 +103,6 @@ internal enum class GlEntryPoint(internal val cName: String) {
     GET_UNIFORM_BLOCK_INDEX("glGetUniformBlockIndex"),
     UNIFORM_BLOCK_BINDING("glUniformBlockBinding"),
     GET_INTEGERI_V("glGetIntegeri_v"),
+    // Appended so every existing Linux function-table ordinal remains stable.
+    TEX_SUB_IMAGE_2D("glTexSubImage2D"),
 }

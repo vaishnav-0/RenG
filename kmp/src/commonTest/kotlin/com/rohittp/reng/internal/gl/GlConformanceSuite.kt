@@ -123,7 +123,7 @@ private fun assertContextAdoption(
 }
 
 private fun assertEntryPointInventory(binding: GlBinding) {
-    assertEquals(91, GlEntryPoint.entries.size)
+    assertEquals(92, GlEntryPoint.entries.size)
     assertTrue(binding.getString(GL_VENDOR)?.isNotBlank() == true)
 
     val names = IntArray(1)
@@ -141,6 +141,9 @@ private fun assertEntryPointInventory(binding: GlBinding) {
     val texture = names[0]
     binding.bindTexture(GL_TEXTURE_2D, texture)
     binding.texStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4)
+    binding.texSubImage2D(
+        GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, ByteArray(4 * 4 * 4),
+    )
 
     val framebuffers = IntArray(2)
     binding.genFramebuffers(2, framebuffers)

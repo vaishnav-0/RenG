@@ -22,3 +22,8 @@ calling thread, which is stated as a precondition rather than discovered. Called
 context, RenG drops its GL handles and emits a warning instead of issuing deletes into whatever context
 happens to be current — the objects belonged to a context that is being torn down anyway, and their
 memory goes with it.
+
+ADR 0015 supersedes that last fallback as stated above. The implementation also serializes the whole declared-loss
+transition with renderer GL operations. Once any in-flight draw/free/close finishes, one critical section forgets
+the object registry, compiled-program cache, fixed and consumer pipeline fields, and adopted context identity
+together. A draw cannot resume midway through loss and republish a handle from the old context.

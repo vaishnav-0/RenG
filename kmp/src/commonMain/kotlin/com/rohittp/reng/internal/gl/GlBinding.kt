@@ -44,6 +44,10 @@ internal interface GlBinding {
         target: Int, level: Int, internalFormat: Int, width: Int, height: Int,
         border: Int, format: Int, type: Int, pixels: ByteArray?,
     )
+    fun texSubImage2D(
+        target: Int, level: Int, xOffset: Int, yOffset: Int, width: Int, height: Int,
+        format: Int, type: Int, pixels: ByteArray,
+    )
     fun texStorage2D(target: Int, levels: Int, internalFormat: Int, width: Int, height: Int)
     fun texParameteri(target: Int, pname: Int, value: Int)
     fun generateMipmap(target: Int)

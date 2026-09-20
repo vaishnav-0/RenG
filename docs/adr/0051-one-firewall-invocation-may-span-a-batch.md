@@ -94,3 +94,10 @@ ratio it asserts is unaffected by where the routes are stored.
 The one-exchange contract tightens rather than loosens: a resource two frames in a batch both want
 is now fetched once for the batch instead of once per frame. That is an observable change for a
 consumer counting `Store` reads, and it is the saving, not a side effect.
+
+The shared firewall operation is nested inside ADR 0014's larger preparation transaction. All frame plans are
+validated and planned before it opens; it then owns every batch route, latch, acquired item, and provisional
+Prepared Frame until either the final history/style commit succeeds or rollback closes all provisional frames.
+Cancelling the invocation cancels this outer worker and joins through firewall teardown and rollback, rather than
+only cancelling whichever acquisition child happened to be active. No route registry or latch survives the
+invocation's terminal outcome.

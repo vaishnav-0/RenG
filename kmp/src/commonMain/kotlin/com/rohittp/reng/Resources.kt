@@ -196,6 +196,36 @@ public data class ResourceLimits(
      * Declared last, for the ABI reason [maximumInFlightRawBasemapTileBytes] already gives.
      */
     public val maximumTilesRasterisedPerFrame: Int = Int.MAX_VALUE,
+    /**
+     * Peak CPU bytes one PNG decode may require, projected from IHDR before allocating its output.
+     * The streaming decoder retains one final RGBA image and two source-width rows rather than
+     * several full rasters. A separate ceiling keeps hostile, extremely wide images from turning
+     * those otherwise-small row workspaces into another process-sized allocation.
+     *
+     * Declared last to preserve positional source and binary compatibility.
+     */
+    public val maximumImageDecodeWorkingBytes: Long = 512L * 1024L * 1024L,
+    /**
+     * Byte budget for unleased model vertex and index buffers retained on the GPU. Kept separate
+     * from [maximumResidentGpuTextureBytes] so image-heavy and geometry-heavy applications can tune
+     * the two independent driver allocations without one silently consuming the other's allowance.
+     *
+     * Declared last to preserve positional source and binary compatibility.
+     */
+    public val maximumResidentGpuBufferBytes: Long = 512L * 1024L * 1024L,
+    /**
+     * Hard aggregate CPU-payload ceiling for every open Prepared Frame. Each leased resource
+     * generation's encoded and decoded bytes are charged once no matter how many open frames share
+     * it; frame-owned basemap, terrain, pose and label payloads are charged once per frame.
+     *
+     * This closes the deliberate hole in [maximumResidentCpuResourceBytes]: that value is an LRU
+     * threshold for unleased resources, while an open Prepared Frame's lease must win over eviction.
+     * Without a separate admission ceiling, a consumer can keep opening frames over unique resources
+     * until process memory is exhausted even though the resident cache is nominally over budget.
+     *
+     * Declared last to preserve positional source and binary compatibility.
+     */
+    public val maximumInFlightPreparedFrameCpuBytes: Long = 1024L * 1024L * 1024L,
 ) {
     init {
         val minimum = 1L
@@ -249,6 +279,15 @@ public data class ResourceLimits(
         // a budget.
         require(maximumTilesRasterisedPerFrame >= 0) {
             "maximumTilesRasterisedPerFrame must not be negative"
+        }
+        require(maximumImageDecodeWorkingBytes in minimum..maximum) {
+            "maximumImageDecodeWorkingBytes must be within the supported range"
+        }
+        require(maximumResidentGpuBufferBytes in minimum..maximum) {
+            "maximumResidentGpuBufferBytes must be within the supported range"
+        }
+        require(maximumInFlightPreparedFrameCpuBytes in minimum..maximum) {
+            "maximumInFlightPreparedFrameCpuBytes must be within the supported range"
         }
     }
 }

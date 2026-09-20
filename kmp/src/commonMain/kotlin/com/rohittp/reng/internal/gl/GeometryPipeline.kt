@@ -98,14 +98,19 @@ internal class GeometryPipeline(
      * uniforms. A location is a property of the linked program, and the two are deleted together in
      * [deleteGeometryPipeline], so the memo cannot outlive what it describes.
      *
-     * A negative location is cached too: it is the documented "do not bind" signal at the top of
-     * this file, as permanent as a positive one, and ordinary rather than an error.
+     * Negative locations are deliberately not cached. Consumer-authored names can vary without
+     * bound between frames, while positive locations are bounded by what the linked program
+     * actually declares.
      */
     private val consumerLocations: MutableMap<String, Int> = HashMap()
 
     /** [name]'s location in [program], from the memo above or from the driver exactly once. */
-    fun consumerLocation(binding: GlBinding, name: String): Int =
-        consumerLocations.getOrPut(name) { binding.getUniformLocation(program, name) }
+    fun consumerLocation(binding: GlBinding, name: String): Int {
+        consumerLocations[name]?.let { return it }
+        val location = binding.getUniformLocation(program, name)
+        if (location >= 0) consumerLocations[name] = location
+        return location
+    }
 
     /**
      * The CPU byte buffers [drawGeometry] packs this pipeline's grid into before uploading it, reused

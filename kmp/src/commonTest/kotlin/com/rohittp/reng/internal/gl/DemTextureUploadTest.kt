@@ -6,6 +6,9 @@ import com.rohittp.reng.ResourceKind
 import com.rohittp.reng.internal.GpuByteAccount
 import com.rohittp.reng.internal.image.DecodedImage
 import com.rohittp.reng.internal.terrain.PaddedDemTexture
+import com.rohittp.reng.internal.terrain.DemTileCoordinate
+import com.rohittp.reng.internal.terrain.DemTexels
+import com.rohittp.reng.internal.terrain.planPaddedDemTexture
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -26,6 +29,31 @@ import kotlin.test.assertTrue
  * non-negotiable: a bilinear tap across a Mapbox channel carry decodes hundreds of metres wrong.
  */
 class DemTextureUploadTest {
+    @Test
+    fun aResidentPlanDoesNotAssembleAnotherPaddedRaster() {
+        val binding = RecordingGlBinding()
+        val registry = GlObjectRegistry()
+        val key = demKey(1)
+        val centre = DemTileCoordinate(z = 0, x = 0, y = 0)
+        val image = DecodedImage(1, 1, byteArrayOf(1, 2, 3, 4))
+        val plan = requireNotNull(
+            planPaddedDemTexture(centre, mapOf(centre to DemTexels(image, "digest"))),
+        )
+        var assemblies = 0
+
+        val first = uploadDemTexture(binding, registry, key, plan) {
+            assemblies += 1
+            paddedDem()
+        }
+        registry.releaseLease(first.lease, binding)
+        val second = uploadDemTexture(binding, registry, key, plan) {
+            assemblies += 1
+            paddedDem()
+        }
+
+        assertEquals(1, assemblies)
+        registry.releaseLease(second.lease, binding)
+    }
 
     // The real derivation is the acquiring caller's under ADR 0018; nothing here needs more than keys
     // that differ.

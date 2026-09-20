@@ -276,6 +276,18 @@ class ConsumerBackdropPipelineTest {
         assertTrue(first != rengsOwn)
     }
 
+    @Test
+    fun negativeConsumerUniformLocationsAreNotRetained() {
+        val binding = RecordingGlBinding().withNoDeclaredNames()
+        val pipeline = createdPipeline(binding)
+        binding.log.clear()
+
+        assertEquals(-1, pipeline.consumerLocation(binding, "missing"))
+        assertEquals(-1, pipeline.consumerLocation(binding, "missing"))
+
+        assertEquals(2, binding.log.count { it.contains("getUniformLocation") })
+    }
+
     /**
      * ADR 0072's uniform, bound on a shader that declares it. Sixteen floats, column-major, and
      * `transpose = false` -- GL is told to read them as they are, so a transposed upload would be

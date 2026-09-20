@@ -203,6 +203,19 @@ internal class PaddedDemTexture(
 }
 
 /**
+ * Lightweight, allocation-free plan for one padded DEM upload. Its content identity and neighbour
+ * policy are complete before the `(N+2)^2` output exists, allowing a GPU-residency hit to skip that
+ * large allocation entirely.
+ */
+internal class PaddedDemTexturePlan internal constructor(
+    val interiorSizePx: Int,
+    internal val centre: DecodedImage,
+    internal val sources: Map<DemNeighbour, DemTexels>,
+    val filledNeighbours: Map<DemNeighbour, DemNeighbourFill>,
+    val contentKey: String,
+)
+
+/**
  * Whether [padDemTexture] would answer a texture for [centre] against this exact [texelsByTile], and
  * therefore whether the ground tiles that sample it will displace at all.
  *
@@ -255,7 +268,13 @@ internal fun canPadDemTexture(
 internal fun padDemTexture(
     centre: DemTileCoordinate,
     texelsByTile: Map<DemTileCoordinate, DemTexels>,
-): PaddedDemTexture? {
+): PaddedDemTexture? = planPaddedDemTexture(centre, texelsByTile)?.let(::assemblePaddedDemTexture)
+
+/** Derives padding provenance and identity without allocating or copying any pixel storage. */
+internal fun planPaddedDemTexture(
+    centre: DemTileCoordinate,
+    texelsByTile: Map<DemTileCoordinate, DemTexels>,
+): PaddedDemTexturePlan? {
     if (!canPadDemTexture(centre, texelsByTile)) return null
     val centreTexels = texelsByTile.getValue(centre)
     val interior = centreTexels.image.width
@@ -282,12 +301,24 @@ internal fun padDemTexture(
         }
     }
 
-    val padded = assemblePaddedTexels(centreTexels.image, interior, sources)
-    return PaddedDemTexture(
+    return PaddedDemTexturePlan(
         interiorSizePx = interior,
-        image = DecodedImage(width = interior + 2, height = interior + 2, rgba = padded),
+        centre = centreTexels.image,
+        sources = sources,
         filledNeighbours = fills,
         contentKey = paddedDemContentKey(centreTexels, sources, fills),
+    )
+}
+
+/** Materialises [plan] only after its caller has established that no resident texture can be leased. */
+internal fun assemblePaddedDemTexture(plan: PaddedDemTexturePlan): PaddedDemTexture {
+    val interior = plan.interiorSizePx
+    val padded = assemblePaddedTexels(plan.centre, interior, plan.sources)
+    return PaddedDemTexture(
+        interiorSizePx = interior,
+        image = DecodedImage.takeOwnership(width = interior + 2, height = interior + 2, rgba = padded),
+        filledNeighbours = plan.filledNeighbours,
+        contentKey = plan.contentKey,
     )
 }
 
@@ -309,29 +340,28 @@ private fun assemblePaddedTexels(
     sources: Map<DemNeighbour, DemTexels>,
 ): ByteArray {
     val padded = interior + 2
-    val centreBytes = centre.rgbaSnapshot()
     val out = ByteArray(padded * padded * RGBA_CHANNELS)
 
     for (y in 0 until interior) {
         val from = y * interior * RGBA_CHANNELS
-        centreBytes.copyInto(
+        centre.copyRgbaRangeTo(
             destination = out,
             destinationOffset = texelOffset(1, y + 1, padded),
-            startIndex = from,
-            endIndex = from + interior * RGBA_CHANNELS,
+            sourceOffset = from,
+            length = interior * RGBA_CHANNELS,
         )
     }
 
-    val north = sources[DemNeighbour.NORTH]?.image?.rgbaSnapshot()
-    val south = sources[DemNeighbour.SOUTH]?.image?.rgbaSnapshot()
-    val west = sources[DemNeighbour.WEST]?.image?.rgbaSnapshot()
-    val east = sources[DemNeighbour.EAST]?.image?.rgbaSnapshot()
+    val north = sources[DemNeighbour.NORTH]?.image
+    val south = sources[DemNeighbour.SOUTH]?.image
+    val west = sources[DemNeighbour.WEST]?.image
+    val east = sources[DemNeighbour.EAST]?.image
 
     // The northern neighbour's southernmost row becomes the row above this tile's own first, and the
     // southern neighbour's northernmost row becomes the row below its last. An absent neighbour
     // replicates the centre's own facing row instead -- see [DemNeighbourFill].
     copyRow(
-        source = north ?: centreBytes,
+        source = north ?: centre,
         sourceY = if (north != null) interior - 1 else 0,
         interior = interior,
         out = out,
@@ -340,7 +370,7 @@ private fun assemblePaddedTexels(
         padded = padded,
     )
     copyRow(
-        source = south ?: centreBytes,
+        source = south ?: centre,
         sourceY = if (south != null) 0 else interior - 1,
         interior = interior,
         out = out,
@@ -351,7 +381,7 @@ private fun assemblePaddedTexels(
 
     for (y in 0 until interior) {
         copyTexel(
-            source = west ?: centreBytes,
+            source = west ?: centre,
             sourceX = if (west != null) interior - 1 else 0,
             sourceY = y,
             interior = interior,
@@ -361,7 +391,7 @@ private fun assemblePaddedTexels(
             padded = padded,
         )
         copyTexel(
-            source = east ?: centreBytes,
+            source = east ?: centre,
             sourceX = if (east != null) 0 else interior - 1,
             sourceY = y,
             interior = interior,
@@ -372,16 +402,16 @@ private fun assemblePaddedTexels(
         )
     }
 
-    copyCorner(DemNeighbour.NORTH_WEST, sources, centreBytes, interior, out)
-    copyCorner(DemNeighbour.NORTH_EAST, sources, centreBytes, interior, out)
-    copyCorner(DemNeighbour.SOUTH_WEST, sources, centreBytes, interior, out)
-    copyCorner(DemNeighbour.SOUTH_EAST, sources, centreBytes, interior, out)
+    copyCorner(DemNeighbour.NORTH_WEST, sources, centre, interior, out)
+    copyCorner(DemNeighbour.NORTH_EAST, sources, centre, interior, out)
+    copyCorner(DemNeighbour.SOUTH_WEST, sources, centre, interior, out)
+    copyCorner(DemNeighbour.SOUTH_EAST, sources, centre, interior, out)
     return out
 }
 
 /** Copies `interior` texels of row [sourceY] into [out] starting at ([outX], [outY]). */
 private fun copyRow(
-    source: ByteArray,
+    source: DecodedImage,
     sourceY: Int,
     interior: Int,
     out: ByteArray,
@@ -390,17 +420,17 @@ private fun copyRow(
     padded: Int,
 ) {
     val from = sourceY * interior * RGBA_CHANNELS
-    source.copyInto(
+    source.copyRgbaRangeTo(
         destination = out,
         destinationOffset = texelOffset(outX, outY, padded),
-        startIndex = from,
-        endIndex = from + interior * RGBA_CHANNELS,
+        sourceOffset = from,
+        length = interior * RGBA_CHANNELS,
     )
 }
 
 /** Copies the single texel ([sourceX], [sourceY]) into [out] at ([outX], [outY]). */
 private fun copyTexel(
-    source: ByteArray,
+    source: DecodedImage,
     sourceX: Int,
     sourceY: Int,
     interior: Int,
@@ -410,11 +440,11 @@ private fun copyTexel(
     padded: Int,
 ) {
     val from = (sourceY * interior + sourceX) * RGBA_CHANNELS
-    source.copyInto(
+    source.copyRgbaRangeTo(
         destination = out,
         destinationOffset = texelOffset(outX, outY, padded),
-        startIndex = from,
-        endIndex = from + RGBA_CHANNELS,
+        sourceOffset = from,
+        length = RGBA_CHANNELS,
     )
 }
 
@@ -433,7 +463,7 @@ private fun copyTexel(
 private fun copyCorner(
     diagonal: DemNeighbour,
     sources: Map<DemNeighbour, DemTexels>,
-    centreBytes: ByteArray,
+    centre: DecodedImage,
     interior: Int,
     out: ByteArray,
 ) {
@@ -448,7 +478,7 @@ private fun copyCorner(
     val ownX = if (westward) 0 else interior - 1
     val ownY = if (northward) 0 else interior - 1
     copyTexel(
-        source = neighbour?.image?.rgbaSnapshot() ?: centreBytes,
+        source = neighbour?.image ?: centre,
         sourceX = if (neighbour != null) facingX else ownX,
         sourceY = if (neighbour != null) facingY else ownY,
         interior = interior,

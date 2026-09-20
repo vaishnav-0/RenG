@@ -97,6 +97,7 @@ import platform.OpenGL3.glSamplerParameteri
 import platform.OpenGL3.glScissor
 import platform.OpenGL3.glShaderSource
 import platform.OpenGL3.glTexImage2D
+import platform.OpenGL3.glTexSubImage2D
 import platform.OpenGL3.glTexParameteri
 import platform.OpenGL3.glTexStorage2D
 import platform.OpenGL3.glUniform1f
@@ -271,6 +272,19 @@ internal object MacosGlBinding : GlBinding {
         pixels.usePinned { pinned ->
             glTexImage2D(
                 target.toUInt(), level, internalFormat, width, height, border,
+                format.toUInt(), type.toUInt(), pinned.addressOf(0),
+            )
+        }
+    }
+
+    override fun texSubImage2D(
+        target: Int, level: Int, xOffset: Int, yOffset: Int, width: Int, height: Int,
+        format: Int, type: Int, pixels: ByteArray,
+    ) {
+        require(pixels.isNotEmpty()) { "a texture sub-image needs pixels" }
+        pixels.usePinned { pinned ->
+            glTexSubImage2D(
+                target.toUInt(), level, xOffset, yOffset, width, height,
                 format.toUInt(), type.toUInt(), pinned.addressOf(0),
             )
         }

@@ -510,6 +510,19 @@ internal fun uploadModelPrimitive(binding: GlBinding, primitive: DecodedPrimitiv
     )
 }
 
+/** Exact packed attribute plus index bytes uploaded by [uploadModelPrimitive]; VAOs cost zero here. */
+internal fun modelPrimitiveAllocationBytes(primitive: DecodedPrimitive): Long {
+    val attributeBytes = ModelVertexAttribute.entries.sumOf { attribute ->
+        (attribute.valuesOf(primitive)?.size ?: 0).toLong() * Float.SIZE_BYTES.toLong()
+    }
+    val indexBytes = when {
+        primitive.indices.shorts != null -> primitive.indices.shorts.size.toLong() * Short.SIZE_BYTES.toLong()
+        else -> requireNotNull(primitive.indices.ints).size.toLong() * Int.SIZE_BYTES.toLong()
+    }
+    check(attributeBytes <= Long.MAX_VALUE - indexBytes) { "model primitive byte size overflow" }
+    return attributeBytes + indexBytes
+}
+
 /**
  * Deletes everything [uploaded] holds. The element array buffer is deleted explicitly rather than
  * left to the vertex array: deleting a VAO frees the VAO object alone, never the buffers it recorded

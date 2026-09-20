@@ -17,8 +17,19 @@ internal class InflateException(message: String) : Exception(message)
  * a fresh output window.
  */
 internal expect class InflateStream() {
-    fun inflate(input: ByteArray, output: ByteArray, outputOffset: Int): InflateStep
+    fun inflate(
+        input: ByteArray,
+        inputOffset: Int,
+        inputLength: Int,
+        output: ByteArray,
+        outputOffset: Int,
+        outputLength: Int,
+    ): InflateStep
     fun close()
 }
+
+/** Compatibility convenience for callers that genuinely own whole input/output tails. */
+internal fun InflateStream.inflate(input: ByteArray, output: ByteArray, outputOffset: Int): InflateStep =
+    inflate(input, 0, input.size, output, outputOffset, output.size - outputOffset)
 
 internal expect fun crc32(seed: UInt, bytes: ByteArray, offset: Int, length: Int): UInt

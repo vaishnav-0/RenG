@@ -49,8 +49,8 @@ import com.rohittp.reng.internal.resource.ValidateResourceClass
 import com.rohittp.reng.internal.resource.VisibilityInstallCompleted
 import com.rohittp.reng.internal.resource.WriteBasemapStyle
 import com.rohittp.reng.internal.resource.WriteStore
+import com.rohittp.reng.internal.thread.PlatformLock
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
 
 /**
  * Executes exactly one [ResourceOperationAction] against the real [Transport], [Store], and
@@ -111,17 +111,26 @@ internal class ResourceActionExecutor(
      * what every test that drives this class directly still wants.
      */
     private val leaseSink: MutableList<Lease>? = null,
+    /** Invoked only after the matching lease is reachable through [leaseSink] for rollback. */
+    private val leaseObserver: ((Lease) -> Unit)? = null,
 ) {
+    init {
+        require(leaseObserver == null || leaseSink != null) {
+            "a lease observer requires a sink that owns rejected leases for rollback"
+        }
+    }
+
     /**
      * Serializes [leaseSink] appends. [PreparationDriver] launches one child coroutine per action and
      * selects no dispatcher of its own, so two [InstallVisibility] actions of one operation genuinely can
      * reach [recordLease] from two threads whenever the consumer's own `prepare()` call sits on a
      * multi-threaded dispatcher -- and an unguarded [MutableList] can lose one of the two leases, which is
-     * exactly the leak this sink exists to close. Held across a single list append and nothing else: the
-     * same shape, and the same "[Mutex.tryLock] is safe from ordinary non-suspending code across real
-     * threads" reasoning, that [ResidentCache] already uses for its own state transitions.
+     * exactly the leak this sink exists to close. The optional admission observer shares this tiny
+     * critical section so callbacks see leases in installation order and always after cleanup ownership
+     * is published; [PlatformLock] blocks a contender instead of busy-spinning if the holder is briefly
+     * descheduled.
      */
-    private val leaseSinkMutex: Mutex = Mutex()
+    private val leaseSinkLock = PlatformLock()
 
     suspend fun execute(action: ResourceOperationAction): ResourceOperationEvent = when (action) {
         is SampleClock -> ClockSampled(action.actionId, clock())
@@ -314,19 +323,15 @@ internal class ResourceActionExecutor(
         }
 
     /**
-     * Records one lease this executor just took into [leaseSink], or drops it when no owner asked for one.
-     * See [leaseSinkMutex] for why the append is guarded, and [installVisibility] for why this is a plain
-     * call rather than a safe call on the sink.
+     * Records one lease this executor just took into [leaseSink], then invokes [leaseObserver]. Recording
+     * comes first so an observer that rejects admission can throw without orphaning the lease it rejected.
+     * See [leaseSinkLock] for why both operations are serialized, and [installVisibility] for why this is
+     * a plain call rather than a safe call on the sink.
      */
     private fun recordLease(lease: Lease) {
-        val sink = leaseSink ?: return
-        while (!leaseSinkMutex.tryLock()) {
-            // Uncontended in practice: one list append per resource per prepared frame.
-        }
-        try {
-            sink.add(lease)
-        } finally {
-            leaseSinkMutex.unlock()
+        leaseSinkLock.withLock {
+            leaseSink?.add(lease)
+            leaseObserver?.invoke(lease)
         }
     }
 

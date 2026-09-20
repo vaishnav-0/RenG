@@ -74,7 +74,7 @@ class DiagnosticsAndFailuresTest {
                 "screenPosition.y", "placement.positionMode", "placement.scale", "geometry.latitude",
                 "geometry.unwrappedLongitude", "geometry.altitude", "basemapTileInstances",
                 "responseBodyBytes", "resource", "frameIdentity", "animationSelector",
-                "shaderPair", "renderTarget",
+                "shaderPair", "renderTarget", "preparedFrameCpuBytes",
             ),
             DiagnosticField.entries.map { it.wireName },
         )
@@ -108,11 +108,11 @@ class DiagnosticsAndFailuresTest {
 
     @Test
     fun failureFactoryAcceptsEveryAllowedFailureTableShape() {
-        // 104 until ADR 0071 admitted an internal-pipeline identity for the two shader codes, which
-        // is two more rows and nothing else. A count moving for any other reason is the finding.
-        assertEquals(106, allowedFailureCases.size)
+        // 104 until ADR 0071 admitted an internal-pipeline identity for the two shader codes, then
+        // the prepared-frame aggregate CPU ceiling added one FRAME_PREPARATION limit shape.
+        assertEquals(107, allowedFailureCases.size)
         assertEquals(33, allowedFailureCases.count { !it.hasDiagnostic })
-        assertEquals(73, allowedFailureCases.count { it.hasDiagnostic })
+        assertEquals(74, allowedFailureCases.count { it.hasDiagnostic })
         assertEquals(RenGErrorCode.entries.toSet(), allowedFailureCases.map { it.code }.toSet())
 
         allowedFailureCases.forEach(::assertFailureTableOutcome)
@@ -766,6 +766,7 @@ class DiagnosticsAndFailuresTest {
                 DiagnosticField.FRAME_IDENTITY,
                 DiagnosticField.SHADER_PAIR,
             ),
+            PipelineStage.FRAME_PREPARATION to setOf(DiagnosticField.PREPARED_FRAME_CPU_BYTES),
             PipelineStage.RESOURCE_LOOKUP to setOf(DiagnosticField.RESOURCE),
             PipelineStage.STORE_VALIDATION to setOf(DiagnosticField.RESOURCE),
             PipelineStage.TRANSPORT_VALIDATION to setOf(DiagnosticField.RESPONSE_BODY_BYTES),
@@ -875,6 +876,14 @@ class DiagnosticsAndFailuresTest {
                     DiagnosticField.RESPONSE_BODY_BYTES,
                     IdentityShape.EXTERNAL,
                     hasStatus = true,
+                    limitShape = LimitShape.EXCEEDED,
+                ),
+            )
+            add(
+                failureContext(
+                    RenGErrorCode.RESOURCE_LIMIT_EXCEEDED,
+                    PipelineStage.FRAME_PREPARATION,
+                    DiagnosticField.PREPARED_FRAME_CPU_BYTES,
                     limitShape = LimitShape.EXCEEDED,
                 ),
             )

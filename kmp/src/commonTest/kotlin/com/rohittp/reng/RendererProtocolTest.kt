@@ -50,6 +50,8 @@ class RendererProtocolTest {
         assertEquals(8, defaults.maximumConcurrentResourceOperations)
         assertSame(DiagnosticSink.None, defaults.diagnosticSink)
         assertEquals(false, defaults.terrainShading)
+        assertEquals(64, defaults.maximumCachedConsumerPipelines)
+        assertEquals(256, defaults.maximumConsumerPipelinesPerFrame)
     }
 
     /**
@@ -142,6 +144,24 @@ class RendererProtocolTest {
                     transport,
                     store,
                     maximumConcurrentResourceOperations = invalidConcurrency,
+                )
+            }
+        }
+        listOf(0, 4097).forEach { invalidPipelineLimit ->
+            assertFailsWith<IllegalArgumentException> {
+                RendererConfiguration(
+                    outputPixelSize,
+                    transport,
+                    store,
+                    maximumCachedConsumerPipelines = invalidPipelineLimit,
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                RendererConfiguration(
+                    outputPixelSize,
+                    transport,
+                    store,
+                    maximumConsumerPipelinesPerFrame = invalidPipelineLimit,
                 )
             }
         }

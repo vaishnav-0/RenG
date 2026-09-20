@@ -121,7 +121,10 @@ internal fun createRenderer(
     // documented public knob with no effect at all -- every renderer used the default 128 MB
     // whatever the consumer configured -- which is precisely the shape of bug the basemap ground's
     // one-megabyte-per-tile residency turns from theoretical into expensive.
-    val objectRegistry = GlObjectRegistry(configuration.resourceLimits.maximumResidentGpuTextureBytes)
+    val objectRegistry = GlObjectRegistry(
+        residentTextureByteBudget = configuration.resourceLimits.maximumResidentGpuTextureBytes,
+        residentBufferByteBudget = configuration.resourceLimits.maximumResidentGpuBufferBytes,
+    )
 
     val driver = GlLifecycleDriver(
         binding = binding,

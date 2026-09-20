@@ -297,16 +297,9 @@ class GeometryPipelineTest {
         )
     }
 
-    /**
-     * An undeclared name is memoised too, so a material offering more than its shader declares stops
-     * costing a lookup per draw as well.
-     *
-     * Worth its own test because the negative answer is the one an implementation is likeliest to
-     * leave uncached: a memo that only stores successes would quietly re-ask forever for exactly the
-     * names that never resolve.
-     */
+    /** Negative misses are not retained, so changing hostile names cannot grow the pipeline forever. */
     @Test
-    fun anUndeclaredConsumerNameIsMemoisedRatherThanReAskedOnEveryDraw() {
+    fun anUndeclaredConsumerNameIsReAskedRatherThanRetained() {
         val binding = RecordingGlBinding().withNoDeclaredNames()
         val pipeline = createPipeline(binding)
         binding.log.clear()
@@ -319,9 +312,9 @@ class GeometryPipelineTest {
         }
 
         assertEquals(
-            1,
+            3,
             binding.log.count { it.startsWith("getUniformLocation(") },
-            "a name the program does not declare is asked once, and the negative answer is kept",
+            "a name the program does not declare must not grow the positive-location cache",
         )
         assertTrue(binding.log.none { it.startsWith("uniform") }, "and it still binds nothing")
     }

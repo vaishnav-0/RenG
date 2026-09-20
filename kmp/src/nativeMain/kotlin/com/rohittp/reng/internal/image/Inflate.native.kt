@@ -55,24 +55,35 @@ internal actual class InflateStream actual constructor() {
         }
     }
 
-    actual fun inflate(input: ByteArray, output: ByteArray, outputOffset: Int): InflateStep {
+    actual fun inflate(
+        input: ByteArray,
+        inputOffset: Int,
+        inputLength: Int,
+        output: ByteArray,
+        outputOffset: Int,
+        outputLength: Int,
+    ): InflateStep {
         require(!closed) { "inflate stream is closed" }
-        require(outputOffset in 0..output.size) { "output offset out of range" }
-        val availOut = output.size - outputOffset
+        require(inputOffset >= 0 && inputLength >= 0 && inputOffset <= input.size - inputLength) {
+            "input range out of bounds"
+        }
+        require(outputOffset >= 0 && outputLength >= 0 && outputOffset <= output.size - outputLength) {
+            "output range out of bounds"
+        }
         return input.usePinned { pinnedInput ->
             output.usePinned { pinnedOutput ->
                 // addressOf(0) throws at runtime on an empty array, so only take an address when there
                 // is at least one byte behind it. next_in may be null here: zlib only rejects a null
                 // next_in when avail_in is nonzero, and avail_in is 0 exactly when input is empty.
-                stream.next_in = if (input.isEmpty()) null else pinnedInput.addressOf(0).reinterpret()
-                stream.avail_in = input.size.convert()
+                stream.next_in = if (inputLength == 0) null else pinnedInput.addressOf(inputOffset).reinterpret()
+                stream.avail_in = inputLength.convert()
                 // next_out must NEVER be null, unlike next_in — zlib's own guard rejects a null
                 // next_out unconditionally, regardless of avail_out. addressOf(outputOffset) is invalid
                 // whenever availOut == 0 (an empty array, or an offset sitting exactly at the end of a
                 // full one), so fall back to the reusable dummy byte in exactly that case; avail_out
                 // staying 0 guarantees zlib never writes through it.
-                stream.next_out = if (availOut == 0) dummyOut.reinterpret() else pinnedOutput.addressOf(outputOffset).reinterpret()
-                stream.avail_out = availOut.convert()
+                stream.next_out = if (outputLength == 0) dummyOut.reinterpret() else pinnedOutput.addressOf(outputOffset).reinterpret()
+                stream.avail_out = outputLength.convert()
                 // Always call inflate, even when avail_out is 0: a stream whose remaining bytes decode
                 // to zero output (the empty-payload vector) can only ever be detected as finished by
                 // letting zlib consume the trailing bytes, which needs no output space at all.
@@ -81,8 +92,8 @@ internal actual class InflateStream actual constructor() {
                     throw InflateException("inflate failed with status $status")
                 }
                 InflateStep(
-                    consumed = input.size - stream.avail_in.convert<Int>(),
-                    produced = availOut - stream.avail_out.convert<Int>(),
+                    consumed = inputLength - stream.avail_in.convert<Int>(),
+                    produced = outputLength - stream.avail_out.convert<Int>(),
                     finished = status == Z_STREAM_END,
                 )
             }

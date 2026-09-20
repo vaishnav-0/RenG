@@ -181,8 +181,12 @@ internal class ConsumerBackdropPipeline(
 ) {
     private val consumerLocations: MutableMap<String, Int> = HashMap()
 
-    fun consumerLocation(binding: GlBinding, name: String): Int =
-        consumerLocations.getOrPut(name) { binding.getUniformLocation(program, name) }
+    fun consumerLocation(binding: GlBinding, name: String): Int {
+        consumerLocations[name]?.let { return it }
+        val location = binding.getUniformLocation(program, name)
+        if (location >= 0) consumerLocations[name] = location
+        return location
+    }
 }
 
 internal sealed interface ConsumerBackdropPipelineResult {

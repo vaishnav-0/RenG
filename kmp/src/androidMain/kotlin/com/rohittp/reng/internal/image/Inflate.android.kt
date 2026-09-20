@@ -12,28 +12,40 @@ internal actual class InflateStream actual constructor() {
     private val inflater = Inflater()
     private var closed = false
 
-    actual fun inflate(input: ByteArray, output: ByteArray, outputOffset: Int): InflateStep {
+    actual fun inflate(
+        input: ByteArray,
+        inputOffset: Int,
+        inputLength: Int,
+        output: ByteArray,
+        outputOffset: Int,
+        outputLength: Int,
+    ): InflateStep {
         require(!closed) { "inflate stream is closed" }
-        require(outputOffset in 0..output.size) { "output offset out of range" }
+        require(inputOffset >= 0 && inputLength >= 0 && inputOffset <= input.size - inputLength) {
+            "input range out of bounds"
+        }
+        require(outputOffset >= 0 && outputLength >= 0 && outputOffset <= output.size - outputLength) {
+            "output range out of bounds"
+        }
         // Inflater.setInput() replaces the buffer it reads from, so only call it once the previous
         // buffer is fully drained (needsInput() true) — otherwise it would discard unconsumed bytes
         // from the prior call. When we skip it, none of *this* call's `input` bytes were touched, so
         // `consumed` for this step must be exactly 0, independent of `input`'s size.
-        val suppliedNewInput = input.isNotEmpty() && inflater.needsInput()
+        val suppliedNewInput = inputLength > 0 && inflater.needsInput()
         if (suppliedNewInput) {
-            inflater.setInput(input)
+            inflater.setInput(input, inputOffset, inputLength)
         }
-        val availOut = output.size - outputOffset
+        val availableInputBefore = inflater.remaining
         // Call inflate() even with availOut == 0: a stream whose remaining bytes decode to zero output
         // (the empty-payload vector) can only be detected as finished by letting the inflater consume
         // the trailing bytes, which needs no output space at all. Inflater.inflate(buf, off, 0) is a
         // legal, well-defined call that still advances internal state.
         val produced = try {
-            inflater.inflate(output, outputOffset, availOut)
+            inflater.inflate(output, outputOffset, outputLength)
         } catch (failure: DataFormatException) {
             throw InflateException("inflate failed: ${failure.message ?: failure::class.simpleName}")
         }
-        val consumed = if (suppliedNewInput) input.size - inflater.remaining else 0
+        val consumed = availableInputBefore - inflater.remaining
         return InflateStep(
             consumed = consumed,
             produced = produced,

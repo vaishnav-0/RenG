@@ -17,6 +17,7 @@ import com.rohittp.reng.internal.glb.validateGltfFeatures
 import com.rohittp.reng.internal.image.DecodedImage
 import com.rohittp.reng.internal.image.PngDecodeResult
 import com.rohittp.reng.internal.image.decodePng
+import com.rohittp.reng.internal.image.projectedPngRgbaBytes
 import com.rohittp.reng.internal.math.DoubleMatrix4
 
 /** The attribute semantics RenG binds. Every other semantic `validateGltfFeatures` admits --
@@ -227,7 +228,11 @@ internal sealed interface ModelDecodeResult {
  * [ModelDecodeResult.Malformed] too, and are exactly the gap [GltfDocument]'s own documentation
  * warns about: `parseGltf` receives the BIN chunk's *length* and never its bytes.
  */
-internal fun decodeModel(bytes: ByteArray, limits: ResourceLimits): ModelDecodeResult {
+internal fun decodeModel(
+    bytes: ByteArray,
+    limits: ResourceLimits,
+    reserveDecodedCpuBytes: (Long) -> Unit = {},
+): ModelDecodeResult {
     val admitted = scanGlb(bytes, limits.maximumModelJsonChunkBytes) as? GlbScan.Admitted
         ?: return ModelDecodeResult.Malformed
     val binRange = admitted.binChunk ?: IntRange.EMPTY
@@ -238,7 +243,13 @@ internal fun decodeModel(bytes: ByteArray, limits: ResourceLimits): ModelDecodeR
         is GltfFeatureResult.Unsupported -> return ModelDecodeResult.Unsupported
     }
 
-    val decoder = ModelDecoder(document, BinChunk(bytes, binRange), limits.maximumDecodedImageBytes)
+    val decoder = ModelDecoder(
+        document,
+        BinChunk(bytes, binRange),
+        limits.maximumDecodedImageBytes,
+        limits.maximumImageDecodeWorkingBytes,
+        reserveDecodedCpuBytes,
+    )
     return try {
         ModelDecodeResult.Success(decoder.decode())
     } catch (signal: ModelDecodeSignal) {
@@ -258,6 +269,8 @@ private class ModelDecoder(
     private val document: GltfDocument,
     private val bin: BinChunk,
     private val budgetBytes: Long,
+    private val imageWorkingBudgetBytes: Long,
+    private val reserveDecodedCpuBytes: (Long) -> Unit,
 ) {
     private var decodedBytes: Long = 0L
 
@@ -266,7 +279,9 @@ private class ModelDecoder(
         // budget is refused without first building the arrays that would not fit. The projection is
         // exact rather than an upper bound -- it applies the same widening rules the decode below
         // does -- so it can never refuse a model the accumulated figure would have admitted.
-        if (projectedGeometryBytes() > budgetBytes) fail(ModelDecodeResult.TooLarge)
+        val geometryBytes = projectedGeometryBytes()
+        if (geometryBytes > budgetBytes) fail(ModelDecodeResult.TooLarge)
+        reserveDecodedCpuBytes(geometryBytes)
 
         val primitives = document.meshes.flatMap { mesh -> mesh.primitives.map { decodePrimitive(it) } }
         val images = decodeImages()
@@ -433,7 +448,11 @@ private class ModelDecoder(
     private fun decodeImages(): List<DecodedImage> = document.images.map { image ->
         val view = document.bufferViews[image.bufferView ?: fail(ModelDecodeResult.Malformed)]
         val payload = bin.copyOfRange(view.byteOffset, view.byteLength) ?: fail(ModelDecodeResult.Malformed)
-        val decoded = when (val result = decodePng(payload, budgetBytes)) {
+        projectedPngRgbaBytes(payload)?.let { projectedBytes ->
+            if (projectedBytes > budgetBytes - decodedBytes) fail(ModelDecodeResult.TooLarge)
+            reserveDecodedCpuBytes(projectedBytes)
+        }
+        val decoded = when (val result = decodePng(payload, budgetBytes, imageWorkingBudgetBytes)) {
             is PngDecodeResult.Success -> result.image
             is PngDecodeResult.Malformed -> fail(ModelDecodeResult.Malformed)
             is PngDecodeResult.Unsupported -> fail(ModelDecodeResult.Unsupported)
@@ -460,13 +479,16 @@ private class ModelDecoder(
         val referenced = document.nodes.mapNotNull { it.skin }.toSet()
         return document.skins.mapIndexed { index, skin ->
             val accessorIndex = skin.inverseBindMatrices.takeIf { index in referenced }
+            val projectedBytes = skin.joints.size * MATRIX_BYTES
+            if (projectedBytes > budgetBytes - decodedBytes) fail(ModelDecodeResult.TooLarge)
+            reserveDecodedCpuBytes(projectedBytes)
             val matrices = accessorIndex
                 ?.let { bin.readMatrices(document, it) ?: fail(ModelDecodeResult.Malformed) }
                 ?: List(skin.joints.size) { DoubleMatrix4.identity }
             // The specification requires one matrix per joint. A short accessor would leave a joint
             // with no bind pose, which the vertex shader would read as an out-of-range lookup.
             if (matrices.size != skin.joints.size) fail(ModelDecodeResult.Malformed)
-            decodedBytes += matrices.size * MATRIX_BYTES
+            decodedBytes += projectedBytes
             DecodedSkin(jointNodes = skin.joints, inverseBindMatrices = matrices, skeletonRoot = skin.skeleton)
         }
     }

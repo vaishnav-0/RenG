@@ -33,9 +33,10 @@ generation. A long editing session installs one per bake and, until now, release
 is the shape a consumer's own investigation recorded as `resident=6 retired=6 leases=6` on a single
 locator whose content had changed six times.
 
-`decodedCpuBytes` is charged at zero throughout, and that is accurate rather than an omission: every
-production install passes `decoded = null`. The field exists for a decode path this cache does not yet
-have.
+Production installs still begin with `decoded = null`, but decoded images (ADR 0059) and immutable decoded
+model expansions are now attached to their exact generation afterward. Their retained byte counts join the raw
+bytes in this same budget and appear as `decodedCpuBytes`; attaching either is therefore another point at which
+the cache may evict.
 
 ## An evicted key is forgotten, never marked freed
 
@@ -67,7 +68,9 @@ Least-recently-used first, and only a key whose `current` generation holds no le
   only still present because something holds a lease on it, so the key is in use by definition.
 
 Recency is touched where a generation is observed — `current` and `observeAndTakeLease` — and where
-one is installed. Eviction runs after an install, which is the only moment the total can grow.
+one is installed. Eviction runs after an install or decoded attachment, the points where the total can grow,
+and immediately after a last lease release, the point where an over-budget pinned generation first becomes
+evictable. It does not wait for an unrelated future install.
 
 `maximumResidentCpuResourceBytes` defaults to 128 MiB, which is deliberately smaller than
 `maximumDecodedImageBytes` (256 MiB, a per-image ceiling rather than a total) and smaller than the

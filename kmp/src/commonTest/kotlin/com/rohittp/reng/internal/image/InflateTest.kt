@@ -68,7 +68,14 @@ class InflateTest {
             var produced = 0
             var finished = false
             while (!finished) {
-                val step = stream.inflate(vector.deflated.copyOfRange(consumed, vector.deflated.size), output, produced)
+                val step = stream.inflate(
+                    vector.deflated,
+                    consumed,
+                    vector.deflated.size - consumed,
+                    output,
+                    produced,
+                    output.size - produced,
+                )
                 consumed += step.consumed
                 produced += step.produced
                 finished = step.finished
@@ -92,8 +99,15 @@ class InflateTest {
         // arbitrary offsets by IDAT chunk boundaries.
         var index = 0
         while (!finished && index <= vector.deflated.size) {
-            val slice = vector.deflated.copyOfRange(index, minOf(index + 1, vector.deflated.size))
-            val step = stream.inflate(slice, output, produced)
+            val inputLength = minOf(1, vector.deflated.size - index)
+            val step = stream.inflate(
+                vector.deflated,
+                index,
+                inputLength,
+                output,
+                produced,
+                output.size - produced,
+            )
             index += step.consumed
             produced += step.produced
             finished = step.finished
@@ -120,7 +134,14 @@ class InflateTest {
         var produced = 0
         var finished = false
         while (!finished) {
-            val step = stream.inflate(vector.deflated.copyOfRange(consumed, vector.deflated.size), window, 0)
+            val step = stream.inflate(
+                vector.deflated,
+                consumed,
+                vector.deflated.size - consumed,
+                window,
+                0,
+                window.size,
+            )
             consumed += step.consumed
             window.copyInto(result, destinationOffset = produced, startIndex = 0, endIndex = step.produced)
             produced += step.produced
@@ -144,7 +165,15 @@ class InflateTest {
             var finished = false
             var index = 0
             while (!finished) {
-                val step = stream.inflate(corrupted.copyOfRange(index, corrupted.size), ByteArray(4096), produced)
+                val output = ByteArray(4096)
+                val step = stream.inflate(
+                    corrupted,
+                    index,
+                    corrupted.size - index,
+                    output,
+                    produced.coerceAtMost(output.size),
+                    (output.size - produced).coerceAtLeast(0),
+                )
                 index += step.consumed
                 produced += step.produced
                 finished = step.finished

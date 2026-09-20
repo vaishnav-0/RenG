@@ -2,6 +2,22 @@ package com.rohittp.reng.internal.gl
 
 import com.rohittp.reng.ResourceKey
 import com.rohittp.reng.internal.terrain.PaddedDemTexture
+import com.rohittp.reng.internal.terrain.PaddedDemTexturePlan
+import com.rohittp.reng.internal.terrain.assemblePaddedDemTexture
+
+/**
+ * Leases by the plan's allocation-free identity first and assembles pixels only on a residency miss.
+ */
+internal fun uploadDemTexture(
+    binding: GlBinding,
+    registry: GlObjectRegistry,
+    key: ResourceKey,
+    plan: PaddedDemTexturePlan,
+    assemble: (PaddedDemTexturePlan) -> PaddedDemTexture = ::assemblePaddedDemTexture,
+): LeasedTexture {
+    registry.leaseResident(key)?.let { return it }
+    return uploadDemTexture(binding, registry, key, assemble(plan))
+}
 
 /**
  * The sampler every DEM texture is uploaded under.

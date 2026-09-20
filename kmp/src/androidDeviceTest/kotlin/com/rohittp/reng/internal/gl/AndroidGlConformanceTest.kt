@@ -81,7 +81,7 @@ class AndroidGlConformanceTest {
      * as a silent wrong answer somewhere later.
      */
     @Test fun everyRosterEntryPointResolvesOnThisDriver() {
-        assertEquals(91, GlEntryPoint.entries.size)
+        assertEquals(92, GlEntryPoint.entries.size)
         withCurrentContext { binding ->
             val adoption = adoptRenderContext(binding)
             val adopted = adoption as? RenderContextAdoption.Adopted
@@ -241,6 +241,7 @@ class AndroidGlConformanceTest {
         } finally {
             fixture.destroy()
         }
+    }
 
     /**
      * Cycle G task 12's gate on Android's driver: a `ProjectionMode.GLOBE` frame through the
@@ -264,7 +265,6 @@ class AndroidGlConformanceTest {
         } finally {
             fixture.destroy()
         }
-    }
     }
 
     /**

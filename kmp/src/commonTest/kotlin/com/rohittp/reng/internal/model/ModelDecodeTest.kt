@@ -163,6 +163,22 @@ class ModelDecodeTest {
     }
 
     @Test
+    fun decodedPayloadIsProjectedForAdmissionBeforeEachAllocationGroup() {
+        listOf(
+            texturedGlb(texture = """{"source": 0, "sampler": 0}"""),
+            skinnedGlb(),
+        ).forEach { bytes ->
+            val projectedGroups = mutableListOf<Long>()
+            val result = assertIs<ModelDecodeResult.Success>(
+                decodeModel(bytes, ResourceLimits(), projectedGroups::add),
+            )
+
+            assertTrue(projectedGroups.isNotEmpty())
+            assertEquals(result.model.decodedCpuBytes, projectedGroups.sum())
+        }
+    }
+
+    @Test
     fun aModelWhoseExpandedFormExceedsTheDecodedImageBudgetIsTooLarge() {
         val bytes = expandingGlb()
 

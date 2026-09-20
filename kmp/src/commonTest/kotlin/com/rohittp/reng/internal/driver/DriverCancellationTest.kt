@@ -58,11 +58,9 @@ import kotlin.test.assertTrue
  * [com.rohittp.reng.internal.resource.SuppliedInstallOutcome] siblings) rather than left to vanish: a
  * `launch`ed child that completes via a `CancellationException` its own `Job` was never asked for is
  * silently absorbed by `coroutineScope`, which -- left unhandled -- means this driver's event loop waits
- * forever for an event that will never arrive. [PreparationDriver.cancel] is this driver's own
- * cross-coroutine cancellation entry point: it lets a caller who does not hold the specific `Job` that is
- * running `run()` (e.g. a future `Renderer.cancelPreparations()` implementation, called from whatever
- * coroutine the consumer happens to be on) stop an in-flight preparation and suspend until it has
- * genuinely unwound.
+ * forever for an event that will never arrive. Cross-coroutine cancellation is intentionally owned by
+ * the renderer's outer preparation-session coordinator; this driver only needs structured cancellation
+ * from its caller to reach every action launched here.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DriverCancellationTest {
@@ -144,26 +142,6 @@ class DriverCancellationTest {
         // CONTEXT.md permits this explicitly: cancellation exposes no partial history, but valid
         // acquired content may remain cached.
         assertNotNull(cache.current(firstRouteKey))
-    }
-
-    // Not part of the brief's given suite. `PreparationDriver.cancel()` is this task's other named
-    // deliverable, and none of the four tests above ever calls it -- they all cancel the caller's own
-    // wrapping `Job` instead, which `run()`'s `coroutineScope` already propagated correctly before this
-    // task started. This is the one test that actually exercises `cancel()` itself: it drives an in-flight
-    // `run()` to a stop from OUTSIDE the coroutine that launched it, with no `Job` handle of its own,
-    // exactly the shape a future `Renderer.cancelPreparations()` needs.
-    @Test
-    fun driverCancelStopsAnInFlightRunWithoutTheCallersOwnJobHandle() = runTest {
-        val transport = CancellationCountingTransport(delayMillis = 1_000)
-        val preparationDriver = driver(transport)
-        val job = launch { preparationDriver.run(manyRoutes()) }
-        advanceTimeBy(10)
-        preparationDriver.cancel()
-        job.join()
-        assertTrue(job.isCancelled)
-        val before = transport.executeCalls
-        advanceTimeBy(5_000)
-        assertEquals(before, transport.executeCalls, "no adapter call may start after cancel()")
     }
 
     // A sharper, unit-level companion to the first test above, in the same spirit as
