@@ -397,6 +397,7 @@ class RendererBasemapTileTest {
 
         val first = renderer.prepare(basemapPlan(frameIndex = 0L)) as RenGPreparedFrame
         assertEquals(4, first.basemapTiles.size, "the first frame rasterises every tile it selected")
+        val firstGroundInstanceCount = first.groundInstances.size
         renderer.draw(first, target)
         first.close()
 
@@ -408,7 +409,7 @@ class RendererBasemapTileTest {
             "every tile's texture is resident, so the engine is asked for none of them",
         )
         assertEquals(
-            first.groundInstances.size,
+            firstGroundInstanceCount,
             second.groundInstances.size,
             "the same ground is still placed from the textures already on the GPU",
         )

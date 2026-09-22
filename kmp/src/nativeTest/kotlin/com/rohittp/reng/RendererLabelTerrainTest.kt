@@ -73,8 +73,8 @@ class RendererLabelTerrainTest {
      * question.
      */
     @Test fun aLabelOverARidgeCrestLandsWhereItsOwnTerrainHeightProjects() = runTest {
-        val overSeaLevel = singleLabel(prepareLabelFrame(DEM_SEA_LEVEL_PNG))
-        val overTheRidge = singleLabel(prepareLabelFrame(DEM_RIDGE_PNG))
+        val overSeaLevel = prepareSingleLabel(DEM_SEA_LEVEL_PNG)
+        val overTheRidge = prepareSingleLabel(DEM_RIDGE_PNG)
 
         val camera = resolvedTerrainLabelCamera()
         val expectedFlat = projectedLabelAnchor(camera, 0.0)
@@ -172,7 +172,7 @@ class RendererLabelTerrainTest {
      * on the 28 corpus styles that declare no terrain.
      */
     @Test fun aStyleWithNoTerrainBlockPlacesTheLabelExactlyWhereTheEllipsoidDoes() = runTest {
-        val terrainless = singleLabel(prepareLabelFrame(DEM_RIDGE_PNG, declareTerrain = false))
+        val terrainless = prepareSingleLabel(DEM_RIDGE_PNG, declareTerrain = false)
         val camera = resolvedTerrainLabelCamera()
         val expectedFlat = projectedLabelAnchor(camera, 0.0)
 
@@ -180,13 +180,18 @@ class RendererLabelTerrainTest {
         assertEquals(expectedFlat.pixelY, terrainless.label.anchorPixelY, ANCHOR_TOLERANCE_PIXELS, "y")
     }
 
-    private suspend fun prepareLabelFrame(
+    private suspend fun prepareSingleLabel(
         demBytes: ByteArray,
         declareTerrain: Boolean = true,
-    ): RenGPreparedFrame {
+    ): FadedLabel {
         val renderer = terrainLabelRenderer(TerrainLabelTransport(demBytes, declareTerrain))
         return try {
-            renderer.prepare(terrainLabelPlan(frameIndex = 1L)) as RenGPreparedFrame
+            val frame = renderer.prepare(terrainLabelPlan(frameIndex = 1L)) as RenGPreparedFrame
+            try {
+                singleLabel(frame)
+            } finally {
+                frame.close()
+            }
         } finally {
             renderer.close()
         }
